@@ -5,10 +5,12 @@ Read this before building on portal data: files appear and change without notice
 Full per-check log, reports and every file version: `challenge/start-hack-data/README.md`,
 `challenge/start-hack-data/reports/`, `challenge/start-hack-data/versions/<check>/` (old copies), `challenge/start-hack-data/data/` (current).
 
-**Last check:** 2026-11-21 21-23 Berlin · 318 files, 47.4 MB · no changes
+**Last check:** 2026-11-21 21-38 Berlin · 332 files, 53.2 MB · 14 added · 0 changed · 0 removed
 
 ## Checks with changes (newest first)
 
+- **2026-11-21 21-38** — 14 added · 0 changed · 0 removed: `soony/erp/goods_receipts_update.csv`, `soony/erp/stock_update_2026-11-21.xlsx`, `soony/receiving/DC-HAM/20260903_DN-260831-382.jpg`, `soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg` …
+  - report: `challenge/start-hack-data/reports/2026-11-21T21-38.md`
 - **2026-11-21 17-23** — 5 added · 0 changed · 0 removed: `soony/news/2026-11-21_export_controls.json`, `suppliers/SUP-0018_Pune_Diecast_Works/profile.json`, `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv`, `suppliers/SUP-0029_Guangzhou_PackRight/notices/Supply_notice_export_licence_2026-11-21.pdf` …
   - Export-control drop: news says China now needs end-use licences for NdFeB magnets (4-8 weeks), and Guangzhou PackRight (SUP-0029) says its magnet sub-supplier cannot export. CMP-MAG-005 (4 lid magnets per Collector's box) is single-source with stock 0, no PO, no receipts; that answers the onboarding question 'why does the stock list show no lid magnets?' only if the magnets ship inside the boxes. Collector's box CMP-GAM-007 stock is 27,500 vs ~18,900 still to pack, but its lead time jumps from 63 to 105 days for December deliveries. Pune Diecast (statue second source) now shows status 'watch' with its conditional release expired on 30 Oct and not extended; profiles now also come as SAP JSON (new format next to the old CSV).
   - report: `challenge/start-hack-data/reports/2026-11-21T17-23.md`

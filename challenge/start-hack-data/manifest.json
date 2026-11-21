@@ -47,6 +47,12 @@
   "sha256": "8b2811bdc89040c6d21c49775aeb98cde0a606201f8caf14cfb32b6732bcba09",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/erp/goods_receipts.csv"
  },
+ "soony/erp/goods_receipts_update.csv": {
+  "bytes": 664,
+  "path": "soony/erp/goods_receipts_update.csv",
+  "sha256": "caa119ff2ff5050a1c053c306a042b0789e296cc2df12430caf0ca2db62cde24",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/erp/goods_receipts_update.csv"
+ },
  "soony/erp/open_shipments.csv": {
   "bytes": 4857,
   "path": "soony/erp/open_shipments.csv",
@@ -76,6 +82,12 @@
   "path": "soony/erp/stock_snapshot.csv",
   "sha256": "b23c2c34515acba00adfc7243e57a9076580933a1103913e40a0e2b2ac7f74ae",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/erp/stock_snapshot.csv"
+ },
+ "soony/erp/stock_update_2026-11-21.xlsx": {
+  "bytes": 6652,
+  "path": "soony/erp/stock_update_2026-11-21.xlsx",
+  "sha256": "c64e24aa5d700ddaf99841bd1417d988fa6f2ac283b1fa2266da51f343ab3d7c",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/erp/stock_update_2026-11-21.xlsx"
  },
  "soony/logistics/open_shipments_tracker_v37_FINAL_final2.xlsx": {
   "bytes": 6161,
@@ -143,6 +155,24 @@
   "sha256": "5b86f4728d3b9a7f4efd382497485cc27fcf37ae1fe0f27cb060de8ee442706a",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/news/2026-11-21_export_controls.json"
  },
+ "soony/receiving/DC-HAM/20260903_DN-260831-382.jpg": {
+  "bytes": 152378,
+  "path": "soony/receiving/DC-HAM/20260903_DN-260831-382.jpg",
+  "sha256": "67754984baecb78c840b76152aec1b2fd00a7cc9d2ad3168b9de7036b5cc4ec1",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20260903_DN-260831-382.jpg"
+ },
+ "soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg": {
+  "bytes": 192437,
+  "path": "soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg",
+  "sha256": "d94608dc8cdf8cb77391f26e7acf13f2ebe0d3d13c2cbdc9793f909984dcda94",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg"
+ },
+ "soony/receiving/DC-HAM/20260904_SN-260730-216.jpg": {
+  "bytes": 222354,
+  "path": "soony/receiving/DC-HAM/20260904_SN-260730-216.jpg",
+  "sha256": "c162337a3f9e54883a37ce2c44af9de4ebfd4b6500927bbddf53ccb523336d1f",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20260904_SN-260730-216.jpg"
+ },
  "soony/receiving/DC-HAM/20260907_DN-260902-677.png": {
   "bytes": 1312559,
   "path": "soony/receiving/DC-HAM/20260907_DN-260902-677.png",
@@ -178,6 +208,12 @@
   "path": "soony/receiving/DC-HAM/20260910_WZ-260908-528.jpg",
   "sha256": "526a34f6ec0c08de75275b16e434fad2143d9632ad453d386b75bff7b402f6e6",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20260910_WZ-260908-528.jpg"
+ },
+ "soony/receiving/DC-HAM/20260914_SN-260810-719.png": {
+  "bytes": 854563,
+  "path": "soony/receiving/DC-HAM/20260914_SN-260810-719.png",
+  "sha256": "041662c7d5e333b40d6952af9224117f7e1801113bd37770dae0bca751640a34",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20260914_SN-260810-719.png"
  },
  "soony/receiving/DC-HAM/20260915_DN-260807-839.jpg": {
   "bytes": 365018,
@@ -286,6 +322,12 @@
   "path": "soony/receiving/DC-HAM/20261008_WZ-261007-439.jpg",
   "sha256": "fe0fb95b8c358e540e6aba460d07c5c74a030cc963ac139d76c5c0f801490e91",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261008_WZ-261007-439.jpg"
+ },
+ "soony/receiving/DC-HAM/20261009_WZ-261007-399.png": {
+  "bytes": 1930349,
+  "path": "soony/receiving/DC-HAM/20261009_WZ-261007-399.png",
+  "sha256": "d0442eb041a58f3fd3a2fbdbd68e227e997b41adc665ca5b2837951fe1ba9213",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261009_WZ-261007-399.png"
  },
  "soony/receiving/DC-HAM/20261012_DN-260904-745.png": {
   "bytes": 2199306,
@@ -419,6 +461,12 @@
   "sha256": "940f2bebfdaefe01ccc90bc0c8883fa5cb4e1ca503be5b705b799a439a60560c",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261105_SN-261001-151.jpg"
  },
+ "soony/receiving/DC-HAM/20261106_DN-261102-986.jpg": {
+  "bytes": 157417,
+  "path": "soony/receiving/DC-HAM/20261106_DN-261102-986.jpg",
+  "sha256": "24cc7c493cbe364bd801a9194e7aaf5c89b3c5bac3284c442bb3cd0bef2f0012",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261106_DN-261102-986.jpg"
+ },
  "soony/receiving/DC-HAM/20261106_SN-261001-815.png": {
   "bytes": 2758822,
   "path": "soony/receiving/DC-HAM/20261106_SN-261001-815.png",
@@ -437,11 +485,23 @@
   "sha256": "ac7b44fd48b097d27a2af5962c888f1f8a2d96ef020354f8f017fec6377dd7b7",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261109_WZ-261108-879.jpg"
  },
+ "soony/receiving/DC-HAM/20261110_SN-261007-130.jpg": {
+  "bytes": 157461,
+  "path": "soony/receiving/DC-HAM/20261110_SN-261007-130.jpg",
+  "sha256": "31ddc9ac7deea35a9d00140f334bd3bb50bd26df37bdef882396203040100a36",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261110_SN-261007-130.jpg"
+ },
  "soony/receiving/DC-HAM/20261110_WZ-261109-498.png": {
   "bytes": 1055777,
   "path": "soony/receiving/DC-HAM/20261110_WZ-261109-498.png",
   "sha256": "55502d776828b832a30d7e9e749c1301c717f5592ebf1000c8cc8366de9055b7",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261110_WZ-261109-498.png"
+ },
+ "soony/receiving/DC-HAM/20261111_DN-261106-613.png": {
+  "bytes": 1331682,
+  "path": "soony/receiving/DC-HAM/20261111_DN-261106-613.png",
+  "sha256": "f1955caeee8893207b1799e0d0ce3ba0164d37d301d61af7714ec4f53e39911a",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261111_DN-261106-613.png"
  },
  "soony/receiving/DC-HAM/20261111_SN-261007-850.jpg": {
   "bytes": 210440,
@@ -479,6 +539,12 @@
   "sha256": "624fad512296b86cc0c1fc952f38e0ff91d3e39fb4f251d522af4cb26fa747c5",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261113_DN-261110-769.jpg"
  },
+ "soony/receiving/DC-HAM/20261113_WZ-261110-805.jpg": {
+  "bytes": 144671,
+  "path": "soony/receiving/DC-HAM/20261113_WZ-261110-805.jpg",
+  "sha256": "0fbe18d168c7060e18df0dd5989049b52ca190a769b4084cf2d82b13881d68a5",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261113_WZ-261110-805.jpg"
+ },
  "soony/receiving/DC-HAM/20261116_DN-261112-486.jpg": {
   "bytes": 371545,
   "path": "soony/receiving/DC-HAM/20261116_DN-261112-486.jpg",
@@ -502,6 +568,24 @@
   "path": "soony/receiving/DC-HAM/20261118_WZ-261116-473.jpg",
   "sha256": "5ce4bc4bb37463db77a3d3034fb89fbcbdb1bc81c9ba1149b4d9cc6f90c84fcd",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261118_WZ-261116-473.jpg"
+ },
+ "soony/receiving/DC-HAM/20261121_DN-261119-197.jpg": {
+  "bytes": 355766,
+  "path": "soony/receiving/DC-HAM/20261121_DN-261119-197.jpg",
+  "sha256": "4c6f612256345687c1075fa0961ead709d54d1b7420451e780b438d5a10040c6",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261121_DN-261119-197.jpg"
+ },
+ "soony/receiving/DC-HAM/20261121_DN-261120-726.jpg": {
+  "bytes": 136861,
+  "path": "soony/receiving/DC-HAM/20261121_DN-261120-726.jpg",
+  "sha256": "4b91c2db032484d86b93624ea5aab57a370b18a6b2d28994323032aaa5ca198a",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261121_DN-261120-726.jpg"
+ },
+ "soony/receiving/DC-HAM/20261121_WZ-261120-732.jpg": {
+  "bytes": 177508,
+  "path": "soony/receiving/DC-HAM/20261121_WZ-261120-732.jpg",
+  "sha256": "9825706e93d756c3c520674b40ead82a8c9f32cea6001745a3d16161a2b49b31",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/receiving/DC-HAM/20261121_WZ-261120-732.jpg"
  },
  "soony/receiving/DC-HAM/inspection_report_5000413063.pdf": {
   "bytes": 62891,

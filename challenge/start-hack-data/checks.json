@@ -417,5 +417,25 @@
   "gist": "no changes",
   "changed_paths": [],
   "removed_paths": []
+ },
+ {
+  "run": "2026-11-21T21-38",
+  "time": "21:38",
+  "files": 332,
+  "mb": 53.2,
+  "added": 14,
+  "changed": 0,
+  "removed": 0,
+  "paths": [
+   "soony/erp/goods_receipts_update.csv",
+   "soony/erp/stock_update_2026-11-21.xlsx",
+   "soony/receiving/DC-HAM/20260903_DN-260831-382.jpg",
+   "soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg",
+   "soony/receiving/DC-HAM/20260904_SN-260730-216.jpg",
+   "soony/receiving/DC-HAM/20260914_SN-260810-719.png"
+  ],
+  "gist": "14 added \u00b7 0 changed \u00b7 0 removed",
+  "changed_paths": [],
+  "removed_paths": []
  }
 ]

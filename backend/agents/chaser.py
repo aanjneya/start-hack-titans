@@ -299,8 +299,7 @@ class Chaser(Agent):
         now = utcnow().astimezone(ZoneInfo("Europe/Berlin")).strftime("%a %d.%m.%Y %H:%M")
         prompt = (f"Clarify finding #{ctx['issue_id']}." if ctx["issue_id"]
                   else f"The launch planner asks you to contact {ctx['supplier_id']}: {ctx['ask']}")
-        prompt += f"
-Current time (Europe/Berlin): {now}. Any reply-by time must be in the future."
+        prompt += f"\nCurrent time (Europe/Berlin): {now}. Any reply-by time must be in the future."
         self.log("agent_start", prompt, data={"issue_id": ctx["issue_id"], "supplier_id": ctx["supplier_id"]})
         final_text = ""
         try:

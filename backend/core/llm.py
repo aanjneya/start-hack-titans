@@ -45,7 +45,8 @@ def _get_client():
     if _client is None:
         import anthropic  # imported lazily so MOCK mode works without the SDK configured
 
-        _client = anthropic.Anthropic()
+        key = get_settings().anthropic_api_key  # .env is not exported to os.environ
+        _client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
     return _client
 
 

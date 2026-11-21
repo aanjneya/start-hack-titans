@@ -48,6 +48,7 @@ class Settings:
     watch_interval_min: float
     portal_mirror: Path
     # Chaser mailbox (shared team mailbox; see .brain/tasks/4-chaser.md)
+    anthropic_api_key: str = ""  # from env or .env; empty = SDK default (ant auth login)
     mail_address: str = ""
     mail_password: str = ""
     smtp_host: str = ""
@@ -85,6 +86,7 @@ def get_settings() -> Settings:
         customer_setup=get("CUSTOMER_SETUP", "soony"),
         watch_interval_min=float(get("WATCH_INTERVAL_MIN", "0") or 0),
         portal_mirror=Path(get("PORTAL_MIRROR", str(BACKEND_ROOT / "data" / "portal"))),
+        anthropic_api_key=get("ANTHROPIC_API_KEY"),
         mail_address=get("MAIL_ADDRESS"),
         mail_password=get("MAIL_PASSWORD"),
         smtp_host=get("SMTP_HOST"),

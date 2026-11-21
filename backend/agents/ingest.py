@@ -593,20 +593,42 @@ class IngestNormalizer(Agent):
 
     # ------------------------------------------------------------- issues
     def _raise_summary_issues(self) -> None:
+        """Ingest's own findings, in FINDING FORMAT v1 (.brain/DATA_FORMAT.md)."""
         if self._scans and llm.is_mock():
-            self.raise_issue(type="scans_unread", kind=IssueKind.HUMAN_CHECK, severity=2, key="scans",
-                             summary=f"{len(self._scans)} scanned documents stored but not read (OCR runs with "
-                                     "live Claude); file names already link delivery notes",
-                             evidence=[{"path": p} for p in self._scans[:20]])
+            self.raise_issue(
+                type="scans_unread", kind=IssueKind.HUMAN_CHECK, severity=2, key="scans",
+                summary=f"{len(self._scans)} scanned delivery notes stored but not read yet (offline mode)",
+                reason="Receiving books what is on the paper, so a scan can hide a short or damaged delivery. "
+                       "File names already link each scan to its delivery-note number; the content needs OCR.",
+                subject_type="drop", subject_id="scans",
+                impact={"note": f"{len(self._scans)} scans; quantities on paper not yet compared with goods receipts"},
+                suggested_actions=[{"type": "human_review", "owner": "human",
+                                    "label": "Switch to live mode (MOCK_MODE=false + API key) so Claude reads the scans"}],
+                evidence=[{"path": p} for p in self._scans[:20]], confidence=1.0)
         if self._unmapped:
-            self.raise_issue(type="unmapped_files", kind=IssueKind.HUMAN_CHECK, severity=1, key="unmapped",
-                             summary=f"{len(self._unmapped)} files kept as plain tables/documents (no matching "
-                                     "table yet); check if any matter",
-                             evidence=[{"path": p} for p in self._unmapped[:30]])
+            self.raise_issue(
+                type="unmapped_files", kind=IssueKind.HUMAN_CHECK, severity=1, key="unmapped",
+                summary=f"{len(self._unmapped)} files kept as plain tables/documents (no matching table yet)",
+                reason="They are stored and readable by every agent, but not split into our tables "
+                       "(e.g. routes, ports, price lists).",
+                subject_type="drop", subject_id="unmapped",
+                suggested_actions=[{"type": "human_review", "owner": "human",
+                                    "label": "Check if any of these files matter for the launch"}],
+                evidence=[{"path": p} for p in self._unmapped[:30]], confidence=1.0)
         if self._unresolved:
-            self.raise_issue(type="unresolved_ids", kind=IssueKind.HUMAN_CHECK, severity=3, key="unresolved",
-                             summary=f"{len(self._unresolved)} names/part numbers could not be matched to our IDs",
-                             evidence=[{"path": "", "quote": u} for u in sorted(self._unresolved)[:30]])
+            self.raise_issue(
+                type="unresolved_ids", kind=IssueKind.HUMAN_CHECK, severity=3, key="unresolved",
+                summary=f"{len(self._unresolved)} supplier names or part numbers could not be matched to our IDs",
+                reason="Rows with an unknown supplier or part can't be linked to orders, stock or the launch "
+                       "forecast, so problems in them stay invisible to the other agents.",
+                subject_type="drop", subject_id="unresolved",
+                impact={"note": "; ".join(sorted(self._unresolved)[:5])},
+                suggested_actions=[
+                    {"type": "human_review", "owner": "human",
+                     "label": "Confirm the right ID for each name/part number (saved as an alias, asked only once)"},
+                    {"type": "email", "owner": "chaser",
+                     "label": "Ask the supplier which of our part numbers they mean"}],
+                evidence=[{"path": "", "quote": u} for u in sorted(self._unresolved)[:30]], confidence=0.9)
 
     # ------------------------------------------------------------ replies
     def on_reply(self, event: Event) -> None:

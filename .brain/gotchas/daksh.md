@@ -1,0 +1,6 @@
+# Gotchas (daksh)
+
+- **`\b(SUP-\d{4})\b` never matches supplier folders** (2026-11-21): in `suppliers/SUP-0028_Karton_Nowak/…` the `_` after the digits is a word character, so there is no word boundary → supplier id silently empty. Fix: `(SUP-\d{4})(?!\d)` (`backend/agents/ingest.py: SUP_RE`).
+- **Timezone-aware datetimes come back from SQLite as naive UTC** (2026-11-21): SQLModel stores `10:00+01:00` as `09:00`, so comparing with the original made every rerun look like a change. Fix: compare aware values in UTC without tzinfo (`store._as_text`); also SQLModel rejects naive datetimes → `parsing.parse_datetime` attaches Europe/Berlin.
+- **Two sources for the same row flip values back and forth on every rerun** (2026-11-21): e.g. `launch_plan` vs `launch_status`, `profile.csv` vs `profile.json`, `components.csv` vs the change file. Fix: a source that already lost with the same value can't overwrite again (`IngestNormalizer._drop_stale`); test `test_same_drop_twice_changes_nothing`.
+- **Line endings** (2026-11-21, see Tim's gotcha): Windows commits turned brain files into CRLF → whole-file diffs and merge conflicts. Fixed by `.gitattributes` (`* text=auto eol=lf`, portal data mirror excluded) on branch `daksh`; takes effect for everyone once merged to main.

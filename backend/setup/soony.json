@@ -1,6 +1,7 @@
 {
   "customer": "Soony Interactive",
   "source": "Office hours Sat 21 Nov 18:00, head of procurement (see .brain/minutes/)",
+  "demo_buyer": "Paul Winter",
   "currency": "EUR",
   "autonomy": {
     "mode": "control",

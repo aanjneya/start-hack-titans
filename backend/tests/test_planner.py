@@ -13,7 +13,7 @@ from backend.core import events
 from backend.core.replay import list_drops
 from backend.core.models import AgentLog, DecisionCard, Document, Forecast, InboxMessage, Issue, LaunchStatus, OutboxMessage
 from backend.core.store import all_rows
-from backend.planner_demo import SLEEVE_SCENARIO_COMMIT, run, sleeve_scenario_steps
+from backend.planner_demo import SLEEVE_SCENARIO_COMMIT, prepare_quote_request, run, sleeve_card, sleeve_scenario_steps
 
 
 def _decision_mails(decision_id=None):
@@ -108,43 +108,21 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
 
 @pytest.mark.parametrize("mode", ["pickup", "air"])
 def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monkeypatch, mode, sleeve_snapshot):
-    from backend.core import store
-    from backend.core.models import StockLot
-
     client = TestClient(app)
-    # Controlled variant: a recount makes sleeves the binding constraint.
-    lot = store.find_rows(StockLot, batch="5000413060")[0]
-    store.update_row(StockLot, lot.id, {"quantity": 40000}, source="site/recount", agent="ingest",
-                     reason="simulated physical count", on_conflict="overwrite")
-    p = load_plan()
-    arrival = p.as_of + timedelta(hours=2)
-    directory = tmp_path / "site"
-    directory.mkdir()
-    release = directory / "slot.csv"
-    release.write_text("receiving_site,delivery_reference,approved_revision,dock_released_at\n"
-                       f"DC-HAM,SHP-2026-04313,C,{arrival.isoformat()}\n")
-    system.process_drop(added=["site/slot.csv"], data_root=tmp_path)
-    def current():
-        return next(c for c in client.get("/api/decisions?status=proposed").json()["data"]
-                    if "rev blocked" in c["title"] and c["title"].endswith("CMP-GAM-004"))
-    card = current()
-    assert client.post(f"/api/decisions/{card['id']}/approve", json={"by": "Paul Winter"}).status_code == 200
-    ask_id = card["id"]
-    msg, = _decision_mails(ask_id)
-    reply = {"outbox_id": msg.id, "issue_id": msg.issue_id, "supplier_id": msg.supplier_id, "body": "[MOCK]"}
-    fact = {"shipment_id": "SHP-2026-04313", "po_number": "4500318775", "po_line": 2, "revision": "C",
-            "quantity": 20000, "arrival": arrival.isoformat()}
+    ask_id, reply, fact = prepare_quote_request(client, tmp_path)
+    arrival = datetime.fromisoformat(fact["arrival"])
     if mode == "air":
         # Simulate a generous auto-spend limit for this quote. PP-07 still requires sign-off.
         monkeypatch.setattr("backend.core.policy.needs_approval", lambda amount: amount == 0)
     quote = {**fact, "mode": mode, "incremental_cost_eur": 500, "valid_until": arrival.isoformat()}
     before = simulate(load_plan())["FG-GH6-STD"].projected_packed
     client.post("/api/inbox", json={**reply, "quote": quote}).raise_for_status()
-    card = current()
+    card = sleeve_card(client)
     option = card["options"][card["recommended"]]
     assert option["description"] == mode and option["copies_gained"] > 0
     assert option["cost_eur"] == 500 and option["approval_value_eur"] > 50000
     signers = ["Sofia Marchetti", "Jonas Lindqvist"] if mode == "air" else ["Sofia Marchetti"]
+    assert option["approval_roles"] == (["Category lead", "CPO"] if mode == "air" else ["Category lead"])
     assert option["approvers"] == signers and option["needs_approval"]
     assert card["status"] == "proposed" and len(_decision_mails(ask_id)) == 1 and not _decision_mails(card["id"])
     url = f"/api/decisions/{card['id']}/approve"

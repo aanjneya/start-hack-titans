@@ -281,7 +281,7 @@ def post_reply(req: ReplyRequest) -> dict:
 def customer_setup() -> dict:
     s = policy.setup()
     return ok({
-        "customer": s.customer,
+        "customer": s.customer, "demo_buyer": s.demo_buyer,
         "autonomy": {"mode": s.autonomy_mode, "auto_execute_below_eur": s.auto_execute_below_eur},
         "approval_matrix": [{"below_eur": r.below_eur, "approvers": list(r.approvers)} for r in s.approval_matrix],
     })

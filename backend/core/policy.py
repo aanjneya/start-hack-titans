@@ -26,6 +26,7 @@ class CustomerSetup:
     autonomy_mode: str  # "control" | "auto"
     auto_execute_below_eur: float
     approval_matrix: tuple[ApprovalRule, ...]
+    demo_buyer: str = ""
 
 
 def _setup_path() -> Path:
@@ -44,6 +45,7 @@ def _load(path: str) -> CustomerSetup:
     rules = tuple(sorted(rules, key=lambda r: float("inf") if r.below_eur is None else r.below_eur))
     autonomy = raw.get("autonomy", {})
     return CustomerSetup(
+        demo_buyer=raw.get("demo_buyer", ""),
         customer=raw.get("customer", ""),
         autonomy_mode=autonomy.get("mode", "control"),
         auto_execute_below_eur=float(autonomy.get("auto_execute_below_eur") or 0),

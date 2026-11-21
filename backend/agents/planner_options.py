@@ -21,7 +21,7 @@ def air_freight_limit(documents):
     return None
 
 
-def approvers(value, category, plan, documents, *, air=False, monthly_spend=None, buyer="", freight_eur=None):
+def approval_roles(value, documents, *, air=False, monthly_spend=None, freight_eur=None):
     roles = policy.approvers_for(value) if value is not None else []
     policy_docs = [d for d in documents if d.kind == "policy"]
     threshold = air_freight_limit(policy_docs) if air else None
@@ -30,6 +30,11 @@ def approvers(value, category, plan, documents, *, air=False, monthly_spend=None
         within_limit = monthly_spend is not None and charge is not None and monthly_spend + charge <= threshold
         role = "Category lead" if within_limit else "CPO"
         roles = list(dict.fromkeys([*roles, role]))
+    return roles
+
+
+def resolve_approvers(roles, category, plan, documents, buyer=""):
+    policy_docs = [d for d in documents if d.kind == "policy"]
     charts = []
     for doc in documents:
         if doc.kind == "org_chart":
@@ -71,6 +76,11 @@ def approvers(value, category, plan, documents, *, air=False, monthly_spend=None
                     name = found[1].strip()
         names.append(name)
     return list(dict.fromkeys(names))
+
+
+def approvers(value, category, plan, documents, *, buyer="", **conditions):
+    roles = approval_roles(value, documents, **conditions)
+    return resolve_approvers(roles, category, plan, documents, buyer)
 
 
 def useful_until(plan, row, quantity):
@@ -132,7 +142,8 @@ def options_for(issue, plan, forecast, row):
             if len(amounts) == 1:
                 from ..core.parsing import parse_number
                 monthly = parse_number(amounts[0])
-        signers = approvers(value, category, plan, docs, air=air, buyer=buyer, monthly_spend=monthly, freight_eur=cost)
+        roles = approval_roles(value, docs, air=air, monthly_spend=monthly, freight_eur=cost)
+        signers = resolve_approvers(roles, category, plan, docs, buyer)
         policy_proof = [evidence(d.path, "page 1, approval routing") for d in docs if d.kind == "policy"]
         charts = [d for d in docs if d.kind == "org_chart" and any(person in d.text for person in signers)]
         if charts:
@@ -142,7 +153,7 @@ def options_for(issue, plan, forecast, row):
         choices.append(dict(label=label, description=kind, cost_eur=cost, copies_gained=gained,
                             remaining_shortfall=None if gained is None or forecast.shortfall is None else max(0, forecast.shortfall - gained),
                             actions=list(actions), risk_note=note, evidence=[*proof, *policy_proof],
-                            approvers=signers, approval_value_eur=value,
+                            approvers=signers, approval_roles=roles, approval_value_eur=value,
                             needs_approval=(value is None or policy.needs_approval(value)
                                             or (air and air_freight_limit(docs) is not None)), available=available))
     add("Keep the current plan", "baseline", 0, 0, "Retain released stock and confirmed line-ready deliveries.", value=0)

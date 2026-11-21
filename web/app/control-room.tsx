@@ -7,9 +7,11 @@ import {
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
+import type { CustomerSetup } from "../../API_CONTRACT";
 import DataDrawer from "./data-drawer";
 
 type Snapshot = {
+  setup: CustomerSetup | null;
   health: HealthCheckResponse | null;
   forecast: Forecast[];
   decisions: DecisionCard[];
@@ -20,7 +22,7 @@ type Snapshot = {
   trace: AgentLogEntry[];
 };
 
-const EMPTY: Snapshot = { health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
+const EMPTY: Snapshot = { setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
 
 const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "watcher", name: "Watcher", job: "Watches the supplier portal for new files", color: "#5a6478" },
@@ -54,7 +56,7 @@ function actionTargets(actions: Record<string, unknown>[] | undefined): string[]
 }
 
 async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
-  const [health, forecast, decisions, issues, outbox, inbox, risk, trace] = await Promise.allSettled([
+  const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup] = await Promise.allSettled([
     getData<HealthCheckResponse>("/api/health"),
     getData<Forecast[]>("/api/forecast"),
     getData<DecisionCard[]>("/api/decisions?status=proposed"),
@@ -63,11 +65,13 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
     getData<InboxMessage[]>("/api/inbox"),
     getData<RiskScore[]>("/api/risk"),
     getData<AgentLogEntry[]>("/api/trace?limit=400"),
+    getData<CustomerSetup>("/api/setup"),
   ]);
   const val = <T,>(r: PromiseSettledResult<T>, fallback: T) => (r.status === "fulfilled" ? r.value : fallback);
   return {
     online: health.status === "fulfilled",
     snap: {
+      setup: val(setup, null),
       health: val(health, null),
       forecast: val(forecast, []),
       decisions: val(decisions, []),
@@ -137,12 +141,11 @@ export default function ControlRoom() {
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
-  // Cards that recommend the very same step (same headline AND same action, supplier, PO line) are shown once
-  // (the newest), with a count. Same headline but another PO stays a card of its own.
+  // Only collapse cards when every option and its approval route agree. Same headline but another PO stays a card of its own.
   const decisionGroups = useMemo(() => {
     const groups = new Map<string, DecisionCard[]>();
     for (const d of snap.decisions) {
-      const key = `${d.summary || d.title}|${actionTargets(d.options[d.recommended ?? -1]?.actions).join(";")}`;
+      const key = JSON.stringify([d.summary || d.title, d.recommended, d.options]);
       groups.set(key, [...(groups.get(key) ?? []), d]);
     }
     return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
@@ -154,6 +157,7 @@ export default function ControlRoom() {
   return (
     <div className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
+        setup={snap.setup}
         online={online}
         mock={mock}
         deadline={deadline}
@@ -193,7 +197,7 @@ export default function ControlRoom() {
             <ol className="space-y-4">
               {decisionGroups.map(({ card, similar }) => (
                 <li key={card.id}>
-                  <DecisionView card={card} similar={similar} onDone={refresh} />
+                  <DecisionView setup={snap.setup} card={card} similar={similar} onDone={refresh} />
                 </li>
               ))}
             </ol>
@@ -238,6 +242,7 @@ export default function ControlRoom() {
 }
 
 function TopBar(props: {
+  setup: CustomerSetup | null;
   online: boolean | null;
   mock: boolean;
   deadline: string | null;
@@ -259,9 +264,16 @@ function TopBar(props: {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       <div>
+        {props.setup?.demo_buyer && (
+          <p className="text-sm font-semibold">
+            Demo view · {props.setup.demo_buyer} · Procurement buyer
+          </p>
+        )}
         <h1 className="text-2xl font-bold leading-tight">Grand Heist 6 launch</h1>
         <p className="text-sm text-muted">
           Soony packing line, Hamburg
+          {props.setup && (props.setup.autonomy.mode === "control" ? " · Control mode" :
+            ` · Auto below ${approvalCurrency.format(props.setup.autonomy.auto_execute_below_eur)}`)}
           {countdown && (
             <>
               {", "}
@@ -343,21 +355,39 @@ function Hero({ editions }: { editions: Forecast[] }) {
   );
 }
 
-function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
+const approvalCurrency = new Intl.NumberFormat("en-IE", {
+  style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2,
+});
+
+function DecisionView({ setup, card, similar, onDone }: { setup: CustomerSetup | null; card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
   const [choice, setChoice] = useState<number>(card.recommended ?? 0);
   const [why, setWhy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const option = card.options[choice];
-  const approvers = option?.approvers?.length ? option.approvers : [card.approver || "Demo user"];
+  const buyer = setup?.demo_buyer;
+  const assigned = option?.approvers ?? [];
+  const recommended = card.options[card.recommended ?? 0];
+  const ownsCard = !!buyer && recommended?.approvers?.length === 1 && recommended.approvers[0] === buyer;
+  const canDecide = ownsCard && assigned.length === 1 && assigned[0] === buyer && option?.available !== false;
+  const value = option?.approval_value_eur;
+  const matrix = setup?.approval_matrix ?? [];
+  const band = value == null ? -1 : matrix.findIndex(rule => rule.below_eur == null || value < rule.below_eur);
+  const rule = matrix[band];
+  const lower = matrix[band - 1]?.below_eur ?? 0;
+  const roles = option?.approval_roles ?? rule?.approvers ?? [];
+  const roleLabel = roles.join(" + ");
+  const awaiting = roleLabel || assigned.join(" + ") || "approval routing";
+  const people = assigned.filter(name => !roles.includes(name));
+  const quoted = option?.actions.some(action => action.quote_inbox_id != null);
 
   const decide = async (verb: "approve" | "reject") => {
+    if (!canDecide || !buyer) return;
     setBusy(true);
     setError("");
     try {
       await postData(`/api/decisions/${card.id}/${verb}`, {
-        by: approvers[0],
-        approvals: verb === "approve" ? approvers.slice(1) : [],
+        by: buyer,
         option: verb === "approve" ? choice : undefined,
       });
       onDone();
@@ -381,7 +411,7 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
       <fieldset className="mt-3 border-t border-rule">
         <legend className="sr-only">Options</legend>
         {card.options.map((o, i) => {
-          const off = o.available === false;
+          const off = o.available === false || !ownsCard;
           return (
             <label
               key={i}
@@ -420,20 +450,24 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
       </fieldset>
 
       <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3">
-        <button
-          onClick={() => decide("approve")}
-          disabled={busy || !option || option.available === false}
-          className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50"
-        >
-          Approve as {approvers.join(" + ")}
-        </button>
-        <button
-          onClick={() => decide("reject")}
-          disabled={busy}
-          className="rounded-md border border-rule px-4 py-2 text-sm font-semibold hover:bg-dock disabled:opacity-50"
-        >
-          Reject
-        </button>
+        <dl className="flex w-full flex-wrap gap-x-8 gap-y-2 text-sm">
+          {quoted && <div><dt className="text-muted">Extra charge</dt><dd>{option.cost_eur == null ? "Unknown" : approvalCurrency.format(option.cost_eur)}</dd></div>}
+          <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
+          <div><dt className="text-muted">Required role</dt><dd>{roleLabel || "Pending"}</dd></div>
+          <div><dt className="text-muted">Assigned to</dt><dd>{people.join(" + ") || "Pending assignment"}</dd></div>
+        </dl>
+        {canDecide ? (
+          <>
+            <button onClick={() => decide("approve")} disabled={busy}
+              className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50">
+              Approve
+            </button>
+            <button onClick={() => decide("reject")} disabled={busy}
+              className="rounded-md border border-rule px-4 py-2 text-sm font-semibold hover:bg-dock disabled:opacity-50">
+              Reject
+            </button>
+          </>
+        ) : <span className="text-sm font-semibold">Awaiting {awaiting}</span>}
         <button
           onClick={() => setWhy((w) => !w)}
           aria-expanded={why}
@@ -445,6 +479,14 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
       {error && <p className="px-5 pb-3 text-sm text-stop">{error}</p>}
       {why && (
         <div className="border-t border-rule bg-dock/60 px-5 py-4 text-sm">
+          {rule && value != null && (
+            <p>Approval policy routes {approvalCurrency.format(value)} to {rule.approvers.join(" + ")}
+              {" "}for amounts from {approvalCurrency.format(lower)}
+              {rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
+              {quoted &&
+                " The approval value includes the original PO and the extra quoted charge."}
+            </p>
+          )}
           {card.problem && <p className="font-semibold">{card.problem}</p>}
           {card.reasoning && <p className="mt-2 whitespace-pre-line">{card.reasoning}</p>}
           {option?.risk_note && <p className="mt-2 text-muted">Risk of this option: {option.risk_note}</p>}

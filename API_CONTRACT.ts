@@ -305,5 +305,5 @@ export const API_ROUTES = {
   CHANGES: '/api/changes', // GET ?table= -> FieldChange[] (change log of the source of truth)
   INBOX: '/api/inbox', // GET -> InboxMessage[]; POST ReplyRequest -> feeds a supplier reply into the loop
   TRUTH: '/api/truth', // GET -> TruthTableInfo[] (clean data tables built by Watcher + Ingest, with row counts)
-  TRUTH_ROWS: '/api/truth/:table', // GET ?limit=&q= -> rows of one data table (each with its source file)
+  TRUTH_ROWS: '/api/truth/:table', // GET ?limit=&q= -> rows of one data table (source = first file, last_source = file that changed it last)
 } as const;

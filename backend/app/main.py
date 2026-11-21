@@ -332,4 +332,11 @@ def truth_rows(table: str, limit: int = 1000, q: Optional[str] = None) -> dict:
     if q:
         needle = q.casefold()
         rows = [r for r in rows if any(needle in str(v).casefold() for v in r.values())]
-    return ok(rows[:max(1, min(limit, 5000))])
+    rows = rows[:max(1, min(limit, 5000))]
+    # `source` is where a row first came from; also say which file changed it last (evidence for the shown values)
+    with session() as s:
+        last = {c.row_id: c.source for c in s.exec(select(FieldChange).where(FieldChange.table_name == table)
+                                                   .order_by(FieldChange.id)).all()}
+    for r in rows:
+        r["last_source"] = last.get(r.get("id"), "")
+    return ok(rows)

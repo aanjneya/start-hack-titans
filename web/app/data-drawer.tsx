@@ -147,8 +147,16 @@ export default function DataDrawer({ onClose }: { onClose: () => void }) {
                           {sapCell(r[fd.key])}
                         </td>
                       ))}
-                      <td className="max-w-[360px] truncate px-3 py-1.5 text-xs text-muted" title={String(r.source ?? "")}>
-                        {String(r.source ?? "")}
+                      <td
+                        className="max-w-[360px] truncate px-3 py-1.5 text-xs text-muted"
+                        title={
+                          r.last_source && r.last_source !== r.source
+                            ? `First from ${String(r.source)}; last changed by ${String(r.last_source)}`
+                            : String(r.source ?? "")
+                        }
+                      >
+                        {String(r.last_source || r.source || "")}
+                        {r.last_source && r.last_source !== r.source ? " (updated)" : ""}
                       </td>
                     </tr>
                   ))}

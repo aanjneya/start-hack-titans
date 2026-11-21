@@ -187,3 +187,15 @@ def test_ocr_is_not_repeated_for_unchanged_scans(monkeypatch):
     first = len(calls)
     system.run_full(label="second")
     assert first >= 60 and len(calls) == first  # second run reused the cached OCR
+
+
+def test_ingest_findings_follow_the_finding_format(full):
+    ingest = next(a for a in system._agents if a.name == "ingest")
+    ingest._scans, ingest._unmapped, ingest._unresolved = [], [], {"part 'XX-1' of SUP-0029 (test.pdf)"}
+    ingest._raise_summary_issues()
+    by_type = {i.type: i for i in all_rows(Issue)}
+    for t in ("scans_unread", "unresolved_ids"):
+        issue = by_type[t]
+        assert issue.reason and issue.suggested_actions and issue.subject_type == "drop", t
+        assert issue.schema_version == 1
+    assert by_type["unresolved_ids"].severity == 3 and len(by_type["unresolved_ids"].suggested_actions) == 2

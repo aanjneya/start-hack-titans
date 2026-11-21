@@ -76,3 +76,20 @@ Every agent working in this repository is a **co-founder and technical strategis
   - `git push --force` / `git push -f`
   - `rm -rf`
   - Destructive database commands (`DROP TABLE`, `DROP DATABASE`, `TRUNCATE`, unguarded `DELETE`, or resetting shared DB state)
+
+## 4. Building Agents on the Shared Backend (`backend/`): follow without asking
+
+When the user asks you to work on one of our agents (Watcher, Ingest & Normalizer, Reconciler & Gate, Chaser, Launch Planner, Risk Rater) or the frontend, do this on your own:
+
+1. **Find your work**: detect the teammate ID (as in Section 1), open `.brain/tasks/README.md` → the agent file(s) where `Owner` is that teammate → do the unticked tasks in order. Read `backend/README.md` once per session.
+2. **Stay in your lane**: edit only your agent's file `backend/agents/<agent>.py`, its tests `backend/tests/test_<agent>.py`, and helper modules you create (e.g. `backend/agents/<agent>_rules.py`). Keep the class name, `name` and `subscriptions` of the stub.
+3. **Shared hubs need care**: `backend/core/*` (models, events, store, coordinator, llm, policy), `backend/app/main.py`, `API_CONTRACT.ts` and `backend/setup/*.json` are used by everyone. Only **add** (new columns/tables/events/routes), never rename or remove. Land the change on `main` immediately as one tiny commit, mirror it in `API_CONTRACT.ts`, and log it in `.brain/DECISIONS.md`.
+4. **Use the shared building blocks; don't re-invent them**:
+   - Data: read files from `Path(event.payload["data_root"])`, never a hardcoded path; store with `store.add_all([...])` and always set `source=` (path relative to the data root). Never overwrite rows; current values via `store.latest_by(...)`.
+   - Hand-offs: only through events in `backend/core/events.py` (`self.emit(...)`); problems via `self.raise_issue(type=, kind=IssueKind..., key=, evidence=[Evidence(...)])`.
+   - Claude: only via `backend/core/llm.py` (`llm.extract(...)` / `llm.complete(...)`), and register a mock (`llm.register_mock`) so `MOCK_MODE=true` works offline.
+   - Approvals: approver and auto/control switch only via `backend/core/policy.py` (customer setup file), never hardcoded amounts or names.
+5. **Never hardcode values from the data** (quantities, dates, IDs, rates): read them. Every result keeps evidence (file + row/page).
+6. **Test before you push**: `backend/.venv/bin/pytest backend/tests -q` must be green, including a test that replays the real drops (`backend.core.replay`) so new data works without code changes. Then `./scripts/verify.sh`.
+7. **Ship and report**: commit on your personal branch, merge to `main` (2–3 h cadence), tick the finished tasks in your `.brain/tasks/<n>-<agent>.md`, update your `[~]` line in `.brain/TASKS.md`, and sync with `./scripts/brain-push.sh "<summary>"`. Log anything that saves a teammate >15 min in `.brain/INSIGHTS.md` or `.brain/gotchas/<id>.md`.
+8. **Never edit** another teammate's agent file, `.brain/DATA_CHANGES.md` or `challenge/start-hack-data/` (auto-generated), and never commit `.env`, API keys or `backend/data/`.

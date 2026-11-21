@@ -46,6 +46,17 @@ Merge decisions: kept Risk separate from Line-Stop/Policy (daksh) so each agent 
 - **Top bar:** countdown to Sun 20:00, 7-step pipeline status, `LIVE / MOCK` toggle.
 - **Main:** "What can stop a line" brief (CPO memo: one page, not 40 dashboards) → decision cards (problem, A/B/C, **€ vs copies**, approver, decide-by time, Approve). **Approving updates the pack forecast live.**
 - **Risk table** with reasons. **⚡ AI Traceability drawer** on any card: source file → normalization diff → reasoning → email out/in (for Nils and the judges).
+- **Second tab "Shipments & suppliers" (tim):** reads the `part_journey` view (§3b). One row per launch-relevant shipment as a pipeline, e.g. `CMP-GAM-010 · Ordered ✓ → Confirmed ✓ → Shipped ✓ (sea) → Hamburg ✗ ETA 3 Dec, needed Sun 06:00`; one card per supplier (open / on track / late / unclear, last update, pending agent question). Sorted by risk, red first, green collapsed, every red row has an action. Answers the team's end-to-end worry at almost no cost.
+
+## 3b. Truth store schema (tim) — fix this first, all P0 slices build on it
+SQLite now (SQLModel/SQLAlchemy, swap to Postgres = 1 line). **One table per chain step**, so the end-to-end process *is* the schema; columns follow the real CSV headers. Every row has `source` (file) + `ingested_at`; extracted rows add `confidence`.
+| Layer | Tables (key columns) | Filled from |
+|---|---|---|
+| Master | `materials` (component_id, critical, drawing_rev) · `bom` (parent_id, child_id, qty_per, valid_from/to) · `products` (launch_date, weekly_plan_qty, day_one_qty) · `supplier_part_map` | master/*.csv + `*_delta`/`*_update` files |
+| Chain | `purchase_orders` (po_number, po_line, supplier_id, material_id, quantity, promised_date, status) → `order_confirmations` (qty, ship_date, revision) → `shipments` (shipment_id, mode, eta, status, updated_at; `po_numbers`/`material_ids` split on `\|` into a link table) → `goods_receipts` (po_number, qty_received, delivery_note, remark) → `stock` (material_id, batch, quantity, snapshot_date) → `packout` (date, product_id, line, units_packed) | erp/*.csv (both PO formats), tracker xlsx, confirmation PDFs, dock scans |
+| Truth & trace | `conflicts` (entity, field, value_a/source_a, value_b/source_b, status open→asked→resolved) · `agent_log` (ts, agent, action, detail, evidence) | Reconciler / all agents |
+**Rule:** never overwrite. New data is stored as a fact with its source; "current truth" is a derived view (fixed precedence in code, e.g. goods receipt > tracker > supplier promise). Too big a disagreement (690 vs 790) → `conflicts` row → Chaser or human. CSV column mapping done by LLM, not hardcoded.
+**`part_journey` view:** one SQL view joining PO → confirmation → shipment → receipt per PO line; empty step = missing → Reconciler reads it, second tab shows it.
 
 ## 4. Hero demo case (real data, verified)
 **CMP-GAM-004 cover sleeve (Standard):** ECN-2026-118 → rev B blocked → Reconciler invalidates rev B stock → Planner shows the shortfall in copies → Karton Nowak (SUP-0028, 60 % share) has a **downtime notice** (`Zawiadomienie_przestoj_techniczny_2026-11.pdf`) **and** an **express offer** (`Oferta_tryb_ekspresowy_2026-11-21.pdf`) → Chaser asks in Polish if express output is rev C → card: "Express rev C, € X, +Y copies; approver Maren" → click → forecast turns green → trace shows the chain.
@@ -54,10 +65,10 @@ Backups: SHP-04276 waiting at CTA Hamburg (last-mile pickup = cheap copies); CMP
 ## 5. Build order (Sat 17:30 → Sun 12:00)
 | P | Slice | Owner (proposal) |
 |---|---|---|
-| P0 | Canonical store + Ingest/Normalizer for ERP CSVs, both PO formats, tracker xlsx, BOM/ECN, `launch_status` (reuse `office_text`/`csv_summary` from `monitor/drop_watch.py`) | tbd |
+| P0 | **First:** `schema.sql` + `part_journey` view (§3b), then canonical store + Ingest/Normalizer for ERP CSVs, both PO formats, tracker xlsx, BOM/ECN, `launch_status` (reuse `office_text`/`csv_summary` from `monitor/drop_watch.py`) | tbd |
 | P0 | Reconciler rules: tracker vs ERP, stale, ECN rev gate, PO vs confirmation, stuck approvals | tbd |
 | P0 | Planner: pack simulation + A/B/C + € vs copies + PP-07 approver routing | tbd |
-| P0 | One screen + trace drawer, MOCK/LIVE toggle, fixtures from `challenge/start-hack-data/` | tbd |
+| P0 | One screen + trace drawer + shipments/suppliers tab, MOCK/LIVE toggle, fixtures from `challenge/start-hack-data/` | tbd |
 | P1 | Chaser with rate limit + mock supplier, then one real email to Karton Nowak | first free |
 | P1 | Risk Rater (4 explainable factors) | — |
 | P2 | Dock-scan OCR for receiving (do 2–3 scans for the demo, not all 61); supplier scout for 2nd sources | pitch slide |

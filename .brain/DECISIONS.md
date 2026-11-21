@@ -33,3 +33,8 @@
 - **Context**: Two plan suggestions (aanjneya: 7-step story, data traps, pack simulation, one screen; daksh: closed loop, watcher, hand-offs, build order) needed one direction.
 - **Decision**: Adopt the merge as `.brain/PLAN.md`: sell the process (not a product), 5 agents + coordinator, one screen + trace drawer, hero demo = CMP-GAM-004 rev trap with Karton Nowak express offer.
 - **Trade-offs**: Dock-scan OCR and supplier scout pushed to P2; owners for the four P0 slices and the stack still open; `GOAL.md` still needs explicit team approval to be filled from the plan.
+
+### [17:45] Truth-store schema + shipments/suppliers tab added to PLAN.md (by tim)
+- **Context**: PLAN.md only said "canonical tables with provenance"; all four P0 slices need one concrete schema, and the team worried the end-to-end chain (order → packed) wasn't covered.
+- **Decision**: New PLAN.md §3b: one table per chain step (PO → confirmation → shipment → receipt → stock → packout) + `conflicts` + `agent_log`, never overwrite, `part_journey` SQL view. Second UI tab "Shipments & suppliers" reads that view. Schema is the first P0 step.
+- **Trade-offs**: Second tab is behind the one-page main view (CPO memo still holds); chain ends at "packed Sun 20:00", no post-Hamburg distribution.

@@ -43,3 +43,8 @@
 - **Context**: Team wants to build all agents + backend first, then the frontend, and pick tasks themselves instead of being assigned.
 - **Decision**: Stack = Python 3.12 / FastAPI / SQLModel on SQLite (Tim's §3b schema) + Claude API for agents; Next.js + TS frontend in phase 2. Work is listed per agent in `.brain/tasks/` (README overview + one plain-language file per agent with numbered tasks), all unclaimed.
 - **Trade-offs**: Two languages (Python agents, TS UI) means the API contract in `API_CONTRACT.ts` must be kept in sync; owners still to be chosen at the table.
+
+### [18:15] Shared backend landed on main (by daksh)
+- **Context**: Every agent needs the same tables, hand-off mechanism, log and Claude helper before people can build in parallel.
+- **Decision**: `backend/` with FastAPI + SQLModel/SQLite. Facts are append-only (`add_all`), current truth via `latest_by`; agents talk only through events in `core/events.py`; every action goes to `agent_log`; issues dedupe by key and reopen when they come back; `core/replay.py` replays the real drops from git history. Claude default model `claude-opus-5-5` (env `ANTHROPIC_MODEL`), with server-side refusal fallbacks on `complete()`. All six agents exist as stubs so the loop runs end to end today.
+- **Trade-offs**: In-process event bus (no queue service): fine for the demo, one process only. Schema changes to shared tables go through `backend/core/models.py` + `API_CONTRACT.ts` in one small commit to main.

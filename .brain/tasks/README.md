@@ -8,7 +8,7 @@
 
 | # | Agent | What it does in one line | Tasks | Owner |
 |---|---|---|---|---|
-| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 8 | unclaimed |
+| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 8 | ✅ @daksh (done) |
 | 1 | [Watcher](1-watcher.md) | Notices every new or changed file on the Soony portal (already running every 15 min) | 5 | unclaimed |
 | 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 10 | unclaimed |
 | 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 10 | unclaimed |
@@ -16,6 +16,9 @@
 | 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 9 | unclaimed |
 | 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 5 | unclaimed |
 | 7 | [Frontend (later)](7-frontend-later.md) | The one screen: what can stop a line, decision cards, risk table, AI trace drawer | 6 | phase 2 |
+
+## Getting started (shared backend is done)
+Code lives in `backend/`; read `backend/README.md` (run, test, how to build your agent). Every agent already exists as a **stub** in `backend/agents/<agent>.py` that logs and passes the work on, so the whole loop runs today. Claim tasks here, replace the TODOs in your stub, add a test.
 
 ## How they work together (one loop)
 ```

@@ -11,11 +11,11 @@ Loop: Watcher (15-min portal SHA diff) → Ingest & Normalizer → Reconciler & 
 
 ## Tech Stack
 
-- **Frontend**: _TBD_
-- **Backend / API**: _TBD_
-- **Database / Storage**: _TBD_
-- **External APIs / AI**: _TBD_ (must support `MOCK_MODE=true` env var + runtime `?mock=1`/hotkey toggle)
-- **Deploy Target**: _TBD (auto-deploy from `main` by Hour 1.5)_
+- **Frontend**: Next.js + TypeScript in `web/` (phase 2, after the agents)
+- **Backend / API**: Python 3.12+, FastAPI (`backend/app/main.py`), agents in `backend/agents/`, event bus `backend/core/coordinator.py`
+- **Database / Storage**: SQLite via SQLModel (`backend/data/truth.db`, gitignored), append-only facts + `part_journey` view (PLAN.md §3b)
+- **External APIs / AI**: Claude API via `backend/core/llm.py` (default `claude-opus-5-5`), Soony portal API (Watcher). `MOCK_MODE=true` = fully offline
+- **Deploy Target**: _TBD_ (web on Vercel; backend on a small Python host)
 
 ## Directory Layout
 
@@ -31,7 +31,8 @@ Loop: Watcher (15-min portal SHA diff) → Ingest & Normalizer → Reconciler & 
 │   ├── verify.sh                 # Stack-agnostic verification (env/secrets/Node/Python)
 │   └── setup.sh                  # 60-second teammate onboarding & OS symlink check
 ├── AGENTS.md                     # Universal agent rules (imported by CLAUDE.md via @AGENTS.md)
-├── API_CONTRACT.ts               # Shared TypeScript API contract
+├── backend/                      # Python agents + FastAPI (see backend/README.md)
+├── API_CONTRACT.ts               # Shared TypeScript API contract (mirrors backend/core/models.py)
 ├── .env.example                  # Required environment variables (MOCK_MODE=true)
 └── README.md                     # 60-second onboarding & workflow quickstart
 ```

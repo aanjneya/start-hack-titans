@@ -19,6 +19,8 @@
 
 ## Done
 
+- [x] `@daksh` Shared backend (T0.1–T0.8): `backend/` FastAPI + SQLite truth store + event bus + agent log + Claude helper + replay of real drops; all agents exist as stubs (`backend/README.md`)
+
 - [x] `@aanjneya` Drop START Hack Munich challenge briefs & rubric into `challenge/` (Lio: Keep the Line Running)
 - [x] `@aanjneya` Initialize 4-person hackathon repo, `second-brain` skill, `AGENTS.md`, and symlinks
 - [x] `@aanjneya` Harden hackathon infra: 3-way `brain-push.sh`, `.githooks/pre-push`, `verify.sh`, `setup.sh`, `@AGENTS.md`, zero-intervention brain sync

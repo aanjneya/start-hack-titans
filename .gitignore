@@ -31,3 +31,6 @@ __pycache__/
 *.sqlite
 *.db
 *.log
+
+# Backend local data (SQLite truth store, replay snapshots)
+backend/data/

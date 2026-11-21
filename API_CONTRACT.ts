@@ -5,6 +5,7 @@
  * and domain types across frontend and backend.
  *
  * Rule: Update this contract FIRST before implementing or changing integrations.
+ * Backend: Python/FastAPI in backend/ (models in backend/core/models.py must match these types).
  */
 
 export interface ApiError {
@@ -24,11 +25,158 @@ export interface HealthCheckResponse {
   status: 'ok' | 'degraded';
   mockMode: boolean;
   timestamp: string;
+  dataRoot: string;
+  agents: string[];
+}
+
+/** Where a fact or finding comes from (path is relative to the portal data root). */
+export interface Evidence {
+  path: string;
+  locator: string; // e.g. "row 12", "page 2"
+  sha256: string;
+  quote: string;
+}
+
+export type IssueKind = 'missing_info' | 'copies_at_risk' | 'human_check';
+export type IssueStatus = 'open' | 'routed' | 'asked' | 'resolved' | 'reopened';
+
+export interface Issue {
+  id: number;
+  fingerprint: string;
+  type: string; // e.g. tracker_mismatch, stale_feed, rev_blocked, single_source
+  kind: IssueKind;
+  severity: number; // 1 info .. 5 line-stopper
+  summary: string;
+  part_id: string;
+  supplier_id: string;
+  shipment_id: string;
+  po_number: string;
+  evidence: Evidence[];
+  status: IssueStatus;
+  raised_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DecisionOption {
+  label: string;
+  description: string;
+  cost_eur: number | null;
+  copies_gained: number | null;
+  actions: Record<string, unknown>[];
+  risk_note: string;
+}
+
+export type DecisionStatus = 'proposed' | 'approved' | 'rejected' | 'executed' | 'outdated';
+
+export interface DecisionCard {
+  id: number;
+  issue_ids: number[];
+  title: string;
+  problem: string;
+  options: DecisionOption[];
+  recommended: number | null; // index into options
+  approver: string;
+  approver_reason: string;
+  decide_by: string | null;
+  status: DecisionStatus;
+  chosen_option: number | null;
+  decided_by: string;
+  decided_at: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface Forecast {
+  id: number;
+  computed_at: string;
+  product_id: string;
+  edition: string;
+  deadline: string | null;
+  still_to_pack: number | null;
+  projected_packed: number | null;
+  shortfall: number | null;
+  limiting_part: string;
+  details: Record<string, unknown>;
+}
+
+export interface RiskScore {
+  id: number;
+  entity_type: 'part' | 'supplier';
+  entity_id: string;
+  grade: number; // 1 safe .. 6 critical
+  rating: string; // AAA..CCC
+  reasons: { text: string; evidence?: Evidence[] }[];
+  computed_at: string;
+}
+
+export interface AgentLogEntry {
+  id: number;
+  ts: string;
+  run_id: string;
+  agent: string;
+  action: string; // e.g. handle:files.changed, raise_issue, llm_call, error, todo
+  detail: string;
+  evidence: Evidence[];
+  data: Record<string, unknown>;
+}
+
+export interface OutboxMessage {
+  id: number;
+  supplier_id: string;
+  issue_id: number | null;
+  decision_id: number | null;
+  to_email: string;
+  language: string;
+  subject: string;
+  body: string;
+  body_en: string;
+  status: 'draft' | 'approved' | 'sent' | 'replied' | 'failed';
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface RunResult {
+  run_id: string;
+  drop_id: number;
+  label: string;
+  steps: number;
+  added: number;
+  changed: number;
+  removed: number;
+  open_issues: number;
+}
+
+export interface RunRequest {
+  added?: string[]; // omit everything = reprocess the whole data folder
+  changed?: string[];
+  removed?: string[];
+  label?: string;
+  reset?: boolean;
+}
+
+export interface DecideRequest {
+  by: string;
+  option?: number; // default: recommended
 }
 
 /**
  * Route registry — keep endpoint paths and HTTP methods in sync here.
+ * Backend base URL in dev: http://localhost:8000
  */
 export const API_ROUTES = {
-  HEALTH: '/api/health',
+  HEALTH: '/api/health', // GET -> HealthCheckResponse
+  RUN: '/api/run', // POST RunRequest -> RunResult
+  REPLAY: '/api/replay', // POST ?upto=N -> RunResult[]
+  DROPS: '/api/drops', // GET
+  ISSUES: '/api/issues', // GET ?status= -> Issue[]
+  CONFLICTS: '/api/conflicts', // GET
+  FORECAST: '/api/forecast', // GET -> Forecast[]
+  DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
+  DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
+  DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest
+  TRACE: '/api/trace', // GET ?limit=&agent=&run_id= -> AgentLogEntry[]
+  RISK: '/api/risk', // GET -> RiskScore[]
+  OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
+  PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
 } as const;

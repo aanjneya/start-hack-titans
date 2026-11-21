@@ -132,3 +132,58 @@ def test_watcher_live_diff_with_fake_portal(monkeypatch, tmp_path):
     monkeypatch.setenv("MOCK_MODE", "true")
     config.reset_settings()
     assert system.watch_once() == {"skipped": True}
+
+
+def test_scan_ocr_is_cross_checked_against_goods_receipts(monkeypatch):
+    """Live OCR is simulated with a mock answer for one real delivery note (WZ-260906-369)."""
+    from backend.core import llm
+    from backend.core.models import Document
+
+    def fake_ocr(prompt="", files=(), **kw):
+        if not any("WZ-260906-369" in str(f) for f in files):
+            return None  # other scans stay "pending" like offline
+        return {"document_type": "delivery_note", "document_number": "WZ-260906-369",
+                "document_date": "2026-09-06", "supplier_name": "Karton Nowak Sp. z o.o.",
+                "po_numbers": ["4500318712"], "received_by": "Schulz P.", "language": "pl",
+                "lines": [{"part_number": "CMP-GAM-005", "description": "Cover Sleeve Grand Heist 5",
+                           "quantity": 120000, "unit": "PCS", "packages": 125}],
+                "handwritten_notes": "5 cartons missing", "summary_en": "Delivery note for sleeves."}
+
+    monkeypatch.setitem(llm._MOCKS, "ingest.scan_ocr", fake_ocr)
+    system.run_full(label="with ocr")
+    doc = find_rows(Document, path="soony/receiving/DC-HAM/20260907_WZ-260906-369.jpg")[0]
+    checks = doc.extracted["checks"]
+    assert doc.kind == "delivery_note" and doc.supplier_id == "SUP-0028"
+    assert checks["results"]["number_matches_file_name"] and checks["results"]["po_known"]
+    assert checks["results"]["qty_CMP-GAM-005_matches_receipt"] is False  # paper 120,000 vs booked 125,000
+    assert any("booked 125000" in n for n in checks["notes"]) and any("missing" in n for n in checks["notes"])
+    pending = [d for d in all_rows(Document) if d.kind == "scan"]
+    assert pending and all(d.extracted.get("ocr", "").startswith("pending") for d in pending)
+
+
+def test_llm_sends_images_and_pdfs_as_blocks(tmp_path):
+    from backend.core.llm import _content
+
+    img, pdf = tmp_path / "a.jpg", tmp_path / "b.pdf"
+    img.write_bytes(b"\xff\xd8fake")
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    blocks = _content("read it", [img, pdf])
+    assert [b["type"] for b in blocks] == ["image", "document", "text"]
+    assert blocks[0]["source"]["media_type"] == "image/jpeg" and blocks[1]["source"]["media_type"] == "application/pdf"
+    assert _content("just text") == "just text"
+
+
+def test_ocr_is_not_repeated_for_unchanged_scans(monkeypatch):
+    from backend.core import llm
+
+    calls = []
+
+    def fake_ocr(files=(), **kw):
+        calls.append(files[0])
+        return {"document_type": "delivery_note", "document_number": "X", "lines": []}
+
+    monkeypatch.setitem(llm._MOCKS, "ingest.scan_ocr", fake_ocr)
+    system.run_full(label="first")
+    first = len(calls)
+    system.run_full(label="second")
+    assert first >= 60 and len(calls) == first  # second run reused the cached OCR

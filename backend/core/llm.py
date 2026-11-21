@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, TypeVar
+import base64
+from pathlib import Path
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 from pydantic import BaseModel
 
@@ -29,7 +31,8 @@ class LLMError(RuntimeError):
 
 
 def register_mock(task: str, fn: Callable[..., Any]) -> None:
-    """fn(prompt=..., system=..., schema=...) -> str (complete) or schema instance/dict (extract)."""
+    """fn(prompt=..., system=..., schema=..., files=[...]) -> str (complete) or schema instance/dict (extract).
+    Accept **kwargs in your mock so new arguments never break it."""
     _MOCKS[task] = fn
 
 
@@ -44,6 +47,26 @@ def _get_client():
 
         _client = anthropic.Anthropic()
     return _client
+
+
+_MEDIA = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
+          ".webp": "image/webp", ".pdf": "application/pdf"}
+
+
+def _content(prompt: str, files: Sequence[Path] = ()) -> list[dict] | str:
+    """Text prompt, or file blocks (images/PDFs, base64) followed by the text."""
+    if not files:
+        return prompt
+    blocks: list[dict] = []
+    for f in files:
+        media = _MEDIA.get(Path(f).suffix.lower())
+        if media is None:
+            raise ValueError(f"unsupported file type for Claude: {f}")
+        data = base64.standard_b64encode(Path(f).read_bytes()).decode()
+        kind = "document" if media == "application/pdf" else "image"
+        blocks.append({"type": kind, "source": {"type": "base64", "media_type": media, "data": data}})
+    blocks.append({"type": "text", "text": prompt})
+    return blocks
 
 
 def _usage(resp) -> dict:
@@ -110,12 +133,16 @@ def extract(
     system: str = "",
     effort: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    files: Sequence[Path] = (),
 ) -> Optional[M]:
-    """Ask Claude for structured data validated against `schema` (Pydantic). None if mocked/refused."""
+    """Ask Claude for structured data validated against `schema` (Pydantic). None if mocked/refused.
+
+    `files`: images (jpg/png/...) or PDFs Claude should read, e.g. scanned delivery notes (OCR).
+    """
     settings = get_settings()
     if settings.mock_mode:
         fn = _MOCKS.get(task)
-        result = fn(prompt=prompt, system=system, schema=schema) if fn else None
+        result = fn(prompt=prompt, system=system, schema=schema, files=list(files)) if fn else None
         if isinstance(result, dict):
             result = schema.model_validate(result)
         trace.log(agent, "llm_call", f"[mock] {task}", data={"task": task, "mocked": True, "has_mock": fn is not None})
@@ -127,7 +154,7 @@ def extract(
     kwargs: dict[str, Any] = dict(
         model=settings.anthropic_model,
         max_tokens=max_tokens or settings.llm_max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": _content(prompt, files)}],
         output_config={"effort": effort or settings.llm_effort},
         output_format=schema,
     )
@@ -142,7 +169,7 @@ def extract(
         trace.log(agent, "error", f"llm {task}: connection error", data={"task": task})
         raise LLMError(str(exc)) from exc
 
-    trace.log(agent, "llm_call", task, data={"task": task, **_usage(resp)})
+    trace.log(agent, "llm_call", task, data={"task": task, "files": [Path(f).name for f in files], **_usage(resp)})
     if resp.stop_reason == "refusal":
         return None
     return resp.parsed_output

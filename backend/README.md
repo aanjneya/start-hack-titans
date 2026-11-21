@@ -37,7 +37,7 @@ backend/
   core/events.py       event names agents hand work over with
   core/coordinator.py  in-process event bus; errors are logged, never stop other agents
   core/trace.py        agent log (AI traceability)
-  core/llm.py          complete() / extract() with Claude; MOCK mode via register_mock()
+  core/llm.py          complete() / extract() with Claude (extract(files=[...]) for images/PDFs = OCR); MOCK via register_mock()
   core/parsing.py      CSV sniffing (, ; tab |), xlsx/docx/pdf text, safe paths
   core/replay.py       rebuild each real drop from git history and replay it (T0.8)
   core/policy.py       customer setup: approver_for(amount), needs_approval(amount) from setup/<customer>.json

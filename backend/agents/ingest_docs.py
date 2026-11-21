@@ -171,3 +171,45 @@ def scan_info(rel_path: str) -> dict:
 
 def language(text: str) -> str:
     return detect_language(text) if text else ""
+
+
+# ---------------------------------------------------------------------------
+# Scans (photos of delivery notes, packing lists, image-only PDFs): Claude vision OCR
+# ---------------------------------------------------------------------------
+class ScanLine(BaseModel):
+    part_number: str  # exactly as printed (our CMP-… or the supplier's own number)
+    description: str = ""
+    quantity: Optional[float] = None  # plain number, no thousands separators
+    unit: str = ""
+    packages: Optional[float] = None
+
+
+class ScanExtraction(BaseModel):
+    document_type: str  # delivery_note | packing_list | inspection_report | other
+    document_number: str = ""
+    document_date: str = ""  # YYYY-MM-DD
+    supplier_name: str = ""
+    po_numbers: list[str] = []
+    lines: list[ScanLine] = []
+    carrier_reference: str = ""
+    remarks: str = ""  # printed remarks field, translated to English
+    handwritten_notes: str = ""  # any handwriting except the signature (e.g. "2 cartons damaged"), in English
+    received_by: str = ""
+    language: str = ""  # ISO code of the printed document
+    summary_en: str = ""  # one English sentence
+
+
+SCAN_PROMPT = (
+    "This is a scanned document received at a distribution centre (delivery note, packing list or similar). "
+    "It may be Polish, Korean, Chinese, German or English. Transcribe exactly what is printed: document type, "
+    "number, date (as YYYY-MM-DD), supplier, purchase order numbers, every line (part number exactly as printed, "
+    "description, quantity as a plain number without thousands separators, unit, packages), carrier reference, "
+    "the remarks field and ANY handwritten notes other than the signature (translate both to English), who "
+    "received it, and a one-sentence English summary. Leave a field empty if it is not on the document; never guess."
+)
+
+
+def ocr_scan(path, rel_path: str, agent: str) -> Optional[ScanExtraction]:
+    """Claude vision on one scan (live mode). MOCK mode -> None unless a mock is registered."""
+    return llm.extract(f"{SCAN_PROMPT}\nFile: {rel_path}", ScanExtraction, agent=agent, task="ingest.scan_ocr",
+                       files=[path])

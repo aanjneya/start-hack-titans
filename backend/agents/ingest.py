@@ -14,6 +14,7 @@ and applies supplier replies. It is the ONLY writer of supply-chain data.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import re
 import typing
@@ -35,7 +36,9 @@ from ..core.parsing import (
 )
 from ..core.store import UpdateResult, add_all, all_rows, session
 from .base import Agent, register
-from .ingest_docs import classify, facts, language, llm_extract, parse_order_confirmation, scan_info
+from .ingest_docs import (
+    classify, facts, language, llm_extract, ocr_scan, parse_order_confirmation, scan_info,
+)
 from .ingest_mapping import LIST_FIELDS, TARGETS, Mapping, map_columns
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".webp"}
@@ -131,11 +134,11 @@ class IngestNormalizer(Agent):
         elif ext == ".json":
             self._ingest_json(rel, data)
         elif ext in IMAGE_EXT:
-            self._store_scan(rel)
+            self._store_scan(root, rel)
         elif ext == ".pdf":
             text = pdf_text(data)
             if not text.strip():
-                self._store_scan(rel)
+                self._store_scan(root, rel)
             else:
                 self._ingest_document(rel, text)
         elif ext in {".docx", ".md", ".txt"}:
@@ -388,8 +391,9 @@ class IngestNormalizer(Agent):
             if parsed:
                 self._ingest_confirmation(rel, text, parsed, supplier)
                 return
-        extra = {"facts": facts(text)}
-        extracted = llm_extract(text, kind, rel, self.name)
+        sha = hashlib.sha256(text.encode()).hexdigest()
+        extra = {"facts": facts(text), "sha256": sha}
+        extracted = self._cached(rel, sha, "llm") or llm_extract(text, kind, rel, self.name)
         if extracted:
             extra["llm"] = extracted
         self._store_document(rel, text, kind=kind, supplier_id=supplier, extra=extra)
@@ -432,11 +436,70 @@ class IngestNormalizer(Agent):
                              extra={"parsed": {k: v for k, v in parsed.items() if k != "notes"},
                                     "notes": parsed["notes"], "facts": facts(text)})
 
-    def _store_scan(self, rel: str) -> None:
-        self._scans.append(rel)
+    def _store_scan(self, root: Path, rel: str) -> None:
+        """Scans: file-name facts always; Claude vision OCR in live mode, cross-checked against our data."""
+        from .ingest_docs import ScanExtraction
+
         supplier = _supplier_of(rel)
-        self._store_document(rel, "", kind="scan", supplier_id=supplier,
-                             extra={"from_file_name": scan_info(rel), "ocr": "pending (needs live Claude vision)"})
+        sha = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+        extra: dict = {"from_file_name": scan_info(rel), "sha256": sha}
+        ocr = None
+        cached = self._cached(rel, sha, "ocr")
+        if cached:
+            ocr = ScanExtraction.model_validate(cached)
+        else:
+            try:
+                ocr = ocr_scan(root / rel, rel, self.name)
+            except Exception as exc:  # OCR must never stop the drop
+                self.log("error", f"OCR {rel}: {type(exc).__name__}: {exc}", [{"path": rel}])
+        if ocr is None:
+            self._scans.append(rel)
+            extra["ocr"] = "pending (needs live Claude vision)"
+            self._store_document(rel, "", kind="scan", supplier_id=supplier, extra=extra)
+            return
+        extra["ocr"] = ocr.model_dump()
+        extra["checks"] = self._check_scan(ocr, extra["from_file_name"], rel)
+        supplier = supplier or self.resolve_supplier(ocr.supplier_name, rel) or ""
+        text = "\n".join(filter(None, [ocr.summary_en, ocr.remarks, ocr.handwritten_notes]))
+        self._store_document(rel, text, kind=ocr.document_type or "scan", supplier_id=supplier, extra=extra)
+        self.log("scan_read", f"{rel}: {ocr.document_type} {ocr.document_number}, {len(ocr.lines)} lines, "
+                 f"checks {extra['checks']['passed']}/{extra['checks']['total']}", [{"path": rel}])
+
+    def _check_scan(self, ocr, from_name: dict, rel: str) -> dict:
+        """Validate the OCR against what we already know (Instabase-style): confidence = checks passed."""
+        from ..core.models import GoodsReceipt
+
+        results: dict[str, bool] = {}
+        notes: list[str] = []
+        if from_name.get("delivery_note"):
+            results["number_matches_file_name"] = ocr.document_number.strip() == from_name["delivery_note"]
+        pos = {p.po_number for p in all_rows(PurchaseOrder)}
+        if ocr.po_numbers:
+            results["po_known"] = all(p in pos for p in ocr.po_numbers)
+        resolved = []
+        supplier = _supplier_of(rel) or self.resolve_supplier(ocr.supplier_name, rel) or ""
+        for line in ocr.lines:
+            part = line.part_number.strip().upper()
+            if not part.startswith("CMP-"):
+                part = self.resolve_part(supplier, part, line.description, rel) or part
+            resolved.append(part)
+        if ocr.lines:
+            results["parts_known"] = all(p.startswith("CMP-") for p in resolved)
+        receipts = [g for g in all_rows(GoodsReceipt)
+                    if ocr.document_number and g.delivery_note == ocr.document_number.strip()]
+        if receipts and ocr.lines:
+            for line, part in zip(ocr.lines, resolved):
+                booked = sum(g.qty_received or 0 for g in receipts if g.material_id == part)
+                ok = line.quantity is not None and abs(booked - line.quantity) < 0.5
+                results[f"qty_{part}_matches_receipt"] = ok
+                if not ok:
+                    notes.append(f"{part}: paper says {line.quantity}, goods receipt booked {booked}")
+        if ocr.handwritten_notes:
+            notes.append(f"handwritten: {ocr.handwritten_notes}")
+        passed = sum(results.values())
+        return {"results": results, "passed": passed, "total": len(results), "parts": resolved,
+                "confidence": round(passed / len(results), 2) if results else None, "notes": notes,
+                "goods_receipts": [g.gr_number for g in receipts]}
 
     def _store_document(self, rel: str, text: str, *, kind: str, supplier_id: str = "", extra: dict | None = None,
                         published_at=None) -> None:
@@ -458,6 +521,17 @@ class IngestNormalizer(Agent):
                 self._results.append(res)
         self._counts["documents"] += 1
         self._tables.add("documents")
+
+    @staticmethod
+    def _cached(rel: str, sha: str, key: str):
+        """Reuse an earlier Claude result for an unchanged file (no repeat cost on reruns)."""
+        with session() as s:
+            row = s.exec(select(Document).where(Document.path == rel)).first()
+        if row and isinstance(row.extracted, dict) and row.extracted.get("sha256") == sha:
+            value = row.extracted.get(key)
+            if value and not (isinstance(value, str) and value.startswith("pending")):
+                return value
+        return None
 
     # ----------------------------------------------------------- aliases
     def resolve_supplier(self, value: str, source: str) -> Optional[str]:

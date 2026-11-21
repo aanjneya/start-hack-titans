@@ -1,0 +1,65 @@
+It's actually going very, very well fast. And maybe I do this again, a quick raise of hands who of you actually saw those stickers in the new week?
+
+Ah, okay, the last one actually had a little bit more. So, next round, we have to think about something even bigger, I guess. How are we doing this? Well, sometimes crazy, sometimes funny team. You can see some like insights into how we work. For example, very old and fair view, even the firefighters came because, yeah, well, whatever. This is a story for another day. And how are we successful?
+
+Because our customers actually ask. Some insights on some Leo2 sessions or customers just wearing our merch themselves. It's pretty funny when you see those messages in our Slack channel. Yeah, and only a handful of companies, and also personal growth, only a few people are growing at the pace. We are growing at the right now while we always try to make a start. Some insights here. Maybe last year we sponsored exactly this hackathon challenge as well. And then one week later, the whole team flew to K-Town. You are also going to see me, but I have a picture.
+
+So I can tell you this was fucking amazing. But if you then look at a picture like this one here, you might ask yourself, well, aren't you already quite a few people and is it really still worth joining? Yeah, I can make this example of being among the first hundred people at Google, maybe a little bit of a wild shot, but still, I will tell you, if you're an international, if you are among the first hundred employees of a really, really big company, it would still be fucking sick. So, time to join us, talk to us in the hiring hall, or just drink the whole heck of fun. But I guess enough from the hiring propaganda now.
+
+Let's go to why you're actually here. [INAUDIBLE] Gudand is going to present you the challenge now. Everyone, so I think you're also interested in the challenge since you're here.
+
+This next three bars will basically be a startup experience for everyone doing the challenge. That's what we kind of want to convey here. So you have Sunni. Sunni is your first customer. And you as a startup want to help them. This can be different things.
+
+just to get a better understanding of what it all means. We'll also have data for you all available, which will then be made, what I tell you now, but there's the product portfolio of standard edition and the collectors edition for this SUNY company, and they have basically all the parts already packed, but the things to pack and scale it closer to the deadline, and they don't want to mess things up, across the first batch, it was very chaotic.
+
+And what it looks like, roughly, is that a product is assembled of different pieces, a case, a game card, some sleeve, and the collector's edition is even more sophisticated. And all of these pieces come from different suppliers from all over the world, and you kind of have to make sure that everything runs smoothly, can get assembled on time and then also distribute it. You're not like a service for a SUNY. Like you have a startup and SUNY is your first customer, but like obviously you want to scale as a startup so there might be different other customers soon.
+
+So the solution to not be like super strict for the SUNY case, but supply chain in like most companies is like a topic. So I think you can like build something that will work and help for similar cases.
+
+Just more on the business understanding. So how does, how do we put our sketch into the box and how does the brand high-stakes get shipped in the end? So there has to be some business person in SUNY, which is a group that built here by Van Ycklas, who is a beautiful lawyer. And they face a border in an SAP, in there as an AP system, soon as it is an AP system. And the supplier has to check that inventory has to see if they can make a retrieve some parts and an investment is confirmed.
+
+If they have this available and then ship it to you, you have to make sure it gets there. You track the delivery and then receive it. Invest case on time. Assemble everything so then at the end you can sell it to all of the customers and also to the ones pre-ordering that they expected on time of course. And to be honest, like this all sounds straight up, but it's very chaotic. So there is this SAT system where they have orders, but everything else, like in some Excel sheets, PDFs, things also get handled via a email phone or whatever.
+
+And it's a global kind of supply chain.
+
+that things went wrong.
+
+56 suppliers that are also part of the data, so we kind of want to give you this of what the public data looks like. And they are all over the world. They should see through AI, which is something that you might want to consider. And just as a hint, those suppliers, they have emails and you can actually talk to their provider. But 3DM also has real suppliers supply attribute, spam email them, they might be like, don't want to talk to anyone.
+
+So don't talk to them.
+
+There's a lot of different things that can go on in supply chain. So for your AI solution, you might want to focus on one thing, focus on two, try to have everything. It's like really, up to you in there, you want to give a better experience for two and just some examples. So things can go wrong when they are late. When they are stuck at some port, you have deliveries and then they can be delayed for a long time.
+
+Sometimes wrong stuff gets delivered. Something that is super beaten stock is actually not available. And then I think what's also interesting is that there are external kind of behaviors. So something spot bangs, the tsunami, maybe coming up and this is like,
+
+So yeah, you challenge this thing, repeat a startup, so we want to see like an agentic solution that can really decide and like do some sort of actions as we also did agents ourselves. The data will change all, like will change probably, so there will be events and then you can see just like simulating a real kind of company that new orders come in, things may get flagged and so on, we have also examples on that.
+
+And it can be any sort of technology stack, any business model, any AI model, behind the powering it, yeah, that's what we consider in the end. And you will have in the prototype, that's case deployed, doesn't have to be. The pitch takes a demo video, make up to three minutes, and this is then what we will judge in the end.
+
+So we will also make this sort of experience more elusive by giving you the data, like the portal which Sydney will show you in a minute. We as the DO people will be like mimicking the SUNY employees throughout like office hours. So yes, maybe some information that is not part of the data, but that we like sort of know from being at SUNY. So, yeah, you can put like office hours and we want to make this more interactive. And the suppliers, like I mentioned, they have emails that will actually respond to you if you write to them.
+
+So, just an example of what changes could look like. The camera could detect the supplier might change the bank there will be a different reception found in the data, but this will not happen under the hood, you will get like a scene in the deathboard of like kind of what changed and then you kind of are aware of it,
+
+and this is the SUNY team that will be like on site, so with us two will be, therefore the IT, Here we have the senior buyers that I'm all aware of, how the processes look like, and Niklas and Kila who's coming out here, no more about the business perspective. So we have time for you to use, but this will be a good idea. And before we dive into the questions, we will have a quick demonstration of what the platform looks like.
+
+So I am going to submit. Alright.
+
+Um... [inaudible]
+
+Okay, so, um, we will ofcourse provide you a slide form that you can see right here. So, just send the thing into the discord channel and you'll also see the handouts. What you do then is just register your team and you'll see the software on your pages. Um, you right here. I think one important thing
+
+and then you can just add your email right here in this mail center tab and then you will be able to just write that. And, yeah, of 'course
+
+which would, so everyone would be able to talk to every person at least once throughout the weekend. And yeah, I think that's basically it. So if you already have some points that you want to talk about, you can also add them here. So we can already know what you want to get from us. But you can also, of course, bring any other points that are still open to you. And I think that's it for now. If you have any questions, please ask them.
+
+[ Inaudible ]
+
+So you're not going to be measured by if you can actually chip everything by Sunday, but your solution should be the broad path kind of case.
+
+Yes. You said that we were supposed to hand in a pitch tag, so we also get to present the pitch tag, or do you just keep reading it? So I think on Sunday there will be like three minute pitches above the ground. Where you show your pitch there and probably a quick live demo. And then we'll have two minutes of two days. And that's it.
+
+And so the main idea is not that we do talk to all these ancient switch simulators simulators of diamonds. And I wish that our ancients would talk to them and pick the existing product.
+
+Any one person?
+
+Dan, thank you all for being here. We're excited to see you like any progress. (gavel banging)

@@ -248,3 +248,19 @@ def test_ai_column_mapping_is_validated():
     ok, _ = validate_mapping(TARGETS["packout"], {"date": "pack_date", "units": "units_packed", "p": "product_id"},
                              [{"date": "2026-11-02", "units": "400", "p": "FG-GH6-CE"}])
     assert ok
+
+
+def test_book_stock_sheet_with_date_in_title(tmp_path):
+    """Drop 21:38: stock_update_*.xlsx has no date column and no batch; the date is in the sheet title."""
+    from backend.core.models import StockLot
+
+    drops = list_drops()
+    if not any("stock_update" in f for d in drops for f in d.added):
+        pytest.skip("drop with stock_update not in history")
+    for _ in drops:
+        system.replay_step()
+    rows = [s for s in all_rows(StockLot) if "stock_update" in s.source]
+    by_part = {s.material_id: s for s in rows}
+    assert by_part["CMP-GAM-003"].quantity == 6000 and str(by_part["CMP-GAM-003"].snapshot_date) == "2026-11-21"
+    assert by_part["FG-GH6-STD"].quantity == 602000  # packed copies sheet = finished-goods stock
+    assert _errors() == []

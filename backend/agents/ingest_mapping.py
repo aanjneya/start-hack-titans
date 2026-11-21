@@ -37,6 +37,7 @@ class Target:
     required: tuple[str, ...]  # must be present to choose this table
     synonyms: dict[str, list[str]]  # field -> normalized header names
     key_includes_source: bool = False  # e.g. shipments: ERP and tracker rows are kept side by side
+    title_date_field: str = ""  # field that may come from a date in the sheet title ("Stock … 2026-11-21")
 
 
 def _syn(**kw: str) -> dict[str, list[str]]:
@@ -64,7 +65,8 @@ TARGETS: dict[str, Target] = {
         qty_received="received|qty", delivery_note="delivery note|dn", inspector="", remark="comment|note")),
     "stock": Target(StockLot, ("material_id", "batch", "snapshot_date"), ("material_id", "quantity", "snapshot_date"), _syn(
         snapshot_date="date|as of", site="plant", material_id="material|part", batch="lot", quantity="qty|stock",
-        uom="unit", safety_stock="", weeks_of_cover="cover", last_count="counted")),
+        uom="unit", safety_stock="", weeks_of_cover="cover", last_count="counted"),
+        title_date_field="snapshot_date"),
     "packout": Target(Packout, ("pack_date", "product_id", "line"), ("product_id", "units_packed"), _syn(
         pack_date="date", site="", product_id="product", line="", units_packed="packed|units")),
     "materials": Target(Material, ("component_id",), ("component_id", "description", "drawing_rev"), _syn(
@@ -94,7 +96,7 @@ TARGETS: dict[str, Target] = {
         notes="supplier.notes")),
     "launch_status": Target(LaunchStatus, ("product_id",), ("product_id", "still_to_pack", "rate_per_hour"), _syn(
         product_id="product", edition="name", day_one_demand="day one demand", packed="",
-        still_to_pack="still to pack", rate_per_hour="rate", line_status="")),
+        still_to_pack="still to pack", rate_per_hour="rate", line_status=""), title_date_field="as_of"),
 }
 
 #: Fields whose values are lists of ids inside one cell (split + stored in link tables).
@@ -116,7 +118,7 @@ class Mapping:
     reused: bool = False
 
 
-def _score(headers: list[str], target: Target) -> tuple[float, dict[str, str]]:
+def _score(headers: list[str], target: Target, has_title_date: bool = False) -> tuple[float, dict[str, str]]:
     cols: dict[str, str] = {}
     used: set[str] = set()
     normed = {h: norm_header(h) for h in headers if h}
@@ -125,7 +127,8 @@ def _score(headers: list[str], target: Target) -> tuple[float, dict[str, str]]:
             if h not in cols and fname not in used and n in names:
                 cols[h] = fname
                 used.add(fname)
-    if not all(r in used for r in target.required):
+    satisfied = used | ({target.title_date_field} if has_title_date and target.title_date_field else set())
+    if not all(r in satisfied for r in target.required):
         return 0.0, cols
     return len(cols) / max(len(normed), 1), cols
 
@@ -189,8 +192,9 @@ class LLMMapping(BaseModel):
     columns: list[ColumnPair]  # list (not dict) so both Claude and OpenAI strict schemas accept it
 
 
-def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, delimiter: str = "") -> Mapping:
-    fp = fingerprint(headers)
+def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, delimiter: str = "",
+                has_title_date: bool = False) -> Mapping:
+    fp = fingerprint(headers + (["<title-date>"] if has_title_date else []))
     with session() as s:
         saved = s.exec(select(ColumnMapping).where(ColumnMapping.fingerprint == fp)).first()
     if saved:
@@ -199,7 +203,7 @@ def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, 
 
     best: tuple[float, str, dict] = (0.0, "", {})
     for name, target in TARGETS.items():
-        sc, cols = _score(headers, target)
+        sc, cols = _score(headers, target, has_title_date)
         if sc > best[0]:
             best = (sc, name, cols)
     score, name, cols = best

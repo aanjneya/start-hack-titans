@@ -248,14 +248,19 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
 
     monkeypatch.setattr(risk_signals, "_cached_get_json", fake_reg_json)
     monkeypatch.setattr(risk_signals, "_cached_get_text", fake_reg_text)
-    reg_sigs = RegulationChangeProvider().fetch(countries={"CN", "KR", "US"}, ports=ports, shipments=ships, documents=[], reference_now=now)
-    assert len(reg_sigs) == 2 and all(s.live and s.category == "regulatory_change" for s in reg_sigs)
+    all_countries = {"CN", "KR", "IN", "PL", "DE", "US", "JP"}
+    reg_sigs = RegulationChangeProvider().fetch(countries=all_countries, ports=ports, shipments=ships, documents=[], reference_now=now)
     assert any("federalregister.gov" in s.source_url for s in reg_sigs)
     assert any("eur-lex.europa.eu" in s.source_url for s in reg_sigs)
+    assert all(s.live and s.category == "regulatory_change" for s in reg_sigs)
 
+    # Offline MOCK_MODE covers EVERY supplier country + any unseen future country (e.g. JP)
     monkeypatch.setenv("MOCK_MODE", "true")
     config.reset_settings()
     clear_cache()
+    mock_reg = RegulationChangeProvider().fetch(countries=all_countries, ports=ports, shipments=ships, documents=[], reference_now=now)
+    covered = {c for s in mock_reg for c in s.countries}
+    assert all_countries <= covered
 
 
 # ---------------------------------------------------------------------------

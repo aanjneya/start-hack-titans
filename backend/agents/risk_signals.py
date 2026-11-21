@@ -670,7 +670,7 @@ _COUNTRY_REGULATORS: dict[str, tuple[str, str]] = {
     "CN": ("China", 'MOFCOM OR "Ministry of Commerce" OR "export control" OR "export licence" OR "customs"'),
     "KR": ("South Korea", 'MOTIE OR "export control" OR "trade regulation" OR "customs tariff" OR "Section 301"'),
     "IN": ("India", 'DGFT OR "Directorate General of Foreign Trade" OR "export restriction" OR "customs duty" OR "anti-dumping"'),
-    "PL": ("Poland", '"customs regulation" OR "border control" OR "export restriction" OR "EU tariff" OR "freight regulation"'),
+    "PL": ("Poland", '"customs regulation" OR "customs tariff" OR "export control" OR "EU packaging" OR "freight regulation"'),
     "DE": ("Germany", 'BAFA OR "export control" OR "customs regulation" OR "USK" OR "packaging regulation"'),
     "US": ("United States", 'BIS OR USTR OR "Section 301" OR "export control" OR "tariff rule"'),
     "JP": ("Japan", 'METI OR "export control" OR "trade regulation" OR "customs tariff"'),

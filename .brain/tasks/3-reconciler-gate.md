@@ -17,6 +17,7 @@ It looks across the clean database and finds what doesn't add up: two sources th
 - **Gives:** issues → **Chaser** (missing info), **Launch Planner** (copies at risk), human review (bank details, big quantity jumps). Disagreements are written to the `conflicts` table.
 
 ## Tasks (each check = one task)
+- [ ] **T3.0** Report every check result as a Finding (`.brain/DATA_FORMAT.md`): one-line summary, reason, impact (copies/hours from the data), suggested actions, evidence.
 - [ ] **T3.1** ERP shipment list vs logistics tracker: different status or ETA, and shipments missing from the tracker (11 today, incl. all last-minute rush ones).
 - [ ] **T3.2** Silent feeds: shipments whose "last updated" stopped moving for many hours (silence is a signal, per the brief).
 - [ ] **T3.3** Order vs supplier confirmation: different quantity, date or part revision.

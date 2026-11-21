@@ -8,7 +8,7 @@ from sqlmodel import select
 
 from ..core import events, trace
 from ..core.coordinator import Coordinator, Event
-from ..core.models import Evidence, Issue, utcnow
+from ..core.models import Evidence, Finding, Issue, utcnow
 from ..core import store
 from ..core.store import UpdateResult, session
 
@@ -38,17 +38,27 @@ class Agent:
         trace.log(self.name, action, detail, evidence, data)
 
     def emit(self, event_name: str, payload: dict[str, Any] | None = None) -> None:
-        self.bus.emit(event_name, payload or {}, source=self.name)
+        """Every hand-off carries the same envelope: _meta = {from, run_id, ts, v} + the event's own keys."""
+        body = dict(payload or {})
+        body["_meta"] = {"from": self.name, "run_id": trace.current_run_id(), "ts": utcnow().isoformat(), "v": 1}
+        self.bus.emit(event_name, body, source=self.name)
 
     def raise_issue(self, *, type: str, kind: str, summary: str, key: str, severity: int = 3,
                     evidence: Iterable[Evidence | dict] = (), **fields: Any) -> Issue:
-        """Create or update an issue (deduped by `key`) and emit issue.raised.
+        """Hand a problem on in the shared FINDING FORMAT v1 (.brain/DATA_FORMAT.md) and emit issue.raised.
 
-        Re-running a check after a new drop updates the same issue instead of duplicating it;
-        a resolved issue that shows up again is marked 'reopened'.
+        Fields (all validated by models.Finding): reason, subject_type/subject_id, part_id, supplier_id,
+        shipment_id, po_number, product_id, impact={copies_at_risk, hours_buffer, due_by, cost_eur, ...},
+        suggested_actions=[{type, label, target, owner, cost_eur, copies_gained}], confidence (0..1).
+        Deduped by `key`: re-running a check updates the same finding; a resolved one that comes back is reopened.
         """
+        f = Finding(type=type, kind=kind, summary=summary, severity=severity,
+                    evidence=[e if isinstance(e, Evidence) else Evidence(**{"path": "", **dict(e)})
+                              for e in evidence], **fields)
+        fields = {k: v for k, v in f.model_dump(mode="json").items()
+                  if k not in {"type", "kind", "summary", "severity", "evidence"}}
         fingerprint = hashlib.sha1(f"{type}|{key}".encode()).hexdigest()[:16]
-        ev = [e.model_dump() if isinstance(e, Evidence) else dict(e) for e in evidence]
+        ev = [e.model_dump() for e in f.evidence]
         with session() as s:
             issue = s.exec(select(Issue).where(Issue.fingerprint == fingerprint)).first()
             if issue is None:

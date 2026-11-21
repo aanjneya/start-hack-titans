@@ -8,13 +8,13 @@
 
 | # | Agent | What it does in one line | Tasks | Owner |
 |---|---|---|---|---|
-| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 9 | ✅ @daksh (done) |
+| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 10 | ✅ @daksh (done) |
 | 1 | [Watcher](1-watcher.md) | Notices every new or changed file on the Soony portal (already running every 15 min) | 5 | ✅ @daksh |
 | 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 19 | ✅ @daksh |
-| 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 11 | @aanjneya |
-| 4 | [Chaser](4-chaser.md) | Politely emails suppliers and carriers for missing answers, in their language, and reads the replies | 6 | @tim |
-| 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 10 | @jivi |
-| 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 6 | @aanjneya |
+| 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 12 | @aanjneya |
+| 4 | [Chaser](4-chaser.md) | Politely emails suppliers and carriers for missing answers, in their language, and reads the replies | 7 | @tim |
+| 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 11 | @jivi |
+| 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 7 | @aanjneya |
 | 7 | [Frontend (later)](7-frontend-later.md) | The one screen: what can stop a line, decision cards, risk table, AI trace drawer | 7 | phase 2 |
 
 ## Getting started (shared backend is done)
@@ -48,6 +48,7 @@ The portal data changes all weekend (new files, replaced files, renamed columns,
 Tasks for this: **T0.8, T1.5, T2.10, T3.10, T5.9** below in the agent files.
 
 ## Rules for everyone (from AGENTS.md / PLAN.md)
+- **All agents report problems in ONE format: the Finding (`.brain/DATA_FORMAT.md`)**: so the Planner (Jivi) and the human can decide on it.
 - Never type numbers from the data into the code: read them from the files (judges check "is anything hardcoded?").
 - Every result keeps a link to the file it came from.
 - Test with the real drops so far: baseline 14:15, the 16:08 drop (part revisions, launch status) and the 17:23 drop (magnet export ban). See `.brain/DATA_CHANGES.md`.

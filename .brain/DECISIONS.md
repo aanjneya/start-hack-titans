@@ -68,3 +68,8 @@
 - **Context**: Agents 1 and 2 feed everyone else.
 - **Decision**: Order confirmations are parsed by rules (one template across KO/ZH/PL/EN suppliers; 202/202 text PDFs), Claude only for the rest (live mode). Column mappings are learned once per header fingerprint (`column_mappings`). Supplier names, vendor numbers and supplier part numbers are mapped through `aliases` (PackRight's PR-CC-0312 → CMP-GAM-003 etc.). Survivorship: same file replaced → overwrite; other source → newest wins + conflict kept; a source that already lost can't flip a value back on reprocessing. Shipment statuses mapped to one list (`in transit` → `in_transit`).
 - **Trade-offs**: Scans and free-text documents need live Claude for full reading; offline they carry regex facts (POs, parts, dates, quantities, IBANs, revisions, risk signals).
+
+### [20:15] One Finding format for all agents (by daksh, asked by Jivi for the Planner)
+- **Context**: The Planner and the human decide on what the other agents report, so it must arrive in one shape.
+- **Decision**: FINDING FORMAT v1 (`.brain/DATA_FORMAT.md`): type, kind, severity 1–5, one-line summary, reason, subject + our IDs, impact {copies_at_risk, hours_buffer, due_by, cost_eur}, suggested_actions [{type, label, target, owner, cost_eur, copies_gained}], evidence, confidence. Enforced by `Agent.raise_issue` (invalid findings are rejected). Risk Rater also raises findings for grade ≥ 5. All events carry `_meta {from, run_id, ts, v}`.
+- **Trade-offs**: Agents may only add fields (bump the version) – no private formats.

@@ -16,6 +16,7 @@ The CPO memo: "One page per day on what can stop a line. Not forty dashboards." 
 - **Gives:** the pack forecast + decision cards → human (and later the frontend); after approval, actions → **Chaser** (emails) and the database.
 
 ## Tasks
+- [ ] **T5.0** Input = Findings (`.brain/DATA_FORMAT.md`, `kind=copies_at_risk`, plus risk grades); output = DecisionCards. Use the finding's `impact` and `suggested_actions` as the starting options.
 - [ ] **T5.1** Forecast packing per edition: copies left, packing rate, shift hours left (Sat 06–22, Sun 06–20), read from the files.
 - [ ] **T5.2** Turn copies into parts needed (BOM: e.g. 4 magnets per Collector's box) and compare with usable stock + shipments arriving in time.
 - [ ] **T5.3** Apply the priority rules from the CPO memo: Collector's first, nothing packed without a quality release.

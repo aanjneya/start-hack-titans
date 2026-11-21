@@ -44,11 +44,95 @@ class DecisionOption(BaseModel):
 
 
 class IssueKind:
-    """Where the Reconciler routes an issue."""
+    """Where a finding is routed."""
 
     MISSING_INFO = "missing_info"  # -> Chaser
     COPIES_AT_RISK = "copies_at_risk"  # -> Launch Planner
     HUMAN_CHECK = "human_check"  # -> a person (bank details, big jumps, unmappable data)
+    ALL = (MISSING_INFO, COPIES_AT_RISK, HUMAN_CHECK)
+
+
+# ---------------------------------------------------------------------------
+# FINDING FORMAT v1 (team decision Sat 20:15): the ONE shape every agent uses to hand a problem on.
+# The Launch Planner (and the human) decide based on findings. Spec: .brain/DATA_FORMAT.md
+# ---------------------------------------------------------------------------
+FINDING_SCHEMA_VERSION = 1
+
+
+class Severity:
+    INFO = 1  # good to know
+    LOW = 2  # watch it
+    MEDIUM = 3  # needs an answer today
+    HIGH = 4  # copies at risk
+    LINE_STOP = 5  # a line stops / launch at risk now
+
+
+ACTION_TYPES = ("email", "expedite", "second_source", "safety_stock", "reallocate", "use_old_revision",
+                "block_stock", "human_review", "other")
+SUBJECT_TYPES = ("part", "supplier", "shipment", "po", "product", "document", "drop")
+
+
+class Impact(BaseModel):
+    """What it means for the launch. Numbers must come from the data (or stay None)."""
+
+    product_id: str = ""  # e.g. FG-GH6-CE
+    copies_at_risk: Optional[int] = None
+    hours_buffer: Optional[float] = None  # hours until the line would stop
+    due_by: Optional[str] = None  # ISO datetime: decide/act before this
+    cost_eur: Optional[float] = None  # cost of the problem if nothing is done
+    note: str = ""
+
+
+class SuggestedAction(BaseModel):
+    type: str  # one of ACTION_TYPES
+    label: str  # plain words, e.g. "Ask Karton Nowak to confirm rev C for SHP-2026-04313"
+    target: str = ""  # supplier/part/shipment the action is about
+    owner: str = ""  # chaser | planner | human
+    cost_eur: Optional[float] = None
+    copies_gained: Optional[int] = None
+
+    def model_post_init(self, _ctx) -> None:
+        if self.type not in ACTION_TYPES:
+            raise ValueError(f"action type must be one of {ACTION_TYPES}, not {self.type!r}")
+
+
+class Finding(BaseModel):
+    """Validated input for Agent.raise_issue (stored in the `issues` table)."""
+
+    type: str  # what kind of problem, snake_case, e.g. rev_blocked, tracker_mismatch, single_source
+    kind: str  # routing, one of IssueKind.ALL
+    severity: int  # Severity 1..5
+    summary: str  # ONE line headline (<= 160 chars)
+    reason: str = ""  # why it matters, 1-3 sentences
+    subject_type: str = ""  # one of SUBJECT_TYPES (inferred if empty)
+    subject_id: str = ""
+    part_id: str = ""
+    supplier_id: str = ""
+    shipment_id: str = ""
+    po_number: str = ""
+    product_id: str = ""
+    impact: Impact = Impact()
+    suggested_actions: list[SuggestedAction] = []
+    evidence: list[Evidence] = []
+    confidence: Optional[float] = None  # 0..1
+
+    def model_post_init(self, _ctx) -> None:
+        if self.kind not in IssueKind.ALL:
+            raise ValueError(f"kind must be one of {IssueKind.ALL}, not {self.kind!r}")
+        if not 1 <= self.severity <= 5:
+            raise ValueError("severity must be 1..5 (see Severity)")
+        if not self.summary or len(self.summary) > 160:
+            raise ValueError("summary must be one line of at most 160 characters")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ValueError("confidence must be between 0 and 1")
+        if not self.subject_type:
+            for st, val in (("part", self.part_id), ("shipment", self.shipment_id), ("po", self.po_number),
+                            ("supplier", self.supplier_id), ("product", self.product_id)):
+                if val:
+                    self.subject_type, self.subject_id = st, self.subject_id or val
+                    break
+        if self.subject_type and self.subject_type not in SUBJECT_TYPES:
+            raise ValueError(f"subject_type must be one of {SUBJECT_TYPES}")
 
 
 class Provenance(SQLModel):
@@ -332,12 +416,20 @@ class Issue(SQLModel, table=True):
     fingerprint: str = Field(index=True)  # stable key so re-running checks updates, not duplicates
     type: str = Field(index=True)  # e.g. tracker_mismatch, stale_feed, rev_blocked, single_source
     kind: str = Field(default=IssueKind.HUMAN_CHECK, index=True)  # routing: see IssueKind
-    severity: int = 3  # 1 info .. 5 line-stopper
-    summary: str = ""
+    severity: int = 3  # Severity 1 info .. 5 line-stopper
+    summary: str = ""  # one-line headline
+    reason: str = ""  # why it matters
+    subject_type: str = ""  # part|supplier|shipment|po|product|document|drop
+    subject_id: str = ""
     part_id: str = ""
     supplier_id: str = ""
     shipment_id: str = ""
     po_number: str = ""
+    product_id: str = ""
+    impact: dict = _json(dict)  # Impact
+    suggested_actions: list = _json(list)  # list[SuggestedAction]
+    confidence: Optional[float] = None
+    schema_version: int = FINDING_SCHEMA_VERSION
     evidence: list = _json(list)  # list[Evidence dict]
     status: str = Field(default="open", index=True)  # open|routed|asked|resolved|reopened
     raised_by: str = ""

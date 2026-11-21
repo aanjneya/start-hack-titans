@@ -38,6 +38,30 @@ export interface Evidence {
 }
 
 export type IssueKind = 'missing_info' | 'copies_at_risk' | 'human_check';
+
+/** FINDING FORMAT v1 (.brain/DATA_FORMAT.md): the one shape every agent uses to hand a problem on. */
+export type SubjectType = 'part' | 'supplier' | 'shipment' | 'po' | 'product' | 'document' | 'drop';
+export type ActionType =
+  | 'email' | 'expedite' | 'second_source' | 'safety_stock' | 'reallocate'
+  | 'use_old_revision' | 'block_stock' | 'human_review' | 'other';
+
+export interface Impact {
+  product_id: string;
+  copies_at_risk: number | null;
+  hours_buffer: number | null;
+  due_by: string | null; // ISO datetime
+  cost_eur: number | null;
+  note: string;
+}
+
+export interface SuggestedAction {
+  type: ActionType;
+  label: string;
+  target: string;
+  owner: 'chaser' | 'planner' | 'human' | '';
+  cost_eur: number | null;
+  copies_gained: number | null;
+}
 export type IssueStatus = 'open' | 'routed' | 'asked' | 'resolved' | 'reopened';
 
 export interface Issue {
@@ -45,12 +69,20 @@ export interface Issue {
   fingerprint: string;
   type: string; // e.g. tracker_mismatch, stale_feed, rev_blocked, single_source
   kind: IssueKind;
-  severity: number; // 1 info .. 5 line-stopper
-  summary: string;
+  severity: number; // 1 info · 2 watch · 3 answer today · 4 copies at risk · 5 line stops
+  summary: string; // one-line headline for a manager
+  reason: string;
+  subject_type: SubjectType | '';
+  subject_id: string;
   part_id: string;
   supplier_id: string;
   shipment_id: string;
   po_number: string;
+  product_id: string;
+  impact: Impact | Record<string, never>;
+  suggested_actions: SuggestedAction[];
+  confidence: number | null;
+  schema_version: number;
   evidence: Evidence[];
   status: IssueStatus;
   raised_by: string;

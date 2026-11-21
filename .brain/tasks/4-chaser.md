@@ -16,6 +16,7 @@ Standard sleeve CMP-GAM-004 must now be rev C. Karton Nowak (Poland) has a machi
 - **Gives:** outgoing emails (outbox) → suppliers; replies → **Ingest** (as new facts) and the agent log.
 
 ## Tasks
+- [ ] **T4.0** Work from `missing_info` Findings (`.brain/DATA_FORMAT.md`): use their ids, summary and `suggested_actions` (type `email`); set the finding's status to `asked` when the email is out.
 - [ ] **T4.1** Write the email from an issue: the supplier's contact and language come from their profile; include order, shipment and part numbers.
 - [ ] **T4.2** Anti-spam rule: max one open question per supplier, and a minimum gap between emails.
 - [ ] **T4.3** Preview mode: a human can see and approve the first email to each supplier (in the demo it can auto-send).

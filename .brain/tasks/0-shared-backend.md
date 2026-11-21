@@ -23,6 +23,7 @@ The Reconciler finds a problem and hands it to the Planner. The base delivers it
 - [x] **T0.5** Make every agent action write a row to `agent_log` automatically.
 - [x] **T0.6** Write one shared Claude helper with a demo-mode switch (`MOCK_MODE=true` gives fixed answers and works with no internet).
 - [x] **T0.7** Expose the API the frontend will use later, and write the same routes into `API_CONTRACT.ts`.
+- [x] **T0.10** One Finding format v1 for all hand-offs (`.brain/DATA_FORMAT.md`, `models.Finding/Impact/SuggestedAction`, validated in `raise_issue`; event envelope `_meta`).
 - [x] **T0.9** Updatable source of truth (team decision Sat 19:30): `store.update_row` / `Agent.update_row` with change log `field_changes`, `inbox` table, `system.store_reply` / `receive_reply`, `Agent.emit_truth_updated` (no-op without changes), `GET /api/changes`, `GET|POST /api/inbox`, loop test `tests/test_update_loop.py`.
 - [x] **T0.8** Live data: when the Watcher reports a new drop, rerun the whole loop automatically, and add a "replay all drops in order" test command that every agent uses.
 

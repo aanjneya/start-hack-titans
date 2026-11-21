@@ -33,6 +33,9 @@ def bus() -> Coordinator:
         init_db()
         _bus = Coordinator()
         _agents = [cls(_bus) for cls in REGISTRY]
+        if get_settings().mock_mode:
+            from .agents.planner_delivery import mock_outbox
+            _bus.subscribe(events.EMAIL_REQUESTED, "chaser", mock_outbox)
     return _bus
 
 
@@ -106,14 +109,16 @@ def emit(event_name: str, payload: dict, source: str = "api") -> dict:
 
 
 def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, outbox_id: int | None = None,
-                from_email: str = "", subject: str = "", language: str = "", source: str = "chaser"):
+                from_email: str = "", subject: str = "", language: str = "", source: str = "chaser", delivery=None, quote=None):
     """Save a supplier/carrier reply in the inbox (no event). Inside an agent, follow with
     self.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": ..., "issue_id": ...})."""
     from .core.models import InboxMessage
 
     with session() as s:
         msg = InboxMessage(supplier_id=supplier_id, body=body, issue_id=issue_id, outbox_id=outbox_id,
-                           from_email=from_email, subject=subject, language=language)
+                           from_email=from_email, subject=subject, language=language,
+                           result={k: value.model_dump(mode="json") for k, value in
+                                   (("delivery", delivery), ("quote", quote)) if value is not None})
         s.add(msg)
         s.commit()
         s.refresh(msg)
@@ -122,12 +127,12 @@ def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, out
     return msg
 
 
-def receive_reply(*, source: str = "api", **fields) -> dict:
+def receive_reply(*, source: str = "api", delivery=None, quote=None, **fields) -> dict:
     """Outside the agents (API, demo, tests): store the reply and run the loop
     (inbox -> Ingest applies it -> truth.updated -> Reconciler re-checks)."""
     with _lock:
         run_id = trace.new_run_id()
-        msg = store_reply(source=source, **fields)
+        msg = store_reply(source=source, delivery=delivery, quote=quote, **fields)
         b = bus()
         b.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": msg.supplier_id,
                                        "issue_id": msg.issue_id}, source=source)

@@ -17,18 +17,18 @@ It looks across the clean database and finds what doesn't add up: two sources th
 - **Gives:** issues → **Chaser** (missing info), **Launch Planner** (copies at risk), human review (bank details, big quantity jumps). Disagreements are written to the `conflicts` table.
 
 ## Tasks (each check = one task)
-- [ ] **T3.0** Report every check result as a Finding (`.brain/DATA_FORMAT.md`): one-line summary, reason, impact (copies/hours from the data), suggested actions, evidence.
-- [ ] **T3.1** ERP shipment list vs logistics tracker: different status or ETA, and shipments missing from the tracker (11 today, incl. all last-minute rush ones).
-- [ ] **T3.2** Silent feeds: shipments whose "last updated" stopped moving for many hours (silence is a signal, per the brief).
-- [ ] **T3.3** Order vs supplier confirmation: different quantity, date or part revision.
-- [ ] **T3.4** Revision gate: block stock and shipments with a revision that a change forbids (ECN-2026-118); allow use-up where permitted (ECN-2026-119).
-- [ ] **T3.5** Stuck approvals and expired supplier approval: SUP-0018 Pune Diecast orders "awaiting approval", conditional release ended 30 Oct.
-- [ ] **T3.6** Single source + bad news: CMP-MAG-005 lid magnets (4 per Collector's box) have stock 0, no order, one supplier, and a China export ban (17:23 drop).
-- [ ] **T3.7** Bank details changed vs the contract → always to a human (possible invoice fraud, a known trap in the brief).
-- [ ] **T3.8** Quantity jumps vs history (e.g. 690 → 790) → human check, never accepted automatically.
-- [ ] **T3.9** Use the `part_journey` view to find empty steps (ordered but never confirmed or shipped) and route each issue to the right agent.
-- [ ] **T3.11** After a supplier reply, `truth.updated` lists the exact rows/fields that changed (`changes`, `issue_ids`): re-check those and resolve the issue if the answer fixed it. Never write supply-chain data yourself (Ingest does).
-- [ ] **T3.10** Live data: rerun every check after each drop; close issues the new data solves, reopen ones that come back.
+- [x] **T3.0** Report every check result as a Finding (`.brain/DATA_FORMAT.md`): one-line summary, reason, impact (copies/hours from the data), suggested actions, evidence. — @aanjneya
+- [x] **T3.1** ERP shipment list vs logistics tracker: different status or ETA, and shipments missing from the tracker (11 today, incl. all last-minute rush ones). — @aanjneya
+- [x] **T3.2** Silent feeds: shipments whose "last updated" stopped moving for many hours (silence is a signal, per the brief). — @aanjneya
+- [x] **T3.3** Order vs supplier confirmation: different quantity, date or part revision. — @aanjneya
+- [x] **T3.4** Revision gate: block stock and shipments with a revision that a change forbids (ECN-2026-118); allow use-up where permitted (ECN-2026-119). — @aanjneya
+- [x] **T3.5** Stuck approvals and expired supplier approval: SUP-0018 Pune Diecast orders "awaiting approval", conditional release ended 30 Oct. — @aanjneya
+- [x] **T3.6** Single source + bad news: CMP-MAG-005 lid magnets (4 per Collector's box) have stock 0, no order, one supplier, and a China export ban (17:23 drop). — @aanjneya
+- [x] **T3.7** Bank details changed vs the contract → always to a human (possible invoice fraud, a known trap in the brief). — @aanjneya
+- [x] **T3.8** Quantity jumps vs history (e.g. 690 → 790) → human check, never accepted automatically. — @aanjneya
+- [x] **T3.9** Use the `part_journey` view to find empty steps (ordered but never confirmed or shipped) and route each issue to the right agent. — @aanjneya
+- [x] **T3.11** After a supplier reply, `truth.updated` lists the exact rows/fields that changed (`changes`, `issue_ids`): re-check those and resolve the issue if the answer fixed it. Never write supply-chain data yourself (Ingest does). — @aanjneya
+- [x] **T3.10** Live data: rerun every check after each drop; close issues the new data solves, reopen ones that come back. — @aanjneya
 
 ## When it's done
 - On the real drops it raises: the 04276 conflict, the CMP-GAM-004 rev B block, the CMP-GAM-010 / SUP-0018 problem and the CMP-MAG-005 magnet risk, **with no code change between drops**.

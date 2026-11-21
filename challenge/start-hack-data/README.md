@@ -11,7 +11,7 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T19-23 (Europe/Berlin)
+### Drop check 2026-11-21T19-39 (Europe/Berlin)
 Portal now: 318 files, 47.4 MB
 No changes since last check.
 
@@ -19,6 +19,7 @@ No changes since last check.
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 19-39 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T19-39.md) |
 | 2026-11-21 19-23 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T19-23.md) |
 | 2026-11-21 19-08 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T19-08.md) |
 | 2026-11-21 18-53 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T18-53.md) |

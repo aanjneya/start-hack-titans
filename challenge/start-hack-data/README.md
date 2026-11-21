@@ -7,11 +7,11 @@ Every ~15 minutes the agent lists all files on the Soony supplier portal (`/api/
 downloads only what was added or changed, mirrors it into [`data/`](data/), writes a diff report to
 [`reports/`](reports/) and commits it here. **Nothing is ever lost:** before a changed or removed file is
 updated in `data/`, its previous copy is saved to [`versions/<check>/`](versions/), and git history keeps every version too.
-Team summary: [`.brain/DATA_CHANGES.md`](../.brain/DATA_CHANGES.md).
+Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T14-51 (Europe/Berlin)
+### Drop check 2026-11-21T15-02 (Europe/Berlin)
 Portal now: 308 files, 47.2 MB
 No changes since last check.
 
@@ -19,6 +19,7 @@ No changes since last check.
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 15-02 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T15-02.md) |
 | 2026-11-21 14-51 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T14-51.md) |
 | 2026-11-21 14-36 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T14-36.md) |
 | 2026-11-21 14-32 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T14-32.md) |

@@ -38,3 +38,8 @@
 - **Context**: PLAN.md only said "canonical tables with provenance"; all four P0 slices need one concrete schema, and the team worried the end-to-end chain (order → packed) wasn't covered.
 - **Decision**: New PLAN.md §3b: one table per chain step (PO → confirmation → shipment → receipt → stock → packout) + `conflicts` + `agent_log`, never overwrite, `part_journey` SQL view. Second UI tab "Shipments & suppliers" reads that view. Schema is the first P0 step.
 - **Trade-offs**: Second tab is behind the one-page main view (CPO memo still holds); chain ends at "packed Sun 20:00", no post-Hamburg distribution.
+
+### [18:05] Stack + agents-first build list (by daksh)
+- **Context**: Team wants to build all agents + backend first, then the frontend, and pick tasks themselves instead of being assigned.
+- **Decision**: Stack = Python 3.12 / FastAPI / SQLModel on SQLite (Tim's §3b schema) + Claude API for agents; Next.js + TS frontend in phase 2. Work is listed per agent in `.brain/tasks/` (README overview + one plain-language file per agent with numbered tasks), all unclaimed.
+- **Trade-offs**: Two languages (Python agents, TS UI) means the API contract in `API_CONTRACT.ts` must be kept in sync; owners still to be chosen at the table.

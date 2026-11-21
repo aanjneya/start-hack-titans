@@ -15,7 +15,7 @@
 
 ## Next
 
-- [ ] _Add vertical slices here once we inspect `archive.zip` and lock our wedge_
+- [ ] **Agent build list → [`.brain/tasks/README.md`](tasks/README.md)**: 8 parts (shared backend, Watcher, Ingest & Normalizer, Reconciler & Gate, Chaser, Launch Planner, Risk Rater, frontend later), each with numbered tasks. Claim a task by adding `— @<you>` next to it in that agent's file.
 
 ## Done
 

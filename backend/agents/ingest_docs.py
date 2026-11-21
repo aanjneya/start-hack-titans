@@ -124,8 +124,8 @@ def parse_order_confirmation(text: str) -> Optional[dict]:
 class KeyFact(BaseModel):
     name: str  # e.g. "delivery_date", "quantity_shipped", "price_increase_pct", "bank_iban"
     value: str
-    part_id: str = ""
-    po_number: str = ""
+    part_id: str = ""  # our CMP-… id if the fact is about one of our parts, else ""
+    po_number: str = ""  # 4500… order number if mentioned, else ""
     quote: str  # verbatim text from the document
 
 
@@ -145,11 +145,20 @@ def llm_extract(text: str, kind: str, rel_path: str, agent: str) -> Optional[dic
         "key facts (dates, quantities, prices, part numbers, PO numbers, bank details, delays, conditions). "
         "Every fact needs a verbatim quote copied exactly from the document.\n\n---\n" + text[:20000]
     )
-    result = llm.extract(prompt, DocExtraction, agent=agent, task=f"ingest.doc.{kind}")
+    try:
+        result = llm.extract(prompt, DocExtraction, agent=agent, task=f"ingest.doc.{kind}")
+    except llm.LLMError:
+        return None  # Claude unavailable: keep the regex facts, never fail the file
     if result is None:
         return None
     flat = " ".join(text.split())
-    grounded = [f.model_dump() for f in result.facts if f.quote and " ".join(f.quote.split()) in flat]
+    grounded = []
+    for f in result.facts:
+        if f.quote and " ".join(f.quote.split()) in flat:
+            fact = f.model_dump()
+            fact["part_id"] = f.part_id if PART_RE.fullmatch(f.part_id or "") else ""
+            fact["po_number"] = f.po_number if PO_RE.fullmatch(f.po_number or "") else ""
+            grounded.append(fact)
     return {"title_en": result.title_en, "summary_en": result.summary_en, "facts": grounded,
             "dropped_ungrounded": len(result.facts) - len(grounded)}
 
@@ -176,16 +185,22 @@ def language(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Scans (photos of delivery notes, packing lists, image-only PDFs): Claude vision OCR
 # ---------------------------------------------------------------------------
+OCR_VERSION = 2  # bump when the OCR prompt/schema changes -> cached scans are read again once
+
+
 class ScanLine(BaseModel):
     part_number: str  # exactly as printed (our CMP-… or the supplier's own number)
     description: str = ""
-    quantity: Optional[float] = None  # plain number, no thousands separators
+    quantity_as_printed: str = ""  # character for character, e.g. "125.000" (we parse it, locale-aware)
+    quantity_corrected_by_hand: str = ""  # if someone crossed out/overwrote the quantity by hand: the new value
+    quantity: Optional[float] = None  # filled by our parser (hand correction wins over the printed value)
+    printed_quantity: Optional[float] = None  # filled by our parser from quantity_as_printed
     unit: str = ""
     packages: Optional[float] = None
 
 
 class ScanExtraction(BaseModel):
-    document_type: str  # delivery_note | packing_list | inspection_report | other
+    document_type: str  # delivery_note | packing_list | inspection_report | other (normalized by our code)
     document_number: str = ""
     document_date: str = ""  # YYYY-MM-DD
     supplier_name: str = ""
@@ -193,7 +208,7 @@ class ScanExtraction(BaseModel):
     lines: list[ScanLine] = []
     carrier_reference: str = ""
     remarks: str = ""  # printed remarks field, translated to English
-    handwritten_notes: str = ""  # any handwriting except the signature (e.g. "2 cartons damaged"), in English
+    handwritten_notes: str = ""  # handwriting that CHANGES meaning (corrections, damage, shortage), in English
     received_by: str = ""
     language: str = ""  # ISO code of the printed document
     summary_en: str = ""  # one English sentence
@@ -203,13 +218,36 @@ SCAN_PROMPT = (
     "This is a scanned document received at a distribution centre (delivery note, packing list or similar). "
     "It may be Polish, Korean, Chinese, German or English. Transcribe exactly what is printed: document type, "
     "number, date (as YYYY-MM-DD), supplier, purchase order numbers, every line (part number exactly as printed, "
-    "description, quantity as a plain number without thousands separators, unit, packages), carrier reference, "
-    "the remarks field and ANY handwritten notes other than the signature (translate both to English), who "
-    "received it, and a one-sentence English summary. Leave a field empty if it is not on the document; never guess."
+    "description, quantity_as_printed copied character for character including dots/commas/spaces, e.g. '125.000' "
+    "or '48,000', and if a quantity was crossed out or overwritten by hand, the handwritten value in "
+    "quantity_corrected_by_hand; unit, packages), carrier reference, the printed remarks field (English), "
+    "handwritten_notes ONLY for handwriting that changes the meaning (corrections, damage, shortage, refusal; "
+    "NOT received-stamps, dates or signatures), who received it, and a one-sentence English summary. "
+    "Leave a field empty if it is not on the document; never guess."
 )
 
 
+_DOC_TYPES = [("delivery_note", r"deliver|lieferschein|\bwz\b|wydani|dostaw|送货|납품|출하|\bdn\b"),
+              ("packing_list", r"packing|packliste|装箱"), ("inspection_report", r"inspect|prüf|検査|검사")]
+
+
+def normalize_scan(r: ScanExtraction) -> ScanExtraction:
+    """Deterministic clean-up after the AI: document type to our list, quantities parsed by OUR parser."""
+    low = (r.document_type or "").lower()
+    r.document_type = next((k for k, rx in _DOC_TYPES if re.search(rx, low)), "other")
+    for line in r.lines:
+        printed = parse_number(line.quantity_as_printed) if line.quantity_as_printed else None
+        corrected = parse_number(line.quantity_corrected_by_hand) if line.quantity_corrected_by_hand else None
+        line.printed_quantity = printed if printed is not None else line.quantity
+        line.quantity = corrected if corrected is not None else line.printed_quantity
+    if re.fullmatch(r"\s*(none|n/?a|-|no|nothing)[^a-z]*.*", (r.handwritten_notes or "").lower()) or \
+            re.search(r"only the signature|none other", (r.handwritten_notes or "").lower()):
+        r.handwritten_notes = ""
+    return r
+
+
 def ocr_scan(path, rel_path: str, agent: str) -> Optional[ScanExtraction]:
-    """Claude vision on one scan (live mode). MOCK mode -> None unless a mock is registered."""
-    return llm.extract(f"{SCAN_PROMPT}\nFile: {rel_path}", ScanExtraction, agent=agent, task="ingest.scan_ocr",
-                       files=[path])
+    """Vision OCR on one scan (live mode; Claude or OpenAI). MOCK mode -> None unless a mock is registered."""
+    r = llm.extract(f"{SCAN_PROMPT}\nFile: {rel_path}", ScanExtraction, agent=agent, task="ingest.scan_ocr",
+                    files=[path])
+    return normalize_scan(r) if r else None

@@ -1,0 +1,5 @@
+gr_number,gr_date,po_number,po_line,supplier_id,material_id,plant,qty_ordered,qty_received,delivery_note,inspector,remark
+5000413067,2026-11-21,4500318766,2,SUP-0011,CMP-GAM-002,DC-HAM,5000,5000,DN-261119-197,Schulz P.,
+5000413068,2026-11-21,4500318769,1,SUP-0011,CMP-GAM-002,DC-HAM,5500,5500,DN-261119-197,Schulz P.,
+5000413070,2026-11-21,4500318735,2,SUP-0010,CMP-GAM-001,DC-HAM,48000,28000,DN-261120-726,Meyer K.,"partial delivery, balance per shipping advice"
+5000413071,2026-11-21,4500318775,2,SUP-0028,CMP-GAM-004,DC-HAM,20000,20000,WZ-261120-732,Yilmaz D.,"1 pallet labelled CMP-GAM-004 holds CMP-GAM-005 sleeves (4,000 pcs); booked per delivery note"

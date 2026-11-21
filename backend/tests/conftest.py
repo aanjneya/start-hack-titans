@@ -17,6 +17,9 @@ def fresh_backend(tmp_path, monkeypatch):
     system._bus = None
     system.reset()
     yield
+    from backend.core import llm
+
+    llm.reset_clients()
     store.dispose_engine()
     config.reset_settings()
     os.environ.pop("DB_PATH", None)

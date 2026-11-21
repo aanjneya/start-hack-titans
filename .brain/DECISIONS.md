@@ -77,3 +77,8 @@
 ### Planner decision and reply contract (jivi)
 - Shared contract commit `2f3e24d`. An approved option carries its own signers and PO value. The API rejects stale options and duplicate authorizations. A decision-linked quote changes scenarios. A matched supplier confirmation plus a separately released receiving slot changes the packing forecast.
 - `POST /api/inbox` accepts an outbox ID and either `quote` or `delivery`. Ambiguous or contradictory replies are retained for review. The existing `reply.received` Ingest subscription handles both API and Chaser-originated replies.
+
+### [21:40] Chaser hub additions (by tim)
+- **Context**: The live Chaser needs a mailbox, reply matching and an inbox poll; Jivi's planner hands off via `email.requested`.
+- **Decision** (additive only): `config.py` + `.env.example`: `MAIL_*`, `SMTP_*`, `IMAP_*`, `CHASER_SEND` (true on ONE instance only), `CHASER_MIN_GAP_MIN`, `CHASER_ESCALATE_H`, `CHASER_POLL_MIN`, `CHASER_MAX_STEPS`. `OutboxMessage` + `message_id`, `run_id`, status `escalated` (mirrored in `API_CONTRACT.ts`). `main.py`: `POST /api/chaser/poll` + optional poll timer. `requirements.txt`: `tzdata` (Windows). One mail per `decision_id`; approved decisions skip the open-question limit; in MOCK the Chaser marks mails `sent`, so it takes precedence over the planner's offline adapter.
+- **Trade-offs**: `test_planner.py` now counts decision mails only (`_decision_mails()`), because the live Chaser also mails `missing_info` questions. The Chaser's agent loop needs an Anthropic key; with OpenAI-only it uses the deterministic fallback.

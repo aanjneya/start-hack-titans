@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Shared pre-push safety hook for start-hack-titans.
+# - Blocks force-pushes to main
+# - Blocks pushing secret .env files or >25MB blobs on any branch
+# - Lets pure .brain/ and challenge/ pushes (brain-push.sh) through instantly
+# - Runs ./scripts/verify.sh before pushing code to main
+# - Emergency escape hatch: ALLOW_MAIN_PUSH=1 git push ... (or --no-verify)
+
+set -euo pipefail
+
+ZERO="0000000000000000000000000000000000000000"
+MAX_BYTES=$((25 * 1024 * 1024))
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Skip branch deletions
+  [[ "$local_sha" == "$ZERO" ]] && continue
+
+  # 1. Block force-push to main
+  if [[ "$remote_ref" == "refs/heads/main" && "$remote_sha" != "$ZERO" ]]; then
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      echo "ERROR: Force-pushing to main is forbidden." >&2
+      exit 1
+    fi
+  fi
+
+  # Determine diff range for this push
+  if [[ "$remote_sha" == "$ZERO" ]]; then
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+      RANGE="origin/main..$local_sha"
+    else
+      RANGE="$local_sha"
+    fi
+  else
+    RANGE="$remote_sha..$local_sha"
+  fi
+
+  # 2. Block secret .env files and >25MB blobs on ALL branches
+  if [[ "$RANGE" == *".."* ]]; then
+    CHANGED_FILES="$(git diff --name-only --diff-filter=AM "$RANGE" 2>/dev/null || true)"
+  else
+    CHANGED_FILES="$(git ls-tree -r --name-only "$local_sha" 2>/dev/null || true)"
+  fi
+
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if [[ "$f" =~ (^|/)\.env($|\..+) && "$f" != *".env.example" ]]; then
+      echo "ERROR: Refusing to push secret env file '$f'." >&2
+      exit 1
+    fi
+    blob_size="$(git cat-file -s "${local_sha}:${f}" 2>/dev/null || echo 0)"
+    if (( blob_size > MAX_BYTES )); then
+      echo "ERROR: Refusing to push '$f' ($blob_size bytes > 25MB limit)." >&2
+      exit 1
+    fi
+  done <<< "$CHANGED_FILES"
+
+  # 3. For pushes to main: fast-pass pure .brain/ & challenge/ updates; verify code pushes
+  if [[ "$remote_ref" == "refs/heads/main" ]]; then
+    if [[ "$RANGE" == *".."* ]]; then
+      ALL_MAIN_FILES="$(git diff --name-only "$RANGE" 2>/dev/null || true)"
+    else
+      ALL_MAIN_FILES="$CHANGED_FILES"
+    fi
+
+    NON_BRAIN_FOUND=false
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      if [[ "$f" != .brain/* && "$f" != challenge/* ]]; then
+        NON_BRAIN_FOUND=true
+        break
+      fi
+    done <<< "$ALL_MAIN_FILES"
+
+    if $NON_BRAIN_FOUND; then
+      if [[ "${ALLOW_MAIN_PUSH:-0}" == "1" ]]; then
+        echo "WARN: ALLOW_MAIN_PUSH=1 set — bypassing verification on main." >&2
+      elif [[ -x "$REPO_ROOT/scripts/verify.sh" ]]; then
+        echo "==> Code push to main detected — running scripts/verify.sh..."
+        "$REPO_ROOT/scripts/verify.sh"
+      fi
+    fi
+  fi
+done
+
+exit 0

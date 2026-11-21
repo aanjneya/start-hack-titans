@@ -1,0 +1,13 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/setup.sh*)",
+      "Bash(./scripts/brain-push.sh *)",
+      "Bash(./scripts/verify.sh*)",
+      "Bash(git fetch origin*)",
+      "Bash(git log -1 *)",
+      "Bash(git config --get *)"
+    ]
+  }
+}

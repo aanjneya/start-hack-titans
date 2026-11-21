@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Strip any Co-Authored-By trailers from commit messages automatically.
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+TMP_FILE="$(mktemp "${TMPDIR:-/tmp}/commit-msg-XXXXXX")"
+trap 'rm -f "$TMP_FILE"' EXIT
+
+grep -viE '^[[:space:]]*Co-Authored-By:' "$COMMIT_MSG_FILE" > "$TMP_FILE" || true
+cat "$TMP_FILE" > "$COMMIT_MSG_FILE"

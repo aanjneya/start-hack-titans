@@ -113,7 +113,8 @@ class Chaser(Agent):
             return {"status": "skipped", "reason": "no supplier"}
         ctx = {"issue": issue, "issue_id": issue_id, "supplier_id": supplier_id, "ask": ask,
                "decision_id": decision_id, "request": request or {}, "outbox_id": None, "escalated": False}
-        if llm.is_mock():
+        if llm.is_mock() or llm.provider() != "anthropic":
+            # the tool-use loop needs Claude; with no Anthropic key (or MOCK_MODE) use the deterministic fallback
             return self._fallback(ctx)
         try:
             return self._run_agent(ctx)
@@ -321,7 +322,7 @@ class Chaser(Agent):
             """
             return json.dumps(agent.escalate(ctx, reason))
 
-        client = llm._get_client()
+        client = llm._anthropic_client()
         from zoneinfo import ZoneInfo
 
         now = utcnow().astimezone(ZoneInfo("Europe/Berlin")).strftime("%a %d.%m.%Y %H:%M")

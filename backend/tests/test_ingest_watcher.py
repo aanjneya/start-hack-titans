@@ -156,7 +156,7 @@ def test_scan_ocr_is_cross_checked_against_goods_receipts(monkeypatch):
     assert doc.kind == "delivery_note" and doc.supplier_id == "SUP-0028"
     assert checks["results"]["number_matches_file_name"] and checks["results"]["po_known"]
     assert checks["results"]["qty_CMP-GAM-005_matches_receipt"] is False  # paper 120,000 vs booked 125,000
-    assert any("booked 125000" in n for n in checks["notes"]) and any("missing" in n for n in checks["notes"])
+    assert any("booked 125,000" in n for n in checks["notes"]) and any("missing" in n for n in checks["notes"])
     pending = [d for d in all_rows(Document) if d.kind == "scan"]
     assert pending and all(d.extracted.get("ocr", "").startswith("pending") for d in pending)
 
@@ -199,3 +199,52 @@ def test_ingest_findings_follow_the_finding_format(full):
         assert issue.reason and issue.suggested_actions and issue.subject_type == "drop", t
         assert issue.schema_version == 1
     assert by_type["unresolved_ids"].severity == 3 and len(by_type["unresolved_ids"].suggested_actions) == 2
+
+
+def test_hand_corrected_quantity_and_split_lines(monkeypatch):
+    """Real cases from the live OCR run: WZ-261116-473 (80,000 printed, 8,000 by hand, 80,000 booked) and
+    DN-260821-169 (one part on two lines that add up to the booked receipt)."""
+    from backend.core import llm
+    from backend.core.models import Document
+
+    def fake_ocr(prompt="", files=(), **kw):
+        name = str(files[0])
+        if "WZ-261116-473" in name:
+            return {"document_type": "WZ document", "document_number": "WZ-261116-473",
+                    "supplier_name": "Karton Nowak Sp. z o.o., Poznań", "po_numbers": [],
+                    "lines": [{"part_number": "CMP-GAM-008", "quantity_as_printed": "80.000",
+                               "quantity_corrected_by_hand": "8000"}],
+                    "handwritten_notes": "Quantity corrected by hand to 8000"}
+        if "DN-260821-169" in name:
+            return {"document_type": "delivery note", "document_number": "DN-260821-169",
+                    "supplier_name": "Hwaseong Memory Co., Ltd., Hwaseong",
+                    "lines": [{"part_number": "CMP-GAM-002", "quantity_as_printed": "21,000"},
+                              {"part_number": "CMP-GAM-002", "quantity_as_printed": "22,000"}],
+                    "handwritten_notes": "None other than the signature."}
+        return None
+
+    monkeypatch.setitem(llm._MOCKS, "ingest.scan_ocr", fake_ocr)
+    system.run_full(label="hand corrections")
+    wz = find_rows(Document, path="soony/receiving/DC-HAM/20261118_WZ-261116-473.jpg")[0].extracted
+    assert wz["checks"]["results"]["qty_CMP-GAM-008_matches_receipt"] is False
+    assert any("corrected by hand to 8,000" in n and "booked 80,000" in n for n in wz["checks"]["notes"])
+    dn = find_rows(Document, path="soony/receiving/DC-HAM/20260930_DN-260821-169.jpg")[0].extracted
+    assert dn["checks"]["results"]["qty_CMP-GAM-002_matches_receipt"] is True  # 21k + 22k = 43k booked
+    assert dn["ocr"]["handwritten_notes"] == ""  # "none other than the signature" is noise
+    assert not any("Hwaseong Memory Co., Ltd., Hwaseong" in a.alias for a in all_rows(Alias) if a.kind == "x")
+    assert any(a.method == "contains" for a in all_rows(Alias) if a.kind == "supplier")
+
+
+def test_ai_column_mapping_is_validated():
+    from backend.agents.ingest_mapping import TARGETS, validate_mapping
+
+    system.run_full(label="seed")  # existing ids give the key shapes
+    ok, why = validate_mapping(TARGETS["suppliers"], {"site_id": "supplier_id", "name": "name"},
+                               [{"site_id": "DC-HAM", "name": "Hamburg"}])
+    assert not ok and "look like" in why
+    ok, why = validate_mapping(TARGETS["packout"], {"Day": "pack_date", "Hours": "units_packed", "Lines": "product_id"},
+                               [{"Day": "Saturday", "Hours": "16", "Lines": "L1"}])
+    assert not ok
+    ok, _ = validate_mapping(TARGETS["packout"], {"date": "pack_date", "units": "units_packed", "p": "product_id"},
+                             [{"date": "2026-11-02", "units": "400", "p": "FG-GH6-CE"}])
+    assert ok

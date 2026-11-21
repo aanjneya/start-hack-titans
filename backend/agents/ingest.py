@@ -442,9 +442,11 @@ class IngestNormalizer(Agent):
 
         supplier = _supplier_of(rel)
         sha = hashlib.sha256((root / rel).read_bytes()).hexdigest()
-        extra: dict = {"from_file_name": scan_info(rel), "sha256": sha}
+        from .ingest_docs import OCR_VERSION
+
+        extra: dict = {"from_file_name": scan_info(rel), "sha256": sha, "ocr_version": OCR_VERSION}
         ocr = None
-        cached = self._cached(rel, sha, "ocr")
+        cached = self._cached(rel, sha, "ocr", version=OCR_VERSION)
         if cached:
             ocr = ScanExtraction.model_validate(cached)
         else:
@@ -488,12 +490,22 @@ class IngestNormalizer(Agent):
         receipts = [g for g in all_rows(GoodsReceipt)
                     if ocr.document_number and g.delivery_note == ocr.document_number.strip()]
         if receipts and ocr.lines:
+            paper: dict[str, float] = {}  # one delivery can list the same part on several lines -> sum per part
+            hand: dict[str, float] = {}
             for line, part in zip(ocr.lines, resolved):
+                paper[part] = paper.get(part, 0) + (line.quantity or 0)
+                if line.quantity_corrected_by_hand and line.printed_quantity is not None:
+                    hand[part] = line.printed_quantity
+            for part, qty in paper.items():
                 booked = sum(g.qty_received or 0 for g in receipts if g.material_id == part)
-                ok = line.quantity is not None and abs(booked - line.quantity) < 0.5
+                ordered = sum(g.qty_ordered or 0 for g in receipts if g.material_id == part)
+                ok = abs(booked - qty) < 0.5
                 results[f"qty_{part}_matches_receipt"] = ok
-                if not ok:
-                    notes.append(f"{part}: paper says {line.quantity}, goods receipt booked {booked}")
+                if part in hand:
+                    notes.append(f"{part}: printed {hand[part]:,.0f}, corrected by hand to {qty:,.0f}, "
+                                 f"goods receipt booked {booked:,.0f} (ordered {ordered:,.0f})")
+                elif not ok:
+                    notes.append(f"{part}: paper says {qty:,.0f}, goods receipt booked {booked:,.0f}")
         if ocr.handwritten_notes:
             notes.append(f"handwritten: {ocr.handwritten_notes}")
         passed = sum(results.values())
@@ -523,10 +535,12 @@ class IngestNormalizer(Agent):
         self._tables.add("documents")
 
     @staticmethod
-    def _cached(rel: str, sha: str, key: str):
-        """Reuse an earlier Claude result for an unchanged file (no repeat cost on reruns)."""
+    def _cached(rel: str, sha: str, key: str, version: int | None = None):
+        """Reuse an earlier AI result for an unchanged file (no repeat cost on reruns)."""
         with session() as s:
             row = s.exec(select(Document).where(Document.path == rel)).first()
+        if version is not None and (not row or (row.extracted or {}).get(f"{key}_version") != version):
+            return None
         if row and isinstance(row.extracted, dict) and row.extracted.get("sha256") == sha:
             value = row.extracted.get(key)
             if value and not (isinstance(value, str) and value.startswith("pending")):
@@ -554,8 +568,11 @@ class IngestNormalizer(Agent):
                 candidates[str(sup.vendor_no)] = sup.supplier_id
             digits = re.sub(r"\D", "", sup.supplier_id).lstrip("0")
             candidates.setdefault(digits, sup.supplier_id)  # legacy vendor no = numeric part of the id
+        contained = [c for c in candidates if len(c) >= 5 and not c.isdigit() and re.search(rf"\b{re.escape(c)}\b", alias)]
         if alias in candidates:
             canonical, method, conf = candidates[alias], "master_data", 1.0
+        elif contained:  # e.g. "Karton Nowak Sp. z o.o., Poznań" -> "karton nowak poznań" contains "karton nowak"
+            canonical, method, conf = candidates[max(contained, key=len)], "contains", 0.95
         else:
             close = difflib.get_close_matches(alias, list(candidates), n=1, cutoff=0.85)
             if not close:
@@ -594,10 +611,11 @@ class IngestNormalizer(Agent):
     # ------------------------------------------------------------- issues
     def _raise_summary_issues(self) -> None:
         """Ingest's own findings, in FINDING FORMAT v1 (.brain/DATA_FORMAT.md)."""
-        if self._scans and llm.is_mock():
+        if self._scans:
+            why = "offline mode" if llm.is_mock() else "Claude was not reachable"
             self.raise_issue(
                 type="scans_unread", kind=IssueKind.HUMAN_CHECK, severity=2, key="scans",
-                summary=f"{len(self._scans)} scanned delivery notes stored but not read yet (offline mode)",
+                summary=f"{len(self._scans)} scanned delivery notes stored but not read yet ({why})",
                 reason="Receiving books what is on the paper, so a scan can hide a short or damaged delivery. "
                        "File names already link each scan to its delivery-note number; the content needs OCR.",
                 subject_type="drop", subject_id="scans",

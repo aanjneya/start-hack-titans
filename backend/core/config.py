@@ -40,6 +40,13 @@ class Settings:
     db_path: Path
     replay_dir: Path
     anthropic_model: str
+    llm_provider: str
+    anthropic_api_key: str
+    anthropic_base_url: str
+    openai_api_key: str
+    openai_base_url: str
+    openai_model: str
+    openai_reasoning_effort: str
     llm_effort: str
     llm_max_tokens: int
     soony_base_url: str
@@ -48,7 +55,6 @@ class Settings:
     watch_interval_min: float
     portal_mirror: Path
     # Chaser mailbox (shared team mailbox; see .brain/tasks/4-chaser.md)
-    anthropic_api_key: str = ""  # from env or .env; empty = SDK default (ant auth login)
     mail_address: str = ""
     mail_password: str = ""
     smtp_host: str = ""
@@ -79,6 +85,13 @@ def get_settings() -> Settings:
         db_path=db_path if db_path.is_absolute() else REPO_ROOT / db_path,
         replay_dir=Path(get("REPLAY_DIR", str(BACKEND_ROOT / "data" / "replay"))),
         anthropic_model=get("ANTHROPIC_MODEL", "claude-opus-5-5"),
+        llm_provider=get("LLM_PROVIDER", "auto").strip().lower(),
+        anthropic_api_key=get("ANTHROPIC_API_KEY"),
+        anthropic_base_url=_load_dotenv(REPO_ROOT / ".env").get("ANTHROPIC_BASE_URL", ""),  # .env only, see llm.py
+        openai_api_key=get("OPENAI_API_KEY"),
+        openai_base_url=get("OPENAI_BASE_URL"),
+        openai_model=get("OPENAI_MODEL", "gpt-5.4-mini"),
+        openai_reasoning_effort=get("OPENAI_REASONING_EFFORT"),
         llm_effort=get("LLM_EFFORT", "medium"),
         llm_max_tokens=int(get("LLM_MAX_TOKENS", "16000")),
         soony_base_url=get("SOONY_BASE_URL").rstrip("/"),
@@ -86,7 +99,6 @@ def get_settings() -> Settings:
         customer_setup=get("CUSTOMER_SETUP", "soony"),
         watch_interval_min=float(get("WATCH_INTERVAL_MIN", "0") or 0),
         portal_mirror=Path(get("PORTAL_MIRROR", str(BACKEND_ROOT / "data" / "portal"))),
-        anthropic_api_key=get("ANTHROPIC_API_KEY"),
         mail_address=get("MAIL_ADDRESS"),
         mail_password=get("MAIL_PASSWORD"),
         smtp_host=get("SMTP_HOST"),

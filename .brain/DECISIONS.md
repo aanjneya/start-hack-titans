@@ -53,3 +53,8 @@
 - **Context**: Soony's head of procurement wants actions not dashboards, a visible reason for every action, approval limits and a human-in-the-loop switch; Lio said our flow looked too sequential and nothing stood out yet.
 - **Decision**: Applied proposals P1–P4, P6–P9 from `minutes/office hours 18 uhr - learnings and proposed changes.md` as *vision*: action inbox first; risk → reason → action with one-line summary + reasoning on demand; approval matrix + autonomy switch as customer setup (`backend/setup/soony.json`, `core/policy.py`); agents shown working in parallel; per-agent mistake counts in the trace; standout candidate = magnet export ban case. Skipped P5 (role views): too much for a 3-min pitch, roles stay a non-goal.
 - **Trade-offs**: Decision cards gained `summary`, `reasoning`, `evidence`, `needs_approval` (auto-added to local DBs). Default autonomy is `control`, so nothing executes without approval unless a customer setup says `auto`.
+
+### [19:20] Watcher stays a separate agent, owner moved to daksh (by daksh)
+- **Context**: Question whether to merge Watcher (1) and Ingest (2).
+- **Decision**: Keep them separate in code (Watcher has no AI and only detects changed files; Ingest reads/understands them; the replay feeds Ingest directly). Move Watcher ownership from jivi to daksh (he wrote the 15-min checker), so jivi focuses on the Launch Planner.
+- **Trade-offs**: daksh now owns 1 + 2 (the whole intake path); jivi owns 5.

@@ -6,7 +6,7 @@
 
 ## Now (Active Sprint)
 
-- [~] @jivi 1 Watcher (`backend/agents/watcher.py`, `.brain/tasks/1-watcher.md`)
+- [~] @daksh 1 Watcher (`backend/agents/watcher.py`, `.brain/tasks/1-watcher.md`)
 - [~] @daksh 2 Ingest & Normalizer (`backend/agents/ingest.py`, `.brain/tasks/2-ingest-normalizer.md`)
 - [~] @aanjneya 3 Reconciler & Gate (`backend/agents/reconciler.py`, `.brain/tasks/3-reconciler-gate.md`)
 - [~] @tim 4 Chaser (`backend/agents/chaser.py`, `.brain/tasks/4-chaser.md`)

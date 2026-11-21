@@ -578,7 +578,9 @@ class OutboxMessage(SQLModel, table=True):
     subject: str = ""
     body: str = ""
     body_en: str = ""
-    status: str = Field(default="draft", index=True)  # draft|approved|sent|replied|failed
+    status: str = Field(default="draft", index=True)  # draft|approved|sent|replied|failed|escalated
+    message_id: str = ""  # RFC 5322 Message-ID we sent; replies are matched by In-Reply-To
+    run_id: str = ""  # agent run that wrote it (trace drawer)
     created_at: datetime = Field(default_factory=utcnow)
     sent_at: Optional[datetime] = None
 

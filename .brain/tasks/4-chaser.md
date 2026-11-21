@@ -16,13 +16,13 @@ Standard sleeve CMP-GAM-004 must now be rev C. Karton Nowak (Poland) has a machi
 - **Gives:** outgoing emails (outbox) → suppliers; replies → **Ingest** (as new facts) and the agent log.
 
 ## Tasks
-- [~] **T4.0** (@tim) Work from `missing_info` Findings (`.brain/DATA_FORMAT.md`): use their ids, summary and `suggested_actions` (type `email`); set the finding's status to `asked` when the email is out.
-- [~] **T4.1** (@tim) Write the email from an issue: the supplier's contact and language come from their profile; include order, shipment and part numbers.
-- [~] **T4.2** (@tim) Anti-spam rule: max one open question per supplier, and a minimum gap between emails.
-- [~] **T4.3** (@tim) Preview mode: a human can see and approve the first email to each supplier (in the demo it can auto-send).
-- [~] **T4.4** (@tim) Fallback only (`MOCK_MODE=true`): replay a recorded **real** mail exchange (fixture in repo), no invented supplier replies.
-- [~] **T4.5** (@tim) When a reply arrives (real mailbox or mock simulator), store it with `system.store_reply(...)` and emit `reply.received`. Don't write data yourself: Ingest applies it, then the Reconciler re-checks.
-- [~] **T4.6** (@tim) Escalate to a buyer if there's no reply within X hours.
+- [x] **T4.0** (@tim) Work from `missing_info` Findings (`.brain/DATA_FORMAT.md`): use their ids, summary and `suggested_actions` (type `email`); set the finding's status to `asked` when the email is out.
+- [x] **T4.1** (@tim) Write the email from an issue: the supplier's contact and language come from their profile; include order, shipment and part numbers.
+- [x] **T4.2** (@tim) Anti-spam rule: max one open question per supplier, and a minimum gap between emails.
+- [-] **T4.3** (@tim) Dropped (team decision): no separate approval route. Planner mails already follow a human decision approve; issue mails are guarded by the anti-spam rule + `CHASER_SEND` switch (drafts only when off).
+- [x] **T4.4** (@tim) Fallback only (`MOCK_MODE=true`): replay a recorded **real** mail exchange (fixture in repo), no invented supplier replies.
+- [x] **T4.5** (@tim) When a reply arrives (real mailbox or mock simulator), store it with `system.store_reply(...)` and emit `reply.received`. Don't write data yourself: Ingest applies it, then the Reconciler re-checks.
+- [x] **T4.6** (@tim) Escalate to a buyer if there's no reply within X hours.
 
 ## When it's done
 - A "missing info" issue produces a correct Polish email in the outbox, gets a (simulated) reply, and the reply shows up in the database and the log.
@@ -39,3 +39,7 @@ Standard sleeve CMP-GAM-004 must now be rev C. Karton Nowak (Poland) has a machi
 - Supplier contact: `suppliers/<ID>/profile.json → supplier.contact{name, email, language}` (CSV fallback: `contact_email`, `preferred_language`).
 - Tables: `outbox(id, supplier_id, issue_id, lang, subject, body_original, body_en, status draft|approved|sent|replied, sent_at)`, `inbox(...)`.
 - Draft with `claude-sonnet-5-5`; store an English copy for the trace drawer. Emit `reply.received{supplier_id, text, attachments}`.
+
+## Status (Sat 20:55, branch `tim`, not on main)
+- Built + 8 tests green (`backend/tests/test_chaser.py`); live dry run with Claude OK (draft only).
+- Open: first REAL mail to Karton Nowak (`CHASER_SEND=true` on one instance), then `python -m backend.agents.chaser export <outbox_id>` to store the real exchange as demo fallback.

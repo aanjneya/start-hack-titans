@@ -27,7 +27,7 @@ Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude 
 
 ## Launch Planner demo
 
-Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID.
+Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops through the 17:23 sleeve scenario into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID. For the latest data, run the full replay in an isolated database. The 21:38 drop includes the receipt for that shipment.
 
 The baseline uses the workbook timestamp, working shifts, eligible lots and confirmed line-ready inbound. An option’s copies gained measures its effect on finished copies by the deadline. The published print quote excludes freight. For an amendment to an existing PO, approval uses the whole priced PO plus the incremental charge.
 

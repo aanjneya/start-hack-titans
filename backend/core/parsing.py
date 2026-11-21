@@ -110,3 +110,140 @@ def file_text(path: Path) -> str | None:
 def _unescape(s: str) -> str:
     return (s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
              .replace("&quot;", '"').replace("&apos;", "'").replace("&#183;", "·"))
+
+
+# ---------------------------------------------------------------------------
+# Value parsing (locale-aware, never guesses: returns None if it can't parse)
+# ---------------------------------------------------------------------------
+_THOUSANDS_DOT = re.compile(r"^-?\d{1,3}(\.\d{3})+$")  # 640.000
+_THOUSANDS_COMMA = re.compile(r"^-?\d{1,3}(,\d{3})+$")  # 48,000
+
+
+def parse_number(value, decimal_comma: bool | None = None) -> float | None:
+    """'48,000' -> 48000, '1,5200' (decimal comma) -> 1.52, '640.000' -> 640000, '6.11' -> 6.11."""
+    if value is None:
+        return None
+    s = str(value).strip().replace(" ", "").replace(" ", "").replace("'", "")
+    s = re.sub(r"(szt\.?|pcs|pc|eur|usd|cny|inr|€|\$)$", "", s, flags=re.I)
+    if not s or s in {"-", "—"}:
+        return None
+    if decimal_comma is True:
+        s = s.replace(".", "").replace(",", ".")
+    elif decimal_comma is False:
+        s = s.replace(",", "")
+    elif _THOUSANDS_DOT.match(s):
+        s = s.replace(".", "")
+    elif _THOUSANDS_COMMA.match(s):
+        s = s.replace(",", "")
+    elif "," in s and "." not in s:
+        s = s.replace(",", ".")  # lone decimal comma: 1,52
+    elif "," in s and "." in s:
+        s = s.replace(",", "") if s.rfind(".") > s.rfind(",") else s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def detect_date_order(values) -> str:
+    """'ymd' for ISO, else 'mdy' or 'dmy' by looking for a part > 12 in a column of a/b/yyyy dates."""
+    first_big = second_big = False
+    for v in values:
+        m = re.match(r"^\s*(\d{1,2})[./-](\d{1,2})[./-](\d{4})", str(v or ""))
+        if not m:
+            continue
+        a, b = int(m.group(1)), int(m.group(2))
+        first_big |= a > 12
+        second_big |= b > 12
+    if second_big and not first_big:
+        return "mdy"
+    if first_big and not second_big:
+        return "dmy"
+    return "dmy"  # European default when ambiguous
+
+
+def parse_date(value, order: str = "ymd"):
+    """Returns datetime.date or None. Accepts ISO dates/datetimes and a/b/yyyy with the given order."""
+    from datetime import date, datetime
+
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s.startswith("9999"):
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    m = re.match(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$", s)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        month, day = (a, b) if order == "mdy" else (b, a)
+        try:
+            return date(y, month, day)
+        except ValueError:
+            return None
+    try:
+        return datetime.fromisoformat(s).date()
+    except ValueError:
+        return None
+
+
+def parse_datetime(value, tz: str = "Europe/Berlin"):
+    """Timezone-aware datetime; naive values get `tz` (portal times are Europe/Berlin per the API docs)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    if value is None or not str(value).strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        d = parse_date(value)
+        if not d:
+            return None
+        dt = datetime(d.year, d.month, d.day)
+    return dt if dt.tzinfo else dt.replace(tzinfo=ZoneInfo(tz))
+
+
+def norm_header(h: str) -> str:
+    """'Container/AWB ' -> 'container_awb', 'Day-one demand' -> 'day_one_demand'."""
+    h = _unescape(str(h or "")).strip().lower()
+    h = re.sub(r"[^\w]+", "_", h, flags=re.UNICODE)
+    return h.strip("_")
+
+
+def norm_name(name: str) -> str:
+    """Company names without legal forms/punctuation: 'Karton Nowak Sp. z o.o.' -> 'karton nowak'."""
+    s = _unescape(str(name or "")).lower()
+    s = re.sub(r"\b(sp\.?\s*z\s*o\.?\s*o\.?|co\.?,?\s*ltd\.?|ltd\.?|inc\.?|gmbh|pvt\.?|llc|a/s|s\.a\.|ag)\b", " ", s)
+    s = re.sub(r"[^\w]+", " ", s, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def flatten_json(obj, prefix: str = "") -> dict:
+    """{'supplier': {'contact': {'email': x}}} -> {'supplier.contact.email': x}."""
+    out: dict = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.update(flatten_json(v, f"{prefix}{k}."))
+    elif isinstance(obj, list):
+        out[prefix[:-1]] = obj
+    else:
+        out[prefix[:-1]] = obj
+    return out
+
+
+def detect_language(text: str) -> str:
+    """Very small script/keyword detector: ko, zh, pl, de, en."""
+    if re.search(r"[가-힯]", text):
+        return "ko"
+    if re.search(r"[一-鿿]", text):
+        return "zh"
+    if re.search(r"[ąćęłńóśźż]", text, re.I) or re.search(r"\b(zamówienia|szt|umowy|przestoj)\b", text, re.I):
+        return "pl"
+    if re.search(r"\b(und|der|die|das|mit|für)\b", text):
+        return "de"
+    return "en"

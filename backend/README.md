@@ -19,6 +19,8 @@ Then:
 - `GET  localhost:8000/api/changes`: change log of the source of truth · `POST /api/inbox`: feed a supplier reply into the loop
 - `backend/.venv/bin/python -m backend.core.replay --list`: the real drops found in git history
 - `backend/.venv/bin/python -m backend.core.replay`: reset the DB and replay all drops in order
+- `POST /api/replay/step`: the next real drop arrives (demo button; first call = baseline on an empty store)
+- `POST /api/watch/check`: live portal check now (needs `MOCK_MODE=false` + `SOONY_API_TOKEN`; timer via `WATCH_INTERVAL_MIN`)
 
 `MOCK_MODE=true` (default, from `.env`) = fully offline: no Claude calls, no emails, no portal calls.
 Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude for real.
@@ -41,7 +43,9 @@ backend/
   core/policy.py       customer setup: approver_for(amount), needs_approval(amount) from setup/<customer>.json
   setup/soony.json     Soony's approval matrix + autonomy switch (office hours Sat 18:00)
   agents/base.py       Agent base class: subscriptions, log(), emit(), raise_issue() (dedup + reopen)
-  agents/*.py          one STUB per agent: replace the TODOs (see .brain/tasks/<n>-<agent>.md)
+  agents/watcher.py    ✅ agent 1: portal diff (live) / replay (demo)
+  agents/ingest*.py    ✅ agent 2: tables (learned column mappings), documents (OA parser, facts, Claude), aliases, replies
+  agents/*.py          the other agents are still STUBS: replace the TODOs (see .brain/tasks/<n>-<agent>.md)
   tests/               pytest; each test gets its own temp DB
 ```
 

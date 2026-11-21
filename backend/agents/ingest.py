@@ -1,14 +1,87 @@
-"""IngestNormalizer agent: STUB. Owner: see .brain/tasks/2-ingest-normalizer.md (claim it there).
+"""Ingest & Normalizer agent (owner: daksh, .brain/tasks/2-ingest-normalizer.md).
 
-The stub only logs and keeps the event chain flowing so the whole loop runs end to end.
-Replace the TODO bodies; keep the class name, `name` and subscriptions (or update them in one PR).
+Turns every file of a drop (CSV, Excel, JSON, PDF, Word, Markdown, scans; KO/ZH/PL/EN) into the truth store,
+and applies supplier replies. It is the ONLY writer of supply-chain data.
+
+- New rows are inserted; rows that already exist (same natural key) are UPDATED via update_row, so every change
+  lands in the change log. Same file replaced -> its newer values win. Different source disagrees -> newest wins
+  and the disagreement is kept in `conflicts` (Informatica-style survivorship, T2.17).
+- Tabular files: column mapping learned once per header fingerprint (ingest_mapping.py).
+- Documents: classify -> extract -> ground (ingest_docs.py). Order confirmations parsed by rules.
+- Supplier names / vendor numbers / supplier part numbers -> our IDs via aliases (T2.7/T2.16).
+- Nothing here contains values from the data; everything is read from the files.
 """
 from __future__ import annotations
 
-from ..core import events
+import difflib
+import json
+import re
+import typing
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Optional
+
+from sqlmodel import select
+
+from ..core import events, llm
 from ..core.coordinator import Event
-from ..core.models import IssueKind  # noqa: F401
+from ..core.models import (
+    Alias, Document, InboxMessage, Issue, IssueKind, LaunchStatus, Material, OrderConfirmation, PurchaseOrder,
+    Shipment, ShipmentMaterial, ShipmentPO, Supplier, SupplierPartMap,
+)
+from ..core.parsing import (
+    decode, flatten_json, norm_header, norm_name, office_text, parse_date, parse_datetime, parse_number,
+    pdf_text, read_csv, safe_rel, xlsx_rows,
+)
+from ..core.store import UpdateResult, add_all, all_rows, session
 from .base import Agent, register
+from .ingest_docs import classify, facts, language, llm_extract, parse_order_confirmation, scan_info
+from .ingest_mapping import LIST_FIELDS, TARGETS, Mapping, map_columns
+
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".webp"}
+SUP_RE = re.compile(r"(SUP-\d{4})(?!\d)")
+
+#: one standard shipment status list (T2.18); carrier/ERP/tracker words -> canonical status
+STATUS_MAP = {
+    "booked": "booked", "planned": "booked", "pending": "booked",
+    "in_transit": "in_transit", "in transit": "in_transit", "on the way": "in_transit", "departed": "in_transit",
+    "arrived_port": "arrived_port", "arrived port": "arrived_port", "discharged": "arrived_port",
+    "in_delivery": "in_delivery", "out for delivery": "in_delivery", "on carriage": "in_delivery",
+    "delivered": "delivered", "received": "delivered", "cancelled": "cancelled", "canceled": "cancelled",
+    "delayed": "delayed", "on hold": "on_hold", "stuck": "on_hold",
+}
+
+
+def _priority(rel: str) -> tuple:
+    """Master data first (so names/parts can be resolved), then ERP, then documents, then scans."""
+    name = rel.rsplit("/", 1)[-1].lower()
+    ext = Path(rel).suffix.lower()
+    if name.startswith("profile"):
+        rank = 0
+    elif "/master/" in f"/{rel}":
+        rank = 1
+    elif name.startswith("components"):
+        rank = 2
+    elif "/erp/" in f"/{rel}":
+        rank = 3
+    elif ext in {".csv", ".xlsx", ".json"}:
+        rank = 4
+    elif ext in {".pdf", ".docx", ".md", ".txt"}:
+        rank = 5
+    else:
+        rank = 6
+    return (rank, rel)
+
+
+def _supplier_of(rel: str) -> str:
+    """Portal convention: suppliers/<SUP-####>_<Name>/... (from the API docs)."""
+    m = SUP_RE.search(rel)
+    return m.group(1) if m else ""
+
+
+def _base_type(annotation) -> type:
+    args = [a for a in typing.get_args(annotation) if a is not type(None)]
+    return args[0] if args else annotation
 
 
 @register
@@ -16,23 +89,498 @@ class IngestNormalizer(Agent):
     name = "ingest"
     subscriptions = {events.FILES_CHANGED: "on_files_changed", events.REPLY_RECEIVED: "on_reply"}
 
+    # ------------------------------------------------------------------ drops
     def on_files_changed(self, event: Event) -> None:
-        """TODO T2.1-T2.10: read each added/changed file under event.payload["data_root"] into the
-        truth-store tables (never overwrite; source + ingested_at on every row)."""
         p = event.payload
-        files = list(p.get("added", [])) + list(p.get("changed", []))
-        self.log("todo", f"stub: would ingest {len(files)} files ({len(p.get('removed', []))} removed)")
-        # Keep the loop flowing so downstream agents run on every drop.
-        self.emit(events.TRUTH_UPDATED, {"files": files, "data_root": p.get("data_root"), "tables": []})
+        root = Path(p.get("data_root") or ".")
+        files = sorted(set(p.get("added", [])) | set(p.get("changed", [])), key=_priority)
+        self._results: list[UpdateResult] = []
+        self._tables: set[str] = set()
+        self._unmapped: list[str] = []
+        self._scans: list[str] = []
+        self._unresolved: set[str] = set()
+        counts = {"rows_inserted": 0, "rows_updated": 0, "documents": 0}
+        self._counts = counts
+        for rel in files:
+            try:
+                self._ingest_file(root, rel)
+            except Exception as exc:  # one bad file must never stop the drop
+                self.log("error", f"{rel}: {type(exc).__name__}: {exc}", [{"path": rel}])
+                self._unmapped.append(rel)
+        for rel in p.get("removed", []):
+            self.log("file_removed", f"{rel} was removed from the portal; its rows stay as history", [{"path": rel}])
+        self._raise_summary_issues()
+        self.log("drop_ingested", f"{len(files)} files: +{counts['rows_inserted']} rows, "
+                 f"{counts['rows_updated']} rows updated, {counts['documents']} documents",
+                 data={**counts, "tables": sorted(self._tables), "unmapped": len(self._unmapped)})
+        self.emit_truth_updated(self._results, files=files, tables=sorted(self._tables), data_root=str(root))
 
+    def _ingest_file(self, root: Path, rel: str) -> None:
+        safe_rel(rel)
+        path = root / rel
+        if not path.is_file():
+            self.log("missing_file", rel)
+            return
+        ext = path.suffix.lower()
+        data = path.read_bytes()
+        if ext == ".csv":
+            headers, rows, delim = read_csv(data)
+            self._ingest_table(rel, headers, rows, delim)
+        elif ext == ".xlsx":
+            self._ingest_workbook(rel, data)
+        elif ext == ".json":
+            self._ingest_json(rel, data)
+        elif ext in IMAGE_EXT:
+            self._store_scan(rel)
+        elif ext == ".pdf":
+            text = pdf_text(data)
+            if not text.strip():
+                self._store_scan(rel)
+            else:
+                self._ingest_document(rel, text)
+        elif ext in {".docx", ".md", ".txt"}:
+            text = office_text(data) if ext == ".docx" else decode(data)
+            self._ingest_document(rel, text or "")
+        else:
+            self._unmapped.append(rel)
+            self.log("unsupported", rel)
+
+    # ------------------------------------------------------------ tables
+    def _ingest_workbook(self, rel: str, data: bytes) -> None:
+        for sheet, rows in xlsx_rows(data).items():
+            rows = [[c.strip() for c in r] for r in rows]
+            filled = [r for r in rows if any(r)]
+            if not filled:
+                continue
+            title = filled[0][0] if len([c for c in filled[0] if c]) == 1 else ""
+            header_idx = self._find_header(rows)
+            if header_idx is None:
+                self._store_document(f"{rel}#{sheet}", "\n".join(" | ".join(c for c in r if c) for r in filled),
+                                     kind="note")
+                continue
+            headers = rows[header_idx]
+            body, notes = [], []
+            for r in rows[header_idx + 1:]:
+                cells = [c for c in r if c]
+                if not cells:
+                    continue
+                if len(cells) == 1 and len(headers) > 2:
+                    notes.append(cells[0])
+                    continue
+                body.append({h: (r[i] if i < len(r) else "") for i, h in enumerate(headers) if h})
+            self._ingest_table(f"{rel}#{sheet}", [h for h in headers if h], body, "", title=title)
+            if notes or title:
+                self._store_document(f"{rel}#{sheet}#notes", "\n".join([title] + notes).strip(), kind="note")
+
+    @staticmethod
+    def _find_header(rows: list[list[str]]) -> Optional[int]:
+        best, best_i = 0.0, None
+        for i, r in enumerate(rows[:8]):
+            cells = [c for c in r if c]
+            if len(cells) < 2:
+                continue
+            texty = sum(1 for c in cells if parse_number(c) is None) / len(cells)
+            score = texty * len(cells)
+            if score > best:
+                best, best_i = score, i
+        return best_i
+
+    def _ingest_json(self, rel: str, data: bytes) -> None:
+        obj = json.loads(decode(data))
+        items = obj.get("items") if isinstance(obj, dict) else None
+        if isinstance(items, list) and items and all(isinstance(i, dict) for i in items):
+            for item in items:  # news-style feeds: one document per item
+                text = "\n".join(str(item.get(k, "")) for k in ("headline", "title", "summary", "body") if item.get(k))
+                self._store_document(f"{rel}#{item.get('id', len(text))}", text, kind="news",
+                                     extra={"item": item},
+                                     published_at=parse_datetime(item.get("published_at") or item.get("date")))
+            return
+        flat = flatten_json(obj)
+        headers = list(flat)
+        self._ingest_table(rel, headers, [{k: ("" if v is None else str(v)) for k, v in flat.items()}], "")
+
+    def _ingest_table(self, rel: str, headers: list[str], rows: list[dict], delim: str, title: str = "") -> None:
+        normed = {norm_header(h) for h in headers}
+        if {"field", "new"} <= normed:
+            self._apply_changeset(rel, headers, rows)
+            return
+        mapping = map_columns(headers, rows, path=rel, agent=self.name, delimiter=delim)
+        if not mapping.target:
+            self._store_document(rel, "", kind="table", extra={"headers": headers, "rows": rows[:500], "title": title})
+            self._unmapped.append(rel)
+            return
+        target = TARGETS[mapping.target]
+        file_supplier = _supplier_of(rel)
+        as_of = parse_datetime(re.search(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?", title).group(0)) if (
+            title and re.search(r"\d{4}-\d{2}-\d{2}", title)) else None
+        existing = self._existing(target, rel)
+        new_rows, links = [], []
+        for i, raw in enumerate(rows):
+            values, lists = self._convert(target, mapping, raw)
+            if not any(v not in (None, "") for v in values.values()):
+                continue
+            if "supplier_id" in target.model.model_fields:
+                sup = values.get("supplier_id")
+                if not sup and file_supplier:
+                    values["supplier_id"] = file_supplier
+                elif sup:
+                    values["supplier_id"] = self.resolve_supplier(str(sup), rel) or str(sup)
+            if target.model is LaunchStatus and as_of:
+                values["as_of"] = as_of
+            if target.model is Shipment and values.get("status"):
+                values["status"] = STATUS_MAP.get(str(values["status"]).lower().strip(), values["status"])
+            key = tuple(values.get(k) for k in target.key)
+            if any(k in (None, "") for k in key):
+                continue
+            lookup = key + ((rel,) if target.key_includes_source else ())
+            row_id = existing.get(lookup)
+            if row_id is None:
+                obj = target.model(**values, source=rel)
+                new_rows.append(obj)
+                existing[lookup] = -1  # avoid duplicates within the same file
+            elif row_id > 0:
+                same_source = existing.get(("__source__", row_id)) == rel
+                present = {k: v for k, v in values.items() if v not in (None, "")}  # a missing cell never erases
+                present = self._drop_stale(target.model, row_id, present, rel)
+                res = self.update_row(target.model, row_id, present, source=rel,
+                                      reason=f"{'file updated' if same_source else 'other source'}: {rel} row {i + 1}",
+                                      on_conflict="overwrite" if same_source else "newest",
+                                      entity_key="/".join(str(k) for k in key))
+                if res.changes or res.conflicts:
+                    self._results.append(res)
+                    self._counts["rows_updated"] += 1
+            if lists:
+                links.append((values.get("shipment_id"), lists))
+        if new_rows:
+            add_all(new_rows)
+            self._counts["rows_inserted"] += len(new_rows)
+        if links:
+            self._store_links(links, rel)
+        self._tables.add(target.model.__tablename__)
+        self.log("table_ingested", f"{rel} -> {target.model.__tablename__}: {len(rows)} rows "
+                 f"({'saved mapping' if mapping.reused else mapping.method}, score {mapping.score:.2f})",
+                 [{"path": rel}], data={"mapping": mapping.columns, "options": mapping.options})
+
+    @staticmethod
+    def _drop_stale(model, row_id: int, values: dict, rel: str) -> dict:
+        """Survivorship across sources: if `rel` set a field before, was later overruled by another source and
+        still sends the SAME value, it's old news -> skip it (otherwise reprocessing would flip values back)."""
+        from ..core.models import FieldChange
+        from ..core.store import _as_text
+
+        with session() as s:
+            row = s.get(model, row_id)
+            hist = s.exec(select(FieldChange).where(FieldChange.table_name == model.__tablename__,
+                                                    FieldChange.row_id == row_id).order_by(FieldChange.id)).all()
+        if not hist:
+            return values
+        keep = {}
+        for field, value in values.items():
+            changes = [h for h in hist if h.field == field]
+            if not changes:
+                keep[field] = value
+                continue
+            last_by_source = {row.source: changes[0].old_value}  # value the first source had
+            for h in changes:
+                last_by_source[h.source] = h.new_value
+            latest_setter = changes[-1].source
+            if rel != latest_setter and rel in last_by_source and last_by_source[rel] == _as_text(value):
+                continue  # this source already lost with exactly this value
+            keep[field] = value
+        return keep
+
+    def _existing(self, target, rel: str) -> dict:
+        out: dict = {}
+        for row in all_rows(target.model):
+            key = tuple(getattr(row, k) for k in target.key)
+            if target.key_includes_source:
+                key += (row.source,)
+            out[key] = row.id
+            out[("__source__", row.id)] = row.source
+        return out
+
+    def _convert(self, target, mapping: Mapping, raw: dict) -> tuple[dict, dict]:
+        values: dict[str, Any] = {}
+        lists: dict[str, list[str]] = {}
+        opts = mapping.options or {}
+        for col, field in mapping.columns.items():
+            val = raw.get(col, "")
+            if field in LIST_FIELDS:
+                parts = [x.strip() for x in re.split(r"[|,;]", str(val)) if x.strip()]
+                if parts:
+                    lists[field] = parts
+                continue
+            info = target.model.model_fields.get(field)
+            if info is None:
+                continue
+            values[field] = self._coerce(_base_type(info.annotation), val, opts, field)
+        return values, lists
+
+    @staticmethod
+    def _coerce(kind, val, opts: dict, field: str):
+        if val is None or (isinstance(val, str) and not val.strip()):
+            return None if kind is not str else ""
+        s = str(val).strip()
+        if kind is bool:
+            return s.lower() in {"y", "yes", "true", "1", "x", "ja"}
+        if kind is date:
+            return parse_date(s, opts.get("date_order", "ymd"))
+        if kind is datetime:
+            return parse_datetime(s)
+        if kind is int:
+            if field == "po_line" and re.fullmatch(r"0\d{4}", s):
+                n = int(s)
+                return n // 10 if n % 10 == 0 else n  # SAP item 00010 -> line 1
+            n = parse_number(s, opts.get("decimal_comma"))
+            return int(round(n)) if n is not None else None
+        if kind is float:
+            return parse_number(s, opts.get("decimal_comma"))
+        return s
+
+    def _store_links(self, links: list[tuple[str, dict]], rel: str) -> None:
+        have = {(r.shipment_id, r.po_number) for r in all_rows(ShipmentPO)}
+        have_m = {(r.shipment_id, r.material_id) for r in all_rows(ShipmentMaterial)}
+        new = []
+        for shipment_id, lists in links:
+            for po in lists.get("po_numbers", []):
+                if (shipment_id, po) not in have:
+                    new.append(ShipmentPO(shipment_id=shipment_id, po_number=po, source=rel))
+                    have.add((shipment_id, po))
+            for m in lists.get("material_ids", []):
+                if (shipment_id, m) not in have_m:
+                    new.append(ShipmentMaterial(shipment_id=shipment_id, material_id=m, source=rel))
+                    have_m.add((shipment_id, m))
+        if new:
+            add_all(new)
+
+    def _apply_changeset(self, rel: str, headers: list[str], rows: list[dict]) -> None:
+        """Files like `component_id,field,old,new,changed_by`: explicit updates of existing rows."""
+        id_col = headers[0]
+        target = next((t for t in TARGETS.values() if t.key == (norm_header(id_col),)), None)
+        if target is None:
+            self._store_document(rel, "", kind="table", extra={"headers": headers, "rows": rows})
+            self._unmapped.append(rel)
+            return
+        col = {norm_header(h): h for h in headers}
+        by_key = {getattr(r, target.key[0]): r for r in all_rows(target.model)}
+        for i, raw in enumerate(rows):
+            key, field = raw.get(id_col, ""), norm_header(raw.get(col["field"], ""))
+            row = by_key.get(key)
+            if row is None or field not in target.model.model_fields:
+                self.log("changeset_skip", f"{rel} row {i + 1}: {key}.{field} not found", [{"path": rel}])
+                continue
+            old = raw.get(col.get("old", ""), "")
+            who = raw.get(col.get("changed_by", ""), "")
+            res = self.update_row(target.model, row.id, {field: raw.get(col["new"], "")}, source=rel,
+                                  on_conflict="overwrite", entity_key=key,
+                                  reason=f"change file{(' by ' + who) if who else ''} (old per file: {old})")
+            if res.changes:
+                self._results.append(res)
+                self._counts["rows_updated"] += 1
+        self._tables.add(target.model.__tablename__)
+
+    # --------------------------------------------------------- documents
+    def _ingest_document(self, rel: str, text: str) -> None:
+        kind = classify(rel, text)
+        supplier = _supplier_of(rel)
+        if kind == "order_confirmation":
+            parsed = parse_order_confirmation(text)
+            if parsed:
+                self._ingest_confirmation(rel, text, parsed, supplier)
+                return
+        extra = {"facts": facts(text)}
+        extracted = llm_extract(text, kind, rel, self.name)
+        if extracted:
+            extra["llm"] = extracted
+        self._store_document(rel, text, kind=kind, supplier_id=supplier, extra=extra)
+
+    def _ingest_confirmation(self, rel: str, text: str, parsed: dict, supplier: str) -> None:
+        pos = {r.po_number for r in all_rows(PurchaseOrder)}
+        existing = {(r.confirmation_id, r.po_line, r.material_id): r for r in all_rows(OrderConfirmation)}
+        new = []
+        for line in parsed["lines"]:
+            material = line["material_id"]
+            supplier_ref = ""
+            if not material.startswith("CMP-"):
+                supplier_ref = material
+                material = self.resolve_part(supplier, material, line["description"], rel) or material
+            po_known = parsed["po_number"] in pos
+            confidence = round(0.6 + 0.2 * po_known + 0.2 * material.startswith("CMP-"), 2)
+            values = {
+                "confirmation_id": parsed["confirmation_id"], "po_number": parsed["po_number"],
+                "po_line": line["po_line"], "supplier_id": supplier, "material_id": material,
+                "quantity": line["quantity"], "delivery_date": parse_date(line["delivery_date"]),
+                "revision": line["revision"], "unit_price": line["unit_price"], "currency": line["currency"],
+                "bank_iban": parsed["bank_iban"],
+                "note": ((f"supplier part {supplier_ref}; " if supplier_ref else "") + parsed["notes"])[:2000],
+            }
+            row = existing.get((parsed["confirmation_id"], line["po_line"], material))
+            if row is None:
+                new.append(OrderConfirmation(**values, source=rel, confidence=confidence))
+            else:
+                res = self.update_row(OrderConfirmation, row.id, values, source=rel, on_conflict="overwrite",
+                                      reason="confirmation re-sent", confidence=confidence,
+                                      entity_key=f"{parsed['confirmation_id']}/{line['po_line']}")
+                if res.changes:
+                    self._results.append(res)
+                    self._counts["rows_updated"] += 1
+        if new:
+            add_all(new)
+            self._counts["rows_inserted"] += len(new)
+        self._tables.add("order_confirmations")
+        self._store_document(rel, text, kind="order_confirmation", supplier_id=supplier,
+                             extra={"parsed": {k: v for k, v in parsed.items() if k != "notes"},
+                                    "notes": parsed["notes"], "facts": facts(text)})
+
+    def _store_scan(self, rel: str) -> None:
+        self._scans.append(rel)
+        supplier = _supplier_of(rel)
+        self._store_document(rel, "", kind="scan", supplier_id=supplier,
+                             extra={"from_file_name": scan_info(rel), "ocr": "pending (needs live Claude vision)"})
+
+    def _store_document(self, rel: str, text: str, *, kind: str, supplier_id: str = "", extra: dict | None = None,
+                        published_at=None) -> None:
+        extracted = extra or {}
+        title = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")[:200]
+        values = {"path": rel, "kind": kind, "supplier_id": supplier_id or "", "language": language(text),
+                  "title": title or extracted.get("title", ""), "text": text, "extracted": extracted,
+                  "published_at": published_at}
+        if extracted.get("llm"):
+            values["text_en"] = extracted["llm"].get("summary_en", "")
+        with session() as s:
+            row = s.exec(select(Document).where(Document.path == rel)).first()
+        if row is None:
+            add_all([Document(**values, source=rel.split("#")[0])])
+        elif row.text != text or row.extracted != extracted:
+            res = self.update_row(Document, row.id, {"text": text, "extracted": extracted, "kind": kind},
+                                  source=rel, on_conflict="overwrite", reason="document replaced", entity_key=rel)
+            if res.changes:
+                self._results.append(res)
+        self._counts["documents"] += 1
+        self._tables.add("documents")
+
+    # ----------------------------------------------------------- aliases
+    def resolve_supplier(self, value: str, source: str) -> Optional[str]:
+        """'SUP-0028' | 'Karton Nowak' | 'Karton Nowak Sp. z o.o.' | vendor no '28' -> 'SUP-0028'."""
+        v = value.strip()
+        if SUP_RE.fullmatch(v):
+            return v
+        alias = norm_name(v)
+        with session() as s:
+            hit = s.exec(select(Alias).where(Alias.kind == "supplier", Alias.alias == alias)).first()
+        if hit:
+            return hit.canonical_id
+        suppliers = all_rows(Supplier)
+        candidates: dict[str, str] = {}
+        for sup in suppliers:
+            for name in (sup.name, sup.legal_name):
+                if name:
+                    candidates[norm_name(name)] = sup.supplier_id
+            if sup.vendor_no is not None:
+                candidates[str(sup.vendor_no)] = sup.supplier_id
+            digits = re.sub(r"\D", "", sup.supplier_id).lstrip("0")
+            candidates.setdefault(digits, sup.supplier_id)  # legacy vendor no = numeric part of the id
+        if alias in candidates:
+            canonical, method, conf = candidates[alias], "master_data", 1.0
+        else:
+            close = difflib.get_close_matches(alias, list(candidates), n=1, cutoff=0.85)
+            if not close:
+                self._unresolved.add(f"supplier '{v}' ({source})")
+                return None
+            canonical, method = candidates[close[0]], "fuzzy"
+            conf = round(difflib.SequenceMatcher(None, alias, close[0]).ratio(), 2)
+        add_all([Alias(kind="supplier", alias=alias, canonical_id=canonical, confidence=conf, method=method,
+                       source=source)])
+        return canonical
+
+    def resolve_part(self, supplier_id: str, supplier_part: str, description: str, source: str) -> Optional[str]:
+        """Supplier's own part number -> our CMP id (saved alias, else description match among their parts)."""
+        alias = supplier_part.strip().upper()
+        with session() as s:
+            hit = s.exec(select(Alias).where(Alias.kind == "part", Alias.alias == alias)).first()
+        if hit:
+            return hit.canonical_id
+        their = {m.component_id for m in all_rows(SupplierPartMap) if m.supplier_id == supplier_id}
+        materials = [m for m in all_rows(Material) if not their or m.component_id in their]
+        target = norm_name(description)
+        best, score = None, 0.0
+        for m in materials:
+            r = difflib.SequenceMatcher(None, target, norm_name(m.description)).ratio()
+            if r > score:
+                best, score = m.component_id, r
+        if best is None or score < 0.6:
+            self._unresolved.add(f"part '{supplier_part}' of {supplier_id} ({source})")
+            return None
+        add_all([Alias(kind="part", alias=alias, canonical_id=best, confidence=round(score, 2),
+                       method="description_match", source=source)])
+        self.log("alias_learned", f"{supplier_id} part {supplier_part} = {best} (description match {score:.2f})",
+                 [{"path": source, "quote": description}])
+        return best
+
+    # ------------------------------------------------------------- issues
+    def _raise_summary_issues(self) -> None:
+        if self._scans and llm.is_mock():
+            self.raise_issue(type="scans_unread", kind=IssueKind.HUMAN_CHECK, severity=2, key="scans",
+                             summary=f"{len(self._scans)} scanned documents stored but not read (OCR runs with "
+                                     "live Claude); file names already link delivery notes",
+                             evidence=[{"path": p} for p in self._scans[:20]])
+        if self._unmapped:
+            self.raise_issue(type="unmapped_files", kind=IssueKind.HUMAN_CHECK, severity=1, key="unmapped",
+                             summary=f"{len(self._unmapped)} files kept as plain tables/documents (no matching "
+                                     "table yet); check if any matter",
+                             evidence=[{"path": p} for p in self._unmapped[:30]])
+        if self._unresolved:
+            self.raise_issue(type="unresolved_ids", kind=IssueKind.HUMAN_CHECK, severity=3, key="unresolved",
+                             summary=f"{len(self._unresolved)} names/part numbers could not be matched to our IDs",
+                             evidence=[{"path": "", "quote": u} for u in sorted(self._unresolved)[:30]])
+
+    # ------------------------------------------------------------ replies
     def on_reply(self, event: Event) -> None:
-        """TODO T2.19: apply a supplier reply (you are the ONLY writer of supply-chain data).
-
-        1. Load InboxMessage(event.payload["inbox_id"]) (+ the issue it answers, if any).
-        2. Extract the answer with llm.extract(...) (quote + confidence), find the row(s) it is about.
-        3. self.update_row(Model, row_id, {field: value}, source=f"inbox/{msg.id}", issue_id=..., reason=...)
-           -> fills empty fields, records a conflict if a different value is already there.
-        4. Mark the inbox message processed, then self.emit_truth_updated([results], issue_ids=[...])
-           (it only emits if something changed, so the Reconciler re-checks exactly once).
-        """
-        self.log("todo", f"stub: reply {event.payload.get('inbox_id')} not applied yet")
+        """Apply a supplier reply (T2.19): fill fields of the rows the question was about."""
+        with session() as s:
+            msg = s.get(InboxMessage, event.payload["inbox_id"])
+            issue = s.get(Issue, msg.issue_id) if msg and msg.issue_id else None
+        if msg is None:
+            return
+        src = f"inbox/{msg.id}"
+        found = facts(msg.body)
+        extra = {"facts": found}
+        extracted = llm_extract(msg.body, "reply", src, self.name)
+        if extracted:
+            extra["llm"] = extracted
+        self._results, self._tables, self._counts = [], set(), {"rows_inserted": 0, "rows_updated": 0, "documents": 0}
+        self._store_document(src, msg.body, kind="reply", supplier_id=msg.supplier_id, extra=extra)
+        values: dict[str, Any] = {}
+        if len(found.get("revisions", [])) == 1:
+            values["revision"] = found["revisions"][0]
+        future = [d for d in found.get("dates", []) if d >= msg.received_at.date().isoformat()]
+        if len(future) == 1:
+            values["delivery_date"] = future[0]
+        if len(found.get("quantities", [])) == 1:
+            values["quantity"] = found["quantities"][0]
+        targets: list[OrderConfirmation] = []
+        if issue and values:
+            for oc in all_rows(OrderConfirmation):
+                if issue.po_number and oc.po_number != issue.po_number:
+                    continue
+                if issue.part_id and oc.material_id != issue.part_id:
+                    continue
+                if not (issue.po_number or issue.part_id) or (msg.supplier_id and oc.supplier_id != msg.supplier_id):
+                    continue
+                targets.append(oc)
+        for oc in targets:
+            res = self.update_row(OrderConfirmation, oc.id, values, source=src, reason="supplier reply",
+                                  issue_id=issue.id if issue else None, confidence=0.8,
+                                  entity_key=f"{oc.confirmation_id}/{oc.po_line}")
+            if res.changes or res.conflicts:
+                self._results.append(res)
+        with session() as s:
+            m = s.get(InboxMessage, msg.id)
+            m.processed = True
+            m.result = {"fields": sorted(values), "rows": len(targets),
+                        "changes": sum(len(r.changes) for r in self._results),
+                        "conflicts": sum(len(r.conflicts) for r in self._results)}
+            s.add(m)
+            s.commit()
+        self.emit_truth_updated(self._results, tables=sorted(self._tables | {"inbox"}),
+                                issue_ids=[issue.id] if issue else [])

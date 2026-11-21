@@ -159,7 +159,16 @@ class UpdateResult:
 
 
 def _as_text(value) -> str | None:
-    return None if value is None else str(value)
+    """Comparable text. Aware datetimes compare in UTC (SQLite keeps them as naive UTC)."""
+    from datetime import datetime, timezone
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc)
+        return value.replace(tzinfo=None).isoformat(sep=" ")
+    return str(value)
 
 
 def _coerce(model: type[SQLModel], field_name: str, value):
@@ -194,14 +203,15 @@ def update_row(
         on_conflict="record"    (default) keep the old value, add a `conflicts` row for the Reconciler
         on_conflict="overwrite" replace it (change_type "overwrite"), e.g. a confirmed correction
         on_conflict="skip"      leave it, log nothing
+        on_conflict="newest"    replace it AND record the conflict (newest source wins, disagreement stays visible)
     - Same value -> nothing happens (so re-processing the same reply never loops).
     Returns UpdateResult; emit truth.updated only if result.changed (see Agent.update_row).
     """
     from .models import Conflict, FieldChange, utcnow
     from .trace import current_run_id
 
-    if on_conflict not in {"record", "overwrite", "skip"}:
-        raise ValueError(f"on_conflict must be record|overwrite|skip, not {on_conflict!r}")
+    if on_conflict not in {"record", "overwrite", "skip", "newest"}:
+        raise ValueError(f"on_conflict must be record|overwrite|skip|newest, not {on_conflict!r}")
     table = model.__tablename__
     result = UpdateResult(table=table, row_id=row_id)
     with session() as s:
@@ -216,8 +226,14 @@ def update_row(
                 continue
             if old in _EMPTY:
                 change_type = "fill"
-            elif on_conflict == "overwrite":
+            elif on_conflict in {"overwrite", "newest"}:
                 change_type = "overwrite"
+                if on_conflict == "newest":
+                    result.conflicts.append(Conflict(
+                        entity=table, entity_id=key, field=field_name,
+                        value_a=_as_text(old) or "", source_a=getattr(row, "source", ""),
+                        value_b=_as_text(new) or "", source_b=source, status="auto_resolved",
+                    ))
             elif on_conflict == "record":
                 result.conflicts.append(Conflict(
                     entity=table, entity_id=key, field=field_name,

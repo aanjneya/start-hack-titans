@@ -1,24 +1,94 @@
-"""Watcher agent: STUB. Owner: see .brain/tasks/1-watcher.md (claim it there).
+"""Watcher agent (owner: daksh, .brain/tasks/1-watcher.md).
 
-The stub only logs and keeps the event chain flowing so the whole loop runs end to end.
-Replace the TODO bodies; keep the class name, `name` and subscriptions (or update them in one PR).
+Notices what changed on the Soony portal and hands exactly those files to the Ingest agent. No AI.
+
+- Live (MOCK_MODE=false + SOONY_API_TOKEN): GET /api/v1/files (path + SHA-256 per file), compare with the manifest
+  in `portal_files`, download only added/changed files into PORTAL_MIRROR, then system.process_drop(...).
+  Runs on a timer inside the backend when WATCH_INTERVAL_MIN > 0 (T1.5), or via POST /api/watch/check.
+- Offline / demo: the real drops are replayed from git history (core/replay.py, POST /api/replay/step).
 """
 from __future__ import annotations
 
-from ..core import events
-from ..core.coordinator import Event
-from ..core.models import IssueKind  # noqa: F401
+import hashlib
+import json
+import ssl
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from sqlmodel import select
+
+from ..core.config import get_settings
+from ..core.models import PortalFile, utcnow
+from ..core.parsing import safe_rel
+from ..core.store import session
 from .base import Agent, register
+
+
+def _ssl_ctx():
+    for ca in ("/etc/ssl/cert.pem", "/private/etc/ssl/cert.pem"):
+        if Path(ca).exists():
+            return ssl.create_default_context(cafile=ca)
+    return ssl.create_default_context()
 
 
 @register
 class Watcher(Agent):
     name = "watcher"
-    subscriptions = {}
+    subscriptions = {}  # triggered by timer / API / replay, not by events
 
-    # No subscriptions: the Watcher is triggered by a timer (T1.5), POST /api/run or the replay.
+    def _get(self, url: str) -> bytes:
+        s = get_settings()
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {s.soony_api_token}"})
+        with urllib.request.urlopen(req, timeout=60, context=_ssl_ctx()) as r:
+            return r.read()
+
+    def list_portal(self) -> list[dict]:
+        """[{path, bytes, sha256, url}] from the portal API."""
+        s = get_settings()
+        return json.loads(self._get(f"{s.soony_base_url}/api/v1/files"))["files"]
+
+    def diff(self, files: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+        """Compare the portal list with our manifest -> (added, changed, removed paths)."""
+        with session() as s:
+            known = {f.path: f for f in s.exec(select(PortalFile)).all() if not f.removed}
+        now = {f["path"]: f for f in files}
+        added = [f for p, f in now.items() if p not in known]
+        changed = [f for p, f in now.items() if p in known and known[p].sha256 != f["sha256"]]
+        removed = [p for p in known if p not in now]
+        return added, changed, removed
+
     def check(self) -> dict:
-        """TODO T1.1-T1.4: diff the portal file list (SHA-256), download changed files and call
-        system.process_drop(added=..., changed=..., removed=..., label=..., data_root=...)."""
-        self.log("todo", "Watcher.check not implemented yet (see .brain/tasks/1-watcher.md)")
-        return {}
+        """One live check (T1.1–T1.4). Returns a summary; in MOCK mode or without a token it does nothing."""
+        s = get_settings()
+        if s.mock_mode or not (s.soony_api_token and s.soony_base_url):
+            self.log("skip", "live portal check skipped (MOCK_MODE or no SOONY_API_TOKEN); use the replay")
+            return {"skipped": True}
+        files = self.list_portal()
+        added, changed, removed = self.diff(files)
+        mirror = s.portal_mirror
+        for f in added + changed:
+            rel = safe_rel(f["path"])
+            url = f.get("url") or f"{s.soony_base_url}/api/v1/files/{urllib.parse.quote(f['path'])}"
+            data = self._get(url)
+            if hashlib.sha256(data).hexdigest() != f["sha256"]:
+                self.log("error", f"checksum mismatch for {f['path']}", [{"path": f["path"]}])
+                continue
+            (mirror / rel).parent.mkdir(parents=True, exist_ok=True)
+            (mirror / rel).write_bytes(data)
+        with session() as db:
+            for f in added + changed:
+                db.add(PortalFile(path=f["path"], sha256=f["sha256"], bytes=f.get("bytes")))
+            for p in removed:
+                for row in db.exec(select(PortalFile).where(PortalFile.path == p)).all():
+                    row.removed, row.seen_at = True, utcnow()
+                    db.add(row)
+            db.commit()
+        label = f"portal check +{len(added)} ~{len(changed)} -{len(removed)}"
+        self.log("check", label, data={"added": len(added), "changed": len(changed), "removed": len(removed)})
+        if not (added or changed or removed):
+            return {"added": 0, "changed": 0, "removed": 0}
+        from .. import system  # local import: system imports the agents
+
+        return system.process_drop(added=[f["path"] for f in added], changed=[f["path"] for f in changed],
+                                   removed=removed, label=label, data_root=mirror, mode="live")

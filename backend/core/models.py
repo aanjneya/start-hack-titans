@@ -393,6 +393,49 @@ class RiskScore(SQLModel, table=True):
     computed_at: datetime = Field(default_factory=utcnow)
 
 
+class ColumnMapping(SQLModel, table=True):
+    """Learned once per file format (header fingerprint): which column means which field (T2.11)."""
+
+    __tablename__ = "column_mappings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    fingerprint: str = Field(index=True)  # hash of the normalized header row
+    target_table: str = ""
+    mapping: dict = _json(dict)  # {source_column: field}
+    options: dict = _json(dict)  # {"decimal_comma": bool, "date_order": "ymd|mdy|dmy", "list_sep": "|"}
+    method: str = ""  # glossary | llm | manual
+    score: Optional[float] = None
+    example_path: str = ""
+    confirmed: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Alias(SQLModel, table=True):
+    """Other names for our IDs: supplier names/vendor numbers, supplier part numbers (T2.7/T2.16)."""
+
+    __tablename__ = "aliases"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    kind: str = Field(index=True)  # supplier | part | po
+    alias: str = Field(index=True)  # normalized alias text
+    canonical_id: str = Field(index=True)  # e.g. SUP-0028, CMP-GAM-007
+    confidence: float = 1.0
+    method: str = ""  # master_data | profile | fuzzy | llm | manual
+    source: str = ""
+    confirmed: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class PortalFile(SQLModel, table=True):
+    """Watcher's manifest of the portal: what it last saw per file (live mode)."""
+
+    __tablename__ = "portal_files"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    path: str = Field(index=True)
+    sha256: str = ""
+    bytes: Optional[int] = None
+    seen_at: datetime = Field(default_factory=utcnow)
+    removed: bool = False
+
+
 class FieldChange(SQLModel, table=True):
     """Change log: every update of a truth-store value (filled missing field, correction, supplier reply)."""
 

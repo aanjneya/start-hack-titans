@@ -1,6 +1,6 @@
 # 1 · Watcher
 
-**Owner:** @daksh (moved from jivi Sat 19:20 so Jivi can focus on the Planner)
+**Owner:** @daksh (moved from jivi Sat 19:20) · ✅ **built Sat ~20:30** in `backend/agents/watcher.py`: live portal diff (SHA-256 manifest `portal_files`, downloads only changed files to `backend/data/portal/`), timer `WATCH_INTERVAL_MIN`, `POST /api/watch/check`; demo/offline: `POST /api/replay/step` replays the real drops one by one.
 
 ## What this agent does
 It checks the Soony portal every 15 minutes and notices when files are added, changed or removed. It downloads only those files and tells the next agent "these files are new". It never interprets anything; it only notices.
@@ -16,11 +16,11 @@ At 16:08 it saw 5 new files (launch status, CPO memo, part revision changes) and
 - **Gives:** a list of new, changed and removed files → **Ingest & Normalizer**.
 
 ## Tasks
-- [ ] **T1.1** Move the working checker (`monitor/drop_watch.py`, currently on Daksh's laptop) into the repo as the Watcher agent.
-- [ ] **T1.2** Instead of only writing a report, hand the list of changed files to the Ingest agent.
-- [ ] **T1.3** Demo mode: replay the real drops from `challenge/start-hack-data/versions/` and `data/` so we can show "a new drop arrives" on stage without Wi-Fi.
-- [ ] **T1.4** Write each check to the agent log ("16:08 · 5 added · 1 changed").
-- [ ] **T1.5** Live data: run on a timer inside the backend so new drops are picked up without anyone pressing a button; removed files are reported too.
+- [x] **T1.1** Move the working checker (`monitor/drop_watch.py`, currently on Daksh's laptop) into the repo as the Watcher agent.
+- [x] **T1.2** Instead of only writing a report, hand the list of changed files to the Ingest agent.
+- [x] **T1.3** Demo mode: replay the real drops from `challenge/start-hack-data/versions/` and `data/` so we can show "a new drop arrives" on stage without Wi-Fi.
+- [x] **T1.4** Write each check to the agent log ("16:08 · 5 added · 1 changed").
+- [x] **T1.5** Live data: run on a timer inside the backend so new drops are picked up without anyone pressing a button; removed files are reported too.
 
 ## When it's done
 - Replaying 14:15 → 16:08 → 17:23 produces exactly the file changes listed in `.brain/DATA_CHANGES.md`.

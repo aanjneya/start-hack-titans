@@ -7,6 +7,7 @@ Use these functions from the API, the replay, tests or a REPL:
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -22,6 +23,8 @@ from .core.store import init_db, reset_db, session
 
 _bus: Coordinator | None = None
 _agents: list[Agent] = []
+_lock = threading.RLock()  # the timer thread and API calls must not run the loop at the same time
+_replay_pos = 0
 
 
 def bus() -> Coordinator:
@@ -40,7 +43,8 @@ def agent_names() -> list[str]:
 
 def reset() -> None:
     """Empty the truth store and rebuild the agents (fresh replay)."""
-    global _bus
+    global _bus, _replay_pos
+    _replay_pos = 0
     reset_db()
     _bus = None
     bus()
@@ -60,6 +64,12 @@ def process_drop(
     mode: str = "manual",
 ) -> dict:
     """Record a drop and push it through all agents until nothing is left to do."""
+    with _lock:
+        return _process_drop(added=added, changed=changed, removed=removed, label=label, data_root=data_root,
+                             mode=mode)
+
+
+def _process_drop(*, added, changed, removed, label, data_root, mode) -> dict:
     root = Path(data_root or get_settings().data_root)
     added, changed, removed = list(added), list(changed), list(removed)
     run_id = trace.new_run_id()
@@ -88,10 +98,11 @@ def run_full(data_root: Path | None = None, label: str = "full run") -> dict:
 
 def emit(event_name: str, payload: dict, source: str = "api") -> dict:
     """Emit one event (e.g. decision.approved from the UI) and process the consequences."""
-    run_id = trace.new_run_id()
-    b = bus()
-    b.emit(event_name, payload, source=source)
-    return {"run_id": run_id, "steps": b.run_until_idle()}
+    with _lock:
+        run_id = trace.new_run_id()
+        b = bus()
+        b.emit(event_name, payload, source=source)
+        return {"run_id": run_id, "steps": b.run_until_idle()}
 
 
 def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, outbox_id: int | None = None,
@@ -114,9 +125,38 @@ def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, out
 def receive_reply(*, source: str = "api", **fields) -> dict:
     """Outside the agents (API, demo, tests): store the reply and run the loop
     (inbox -> Ingest applies it -> truth.updated -> Reconciler re-checks)."""
-    run_id = trace.new_run_id()
-    msg = store_reply(source=source, **fields)
-    b = bus()
-    b.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": msg.supplier_id, "issue_id": msg.issue_id},
-           source=source)
-    return {"inbox_id": msg.id, "run_id": run_id, "steps": b.run_until_idle()}
+    with _lock:
+        run_id = trace.new_run_id()
+        msg = store_reply(source=source, **fields)
+        b = bus()
+        b.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": msg.supplier_id,
+                                       "issue_id": msg.issue_id}, source=source)
+        return {"inbox_id": msg.id, "run_id": run_id, "steps": b.run_until_idle()}
+
+
+def watch_once() -> dict:
+    """One live portal check by the Watcher (no-op in MOCK mode)."""
+    bus()
+    watcher = next(a for a in _agents if a.name == "watcher")
+    with _lock:
+        return watcher.check()
+
+
+def replay_step() -> dict:
+    """Demo: send the NEXT real drop from git history through the agents ("a new drop arrives").
+    First call starts from an empty store with the baseline drop."""
+    global _replay_pos
+    from .core.replay import list_drops, materialize
+
+    with _lock:
+        drops = list_drops()
+        if _replay_pos == 0:
+            reset()
+        if _replay_pos >= len(drops):
+            return {"done": True, "drops": len(drops)}
+        drop = drops[_replay_pos]
+        _replay_pos += 1
+        root = materialize(drop)
+        result = process_drop(added=drop.added, changed=drop.changed, removed=drop.removed, label=drop.label,
+                              data_root=root, mode="replay")
+        return {**result, "step": _replay_pos, "of": len(drops)}

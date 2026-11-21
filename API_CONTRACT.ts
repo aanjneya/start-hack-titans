@@ -221,6 +221,8 @@ export const API_ROUTES = {
   HEALTH: '/api/health', // GET -> HealthCheckResponse
   RUN: '/api/run', // POST RunRequest -> RunResult
   REPLAY: '/api/replay', // POST ?upto=N -> RunResult[]
+  REPLAY_STEP: '/api/replay/step', // POST -> next real drop through the agents (demo: "a new drop arrives")
+  WATCH_CHECK: '/api/watch/check', // POST -> live portal check now (no-op in MOCK mode)
   DROPS: '/api/drops', // GET
   ISSUES: '/api/issues', // GET ?status= -> Issue[]
   CONFLICTS: '/api/conflicts', // GET

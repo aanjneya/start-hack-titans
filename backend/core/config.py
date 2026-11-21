@@ -45,6 +45,8 @@ class Settings:
     soony_base_url: str
     soony_api_token: str
     customer_setup: str
+    watch_interval_min: float
+    portal_mirror: Path
 
 
 @lru_cache(maxsize=1)
@@ -68,6 +70,8 @@ def get_settings() -> Settings:
         soony_base_url=get("SOONY_BASE_URL").rstrip("/"),
         soony_api_token=get("SOONY_API_TOKEN"),
         customer_setup=get("CUSTOMER_SETUP", "soony"),
+        watch_interval_min=float(get("WATCH_INTERVAL_MIN", "0") or 0),
+        portal_mirror=Path(get("PORTAL_MIRROR", str(BACKEND_ROOT / "data" / "portal"))),
     )
 
 

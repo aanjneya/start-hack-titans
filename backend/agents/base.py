@@ -54,8 +54,10 @@ class Agent:
             if issue is None:
                 issue = Issue(fingerprint=fingerprint, type=type, kind=kind, severity=severity,
                               summary=summary, evidence=ev, raised_by=self.name, **fields)
-                action = "raise_issue"
+                action, notify = "raise_issue", True
             else:
+                # only hand it on again if it came back or got worse (re-checks must not spam the Chaser)
+                notify = issue.status == "resolved" or kind != issue.kind or severity > issue.severity
                 issue.summary, issue.severity, issue.kind, issue.evidence = summary, severity, kind, ev
                 for k, v in fields.items():
                     setattr(issue, k, v)
@@ -67,7 +69,8 @@ class Agent:
             s.commit()
             s.refresh(issue)
         self.log(action, summary, ev, data={"issue_id": issue.id, "type": type, "kind": kind, "severity": severity})
-        self.emit(events.ISSUE_RAISED, {"issue_id": issue.id, "kind": kind})
+        if notify:
+            self.emit(events.ISSUE_RAISED, {"issue_id": issue.id, "kind": kind})
         return issue
 
     def resolve_issue(self, issue_id: int, reason: str) -> None:

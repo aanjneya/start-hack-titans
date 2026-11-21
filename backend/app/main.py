@@ -27,10 +27,26 @@ def ok(data: Any) -> dict:
     return {"ok": True, "data": data, "mocked": get_settings().mock_mode}
 
 
+def _watch_loop(stop) -> None:
+    minutes = get_settings().watch_interval_min
+    while not stop.wait(minutes * 60):
+        try:
+            system.watch_once()
+        except Exception as exc:  # keep the timer alive
+            trace.log("watcher", "error", f"timer: {type(exc).__name__}: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    import threading
+
     system.bus()  # creates tables + registers agents
+    stop = threading.Event()
+    s = get_settings()
+    if s.watch_interval_min > 0 and not s.mock_mode:
+        threading.Thread(target=_watch_loop, args=(stop,), daemon=True, name="watcher").start()
     yield
+    stop.set()
 
 
 app = FastAPI(title="start-hack-titans backend", lifespan=lifespan)
@@ -84,6 +100,18 @@ def replay(upto: Optional[int] = None) -> dict:
     from ..core.replay import replay as do_replay
 
     return ok(do_replay(upto=upto))
+
+
+@app.post("/api/replay/step")
+def replay_step() -> dict:
+    """Demo button: the next real drop arrives (first call = baseline on an empty store)."""
+    return ok(system.replay_step())
+
+
+@app.post("/api/watch/check")
+def watch_check() -> dict:
+    """Live portal check now (Watcher). Does nothing in MOCK mode."""
+    return ok(system.watch_once())
 
 
 @app.get("/api/drops")

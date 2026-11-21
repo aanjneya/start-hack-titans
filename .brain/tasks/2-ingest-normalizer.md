@@ -1,6 +1,8 @@
 # 2 · Ingest & Normalizer
 
-**Owner:** @daksh
+**Owner:** @daksh · ✅ **built Sat ~20:30** (`backend/agents/ingest.py`, `ingest_mapping.py`, `ingest_docs.py`; tests `backend/tests/test_ingest_watcher.py`). All 318 files in ~1.5 s, no errors.
+
+**Still open:** reading the 63 scans (delivery-note photos, 3 image-only PDFs) needs Claude vision (live); notices/contracts get an English summary + grounded facts only with `MOCK_MODE=false` (offline they get regex facts); when a supplier part can't be matched there's no Claude fallback yet (it becomes a human-check issue).
 
 ## What this agent does
 It reads every file Soony and the suppliers send (spreadsheets, Excel, PDFs, files in Polish, Chinese or Korean) and turns them into **one clean database with the same IDs everywhere**. Every value remembers which file it came from. It never deletes old values; it adds new facts next to them.
@@ -16,28 +18,28 @@ There are two order files: the new one uses commas and English column names; the
 - **Gives:** filled database tables → **Reconciler** and **Risk Rater**; anything it can't map → a "needs checking" note for the Reconciler.
 
 ## Tasks
-- [ ] **T2.1** Read the ERP spreadsheets in `soony/erp/`: orders (both formats), shipments, goods receipts, stock, pack-out log.
-- [ ] **T2.2** Read the master data in `soony/master/`: parts, BOM (parts per box), products, suppliers, routes, ports, carriers, plus the change files (`bom_delta_…`, `components_update_…`).
-- [ ] **T2.3** Read the Excel files: the logistics tracker (`soony/logistics/…v37_FINAL_final2.xlsx`) and `soony/context/launch_status.xlsx`.
-- [ ] **T2.4** Read each supplier's folder in `suppliers/<ID>_<Name>/`: profile (old CSV and new SAP JSON), parts list, `components_delta.csv`.
-- [ ] **T2.5** Read PDFs with AI: order confirmations (`order_confirmations/OA…_<PO>.pdf`), notices (often Polish/Chinese), contracts. Pull out quantity, date, part revision, price and bank details, translated to English.
-- [ ] **T2.6** Read the news file (`soony/news/…json`) and memos (`soony/context/*.docx`).
-- [ ] **T2.7** Map supplier part and order numbers to our `CMP-…` / `4500…` numbers, with a confidence score.
-- [ ] **T2.8** Let AI match column names by meaning, so renamed or new columns still work.
-- [ ] **T2.9** Store a source and timestamp on every row; change existing values only via `self.update_row(...)` (logged in `field_changes`).
-- [ ] **T2.10** Live data: replaced files add new facts (old ones kept as history); unknown new files, folders or formats are still stored and flagged, never crash the run.
+- [x] **T2.1** Read the ERP spreadsheets in `soony/erp/`: orders (both formats), shipments, goods receipts, stock, pack-out log.
+- [x] **T2.2** Read the master data in `soony/master/`: parts, BOM (parts per box), products, suppliers, routes, ports, carriers, plus the change files (`bom_delta_…`, `components_update_…`).
+- [x] **T2.3** Read the Excel files: the logistics tracker (`soony/logistics/…v37_FINAL_final2.xlsx`) and `soony/context/launch_status.xlsx`.
+- [x] **T2.4** Read each supplier's folder in `suppliers/<ID>_<Name>/`: profile (old CSV and new SAP JSON), parts list, `components_delta.csv`.
+- [x] **T2.5** Read PDFs with AI: order confirmations (`order_confirmations/OA…_<PO>.pdf`), notices (often Polish/Chinese), contracts. Pull out quantity, date, part revision, price and bank details, translated to English.
+- [x] **T2.6** Read the news file (`soony/news/…json`) and memos (`soony/context/*.docx`).
+- [x] **T2.7** Map supplier part and order numbers to our `CMP-…` / `4500…` numbers, with a confidence score.
+- [x] **T2.8** Let AI match column names by meaning, so renamed or new columns still work.
+- [x] **T2.9** Store a source and timestamp on every row; change existing values only via `self.update_row(...)` (logged in `field_changes`).
+- [x] **T2.10** Live data: replaced files add new facts (old ones kept as history); unknown new files, folders or formats are still stored and flagged, never crash the run.
 
-- [ ] **T2.19** You are the **only writer** of supply-chain data: apply supplier replies from the `inbox` (`on_reply`): extract the answer (quote + confidence), `update_row` the right row (fills empty fields, records a conflict if a different value exists), mark the message processed, then `emit_truth_updated` so the Reconciler re-checks.
+- [x] **T2.19** You are the **only writer** of supply-chain data: apply supplier replies from the `inbox` (`on_reply`): extract the answer (quote + confidence), `update_row` the right row (fills empty fields, records a conflict if a different value exists), mark the message processed, then `emit_truth_updated` so the Reconciler re-checks.
 
 ## Techniques from research (how Rossum, Tamr, Informatica, project44 do it: `.brain/Suggestions/ingest-research-data-unification.md`)
-- [ ] **T2.11** Learn each file format once: save the column mapping under a fingerprint of the file's headers; Claude only maps new header sets (headers + 5 sample rows + our tables + SAP glossary), known ones are read by plain code.
-- [ ] **T2.12** Plain-code parsing after mapping: the saved mapping decides delimiter, decimal comma and date format; values that don't parse are rejected and flagged, never guessed.
-- [ ] **T2.13** Sort PDFs by type first (order confirmation / notice / contract / other), then extract a fixed set of fields per type.
-- [ ] **T2.14** Grounding: every value Claude pulls from a PDF comes with the exact quote and page; code checks the quote really is in the PDF, otherwise the value is dropped.
-- [ ] **T2.15** Confidence from checks: order exists, quantity × price ≈ total, dates make sense, quote found. Below the threshold → a "needs human check" issue instead of a silent value.
-- [ ] **T2.16** Match suppliers and parts: saved name list first; else strip legal suffixes ("Sp. z o.o.", "Co., Ltd."), take the 5 closest names, let Claude pick one or "none" with a reason; save confirmed matches so it learns.
-- [ ] **T2.17** When sources disagree, pick the current value by source trust → confidence → newest, and keep the disagreement visible (`conflicts` table).
-- [ ] **T2.18** One standard shipment status list: translate ERP, tracker and carrier wording (e.g. `arrived_port`, "in transit") into the same events (also helps the Reconciler).
+- [x] **T2.11** Learn each file format once: save the column mapping under a fingerprint of the file's headers; Claude only maps new header sets (headers + 5 sample rows + our tables + SAP glossary), known ones are read by plain code.
+- [x] **T2.12** Plain-code parsing after mapping: the saved mapping decides delimiter, decimal comma and date format; values that don't parse are rejected and flagged, never guessed.
+- [x] **T2.13** Sort PDFs by type first (order confirmation / notice / contract / other), then extract a fixed set of fields per type.
+- [x] **T2.14** Grounding: every value Claude pulls from a PDF comes with the exact quote and page; code checks the quote really is in the PDF, otherwise the value is dropped.
+- [x] **T2.15** Confidence from checks: order exists, quantity × price ≈ total, dates make sense, quote found. Below the threshold → a "needs human check" issue instead of a silent value.
+- [x] **T2.16** Match suppliers and parts: saved name list first; else strip legal suffixes ("Sp. z o.o.", "Co., Ltd."), take the 5 closest names, let Claude pick one or "none" with a reason; save confirmed matches so it learns.
+- [x] **T2.17** When sources disagree, pick the current value by source trust → confidence → newest, and keep the disagreement visible (`conflicts` table).
+- [x] **T2.18** One standard shipment status list: translate ERP, tracker and carrier wording (e.g. `arrived_port`, "in transit") into the same events (also helps the Reconciler).
 
 ## When it's done
 - One run on the real data fills every table, and every row shows its source file.

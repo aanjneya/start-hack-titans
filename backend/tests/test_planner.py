@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend import system
@@ -93,7 +94,8 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
 
 
 
-def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path):
+@pytest.mark.parametrize("mode", ["pickup", "air"])
+def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monkeypatch, mode):
     from backend.core import store
     from backend.core.models import StockLot
 
@@ -120,17 +122,24 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path):
     reply = {"outbox_id": msg.id, "issue_id": msg.issue_id, "supplier_id": msg.supplier_id, "body": "[MOCK]"}
     fact = {"shipment_id": "SHP-2026-04313", "po_number": "4500318775", "po_line": 2, "revision": "C",
             "quantity": 20000, "arrival": arrival.isoformat()}
-    quote = {**fact, "mode": "pickup", "incremental_cost_eur": 500, "valid_until": arrival.isoformat()}
+    if mode == "air":
+        # Simulate a generous auto-spend limit for this quote. PP-07 still requires sign-off.
+        monkeypatch.setattr("backend.core.policy.needs_approval", lambda amount: amount == 0)
+    quote = {**fact, "mode": mode, "incremental_cost_eur": 500, "valid_until": arrival.isoformat()}
     before = simulate(load_plan())["FG-GH6-STD"].projected_packed
     client.post("/api/inbox", json={**reply, "quote": quote}).raise_for_status()
     card = current()
     option = card["options"][card["recommended"]]
-    assert option["description"] == "pickup" and option["copies_gained"] > 0
+    assert option["description"] == mode and option["copies_gained"] > 0
     assert option["cost_eur"] == 500 and option["approval_value_eur"] > 50000
-    assert option["approvers"] == ["Sofia Marchetti"] and option["needs_approval"]
+    signers = ["Sofia Marchetti", "Jonas Lindqvist"] if mode == "air" else ["Sofia Marchetti"]
+    assert option["approvers"] == signers and option["needs_approval"]
+    assert card["status"] == "proposed" and len(all_rows(OutboxMessage)) == 1
     url = f"/api/decisions/{card['id']}/approve"
     assert client.post(url, json={"by": "Paul Winter"}).status_code == 403
-    client.post(url, json={"by": "Sofia Marchetti"}).raise_for_status()
+    if mode == "air":
+        assert client.post(url, json={"by": signers[0]}).status_code == 403
+    client.post(url, json={"by": signers[0], "approvals": signers[1:]}).raise_for_status()
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before
     spend = all_rows(OutboxMessage)[-1]
     assert spend.decision_id == card["id"]

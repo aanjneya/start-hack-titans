@@ -12,16 +12,24 @@ from .planner_forecast import simulate
 from .planner_inputs import evidence
 
 
+def air_freight_limit(documents):
+    for doc in documents:
+        if doc.kind == "policy":
+            match = re.search(r"air freight up to EUR ([\d,]+) per calendar month", doc.text, re.I)
+            if match:
+                return float(match[1].replace(",", ""))
+    return None
+
+
 def approvers(value, category, plan, documents, *, air=False, monthly_spend=None, buyer="", freight_eur=None):
     roles = policy.approvers_for(value) if value is not None else []
     policy_docs = [d for d in documents if d.kind == "policy"]
-    if air:
-        for doc in policy_docs:
-            limit = re.search(r"air freight up to EUR ([\d,]+) per calendar month", doc.text, re.I)
-            if limit:
-                threshold = float(limit[1].replace(",", ""))
-                role = "Category lead" if monthly_spend is not None and value is not None and monthly_spend + (freight_eur if freight_eur is not None else value) <= threshold else "CPO"
-                roles = list(dict.fromkeys([*roles, role]))
+    threshold = air_freight_limit(policy_docs) if air else None
+    if threshold is not None:
+        charge = freight_eur if freight_eur is not None else value
+        within_limit = monthly_spend is not None and charge is not None and monthly_spend + charge <= threshold
+        role = "Category lead" if within_limit else "CPO"
+        roles = list(dict.fromkeys([*roles, role]))
     charts = []
     for doc in documents:
         if doc.kind == "org_chart":
@@ -135,7 +143,8 @@ def options_for(issue, plan, forecast, row):
                             remaining_shortfall=None if gained is None or forecast.shortfall is None else max(0, forecast.shortfall - gained),
                             actions=list(actions), risk_note=note, evidence=[*proof, *policy_proof],
                             approvers=signers, approval_value_eur=value,
-                            needs_approval=value is None or policy.needs_approval(value), available=available))
+                            needs_approval=(value is None or policy.needs_approval(value)
+                                            or (air and air_freight_limit(docs) is not None)), available=available))
     add("Keep the current plan", "baseline", 0, 0, "Retain released stock and confirmed line-ready deliveries.", value=0)
     targets = {a.get("target") for a in issue.suggested_actions or [] if a.get("target")}
     if issue.supplier_id:

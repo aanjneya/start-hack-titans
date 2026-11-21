@@ -30,3 +30,6 @@
 - Jivi's planner contract done: one mail per `decision_id`, approved decisions bypass the open-question limit. `test_planner.py` counts decision mails only (tell Jivi).
 - Tests on Windows: 54 passed, 6 failed, all path-separator issues in `test_ingest_watcher.py` (5) + `test_reconciler.py` replay (1, also red on clean main).
 - `tim` is 0 behind / ahead of main: the merge is a fast-forward.
+
+## Done 21:45
+- Merged to `main` as fast-forward (`5480c9e`), verify.sh green. Planner tests broken by the 21:38 drop were fixed by Jivi (`d6e40fe`), not by `aa98fe3` (still only on `origin/daksh`). Daksh: move this file to `handoffs/done/` once read.

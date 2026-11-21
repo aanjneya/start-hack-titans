@@ -368,9 +368,34 @@ def rate_suppliers(
         else:
             breakdown["telemetry"] = 0.0
 
-        # Cap external total at 45 pts (and at 22 pts if no portal_news export ban hit, so ambient odds stay realistic)
+        # B5. Official Regulatory Changes (US Federal Register BIS/USTR + EUR-Lex, 0..8 pts)
+        reg_sigs = [
+            sg for sg in signals
+            if sg.provider == "regulations" and country in sg.countries
+        ]
+        reg_pts = 0.0
+        if reg_sigs:
+            top_reg = max(reg_sigs, key=lambda x: x.score_0_100)
+            reg_pts = round(min(8.0, top_reg.score_0_100 * 0.10), 1)
+            breakdown["regulatory_change"] = reg_pts
+            reasons.append(ReasonItem(
+                factor="regulatory_change",
+                points=reg_pts,
+                text=top_reg.summary,
+                evidence=[top_reg.as_evidence()],
+                recommended_action={
+                    "type": "human_review",
+                    "label": f"Verify compliance impact of {top_reg.title[:70]} on {sup.name}",
+                    "target": sup_id,
+                    "owner": "planner",
+                },
+            ))
+        else:
+            breakdown["regulatory_change"] = 0.0
+
+        # Cap external total at 45 pts (and at 24 pts if no portal_news export ban hit, so ambient odds stay realistic)
         external_cap = 45.0 if news_pts > 0 else 24.0
-        external_total = min(external_cap, news_pts + ext_pol_pts + wx_pts + tel_pts)
+        external_total = min(external_cap, news_pts + ext_pol_pts + wx_pts + tel_pts + reg_pts)
 
         total_score = round(min(100.0, internal_total + external_total), 1)
         grade, rating = score_to_grade(total_score)

@@ -11,7 +11,7 @@
 - [x] @aanjneya 3 Reconciler & Gate (`backend/agents/reconciler.py`, `backend/agents/reconciler_rules.py`, `backend/tests/test_reconciler.py`, `.brain/tasks/3-reconciler-gate.md`) ✅ Sat 20:38 · Finding Format v1, 3-drop replay green (34 tests)
 - [~] @tim 4 Chaser (`backend/agents/chaser.py`, `.brain/tasks/4-chaser.md`)
 - [~] @jivi 5 Launch Planner & Decision Copilot (`backend/agents/planner.py`, `.brain/tasks/5-launch-planner.md`)
-- [~] @aanjneya 6 Risk Rater (`backend/agents/risk.py`, `.brain/tasks/6-risk-rater.md`)
+- [x] @aanjneya 6 Risk Rater (`backend/agents/risk.py`, `backend/agents/risk_signals.py`, `backend/agents/risk_scoring.py`, `backend/tests/test_risk.py`, `.brain/tasks/6-risk-rater.md`) ✅ Sat 21:05 · 3-tier Supplier→Part→Product Moody's engine + Polymarket/Open-Meteo/GDELT/Telemetry + Finding Format v1 (38 tests)
 - [ ] 7 Frontend: owner later (`web/`, `.brain/tasks/7-frontend-later.md`)
 - Shared hubs (change with care, tiny commit straight to main): `backend/core/models.py`, `backend/core/events.py`, `API_CONTRACT.ts`
 

@@ -16,13 +16,13 @@ Our "Moody's" idea from the 16:00 discussion, and a differentiator for the judge
 - **Gives:** a grade + reasons per part and supplier → **Reconciler** (what to check first), **Launch Planner** (which fixes are safe), and later the risk table on screen.
 
 ## Tasks
-- [ ] **T6.1** Pick 4–5 simple, explainable factors: how many suppliers a part has, hours of buffer before the line stops, supplier health (approval status, downtime notices), transport risk (sea vs air, stale tracking), news hitting the supplier's country.
-- [ ] **T6.2** Calculate a 1–6 grade per part and per supplier from those factors (simple, transparent weights).
-- [ ] **T6.3** Write the top 3 reasons in plain words, each linked to its source file.
-- [ ] **T6.4** Recalculate when new data or news arrives, and log grade changes (e.g. "PackRight: 3 → 5 after export notice").
-- [ ] **T6.5** List single-source parts as candidates for a second source (CPO memo, post-launch).
-- [ ] **T6.7** For every grade ≥ 5 also raise a Finding (`.brain/DATA_FORMAT.md`) with the reasons and suggested actions, so the Planner gets it in the same format as everything else.
-- [ ] **T6.6** Never show a risk alone: every high grade comes with a suggested action (second source, safety stock, expedite, split order) and hands it to the Planner as a decision card (office hours: "I need the risk, but I want the solution").
+- [x] **T6.1** Pick 4–5 simple, explainable factors: how many suppliers a part has, hours of buffer before the line stops, supplier health (approval status, downtime notices), transport risk (sea vs air, stale tracking), news hitting the supplier's country. — @aanjneya
+- [x] **T6.2** Calculate a 1–6 grade per part and per supplier from those factors (simple, transparent weights). — @aanjneya
+- [x] **T6.3** Write the top 3 reasons in plain words, each linked to its source file. — @aanjneya
+- [x] **T6.4** Recalculate when new data or news arrives, and log grade changes (e.g. "PackRight: 3 → 5 after export notice"). — @aanjneya
+- [x] **T6.5** List single-source parts as candidates for a second source (CPO memo, post-launch). — @aanjneya
+- [x] **T6.7** For every grade ≥ 5 also raise a Finding (`.brain/DATA_FORMAT.md`) with the reasons and suggested actions, so the Planner gets it in the same format as everything else. — @aanjneya
+- [x] **T6.6** Never show a risk alone: every high grade comes with a suggested action (second source, safety stock, expedite, split order) and hands it to the Planner as a decision card (office hours: "I need the risk, but I want the solution"). — @aanjneya
 
 ## When it's done
 - After the 17:23 drop, CMP-MAG-005 and Guangzhou PackRight jump to high risk with the right reasons.

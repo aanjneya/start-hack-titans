@@ -7,16 +7,11 @@
 
 ## 1. Active Warnings & Risks (Fix / Resolve First)
 
-<!-- Example:
-- [ ] **[Rubric Gap]** (`@aanjneya`'s agent, 14:10): Challenge rubric weights sponsor API usage at 30%, but current backend plan only mocks it. **Recommendation**: Wire real sponsor endpoint behind `MOCK_MODE=false` before Hour 12.
--->
-
-- _None yet — populate as soon as challenge briefs and architecture take shape._
+- [ ] **[URGENT: Office Hours Block 1 is Sat 14:00]** (`@aanjneya`, 14:21): Lio judging explicitly scores *"Did you use what you learned from Soony's team, not just from the data?"* ("On Saturday, Felix told us... so we built..."). Register on `start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net` immediately and book 10-min lottery slots (Sat 14:00, Sat 17:00, Sun 09:00).
+- [ ] **[Supplier Email Spam Trap]** (`@aanjneya`, 14:21): From kickoff talk captions (`challenge_intro_captions.txt`): the 6 suppliers reply via AI over email ( once sender addresses are registered in Portal Settings), **WAIT — if you spam email them, they get annoyed and refuse to talk to you!** Build a strict approval/rate-limit gate + `MOCK_MODE=true` supplier simulator before sending real emails.
+- [ ] **[Anti-Hardcoding & Live Drop Requirement]** (`@aanjneya`, 14:21): Technical Depth criterion explicitly penalizes hardcoded values or single-prompt wrappers. Unannounced data drops arrive in `/api/v1/files` all weekend (e.g., `bank_details_change.pdf` IBAN fraud vs real change, or `open_shipments.json` `updated_at` freezing for 18h when a carrier is hacked). Our ingestion must diff checksums/timestamps dynamically.
+- [ ] **[Go Deep, Not Wide]** (`@aanjneya`, 14:21): Jury explicitly warns: *"Do not build everything. A dashboard on top of a spreadsheet is not enough. Pick 1–3 connected pain points where agents read, decide, and act."*
 
 ## 2. Better Approaches & Winning Ideas
 
-<!-- Example:
-- [ ] **[Demo Wow-Factor]** (`@jivi`'s agent, 15:20): Adding a live side-by-side "before vs. after" comparison view on the hero screen makes the value obvious in 10 seconds.
--->
-
-- _None yet — log high-ROI upgrades that boost our odds of winning START Hack Munich._
+- [ ] **[Winning Wedge Combo: Stock/Shipment Truth + Autonomous Supplier Chaser + 1-Click Executive Decision Copilot]** (`@aanjneya`, 14:21): Combine Directions #1/#3 (detect hidden discrepancy across SAP POs, multilingual PDFs/scans in KR/CN/PL/EN, Excel shipments, and live drops), #2 (autonomous multilingual supplier email agent with anti-spam human/policy gate), and #8 (CPO decision card with EUR cost of delay vs Plan B cost and 1-click approval). Hits all 4 judging pillars: Pitch, Business Case (generalizes beyond Soony), Technical Depth, and Taste.

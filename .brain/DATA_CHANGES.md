@@ -5,7 +5,7 @@ Read this before building on portal data: files appear and change without notice
 Full per-check log, reports and every file version: `start-hack-data/README.md`,
 `start-hack-data/reports/`, `start-hack-data/versions/<check>/` (old copies), `start-hack-data/data/` (current).
 
-**Last check:** 2026-11-21 14-32 Berlin · 308 files, 47.2 MB · no changes
+**Last check:** 2026-11-21 14-36 Berlin · 308 files, 47.2 MB · no changes
 
 ## Checks with changes (newest first)
 

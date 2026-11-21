@@ -42,6 +42,13 @@ def test_legacy_sap_orders_are_normalized(full):
     assert po.po_line == 1  # SAP item 00010 -> line 1
     assert 0 < po.unit_price < 100  # decimal comma "1,5200" -> 1.52
     assert po.order_date and po.requested_date and po.requested_date.month in range(1, 13)  # US dates
+    # legacy codes in the words of the current export (audit 23:18): GL/LO, buyer initials, currency from master
+    assert {p.status for p in legacy} <= {"delivered", "cancelled", "open"}
+    assert all(p.quantity < 0 for p in legacy if p.status == "cancelled")
+    current_buyers = {p.buyer for p in all_rows(PurchaseOrder) if not p.source.endswith("legacy_2024-2025H1.csv")}
+    assert {p.buyer for p in legacy} <= current_buyers
+    masters = {s.supplier_id: s.currency for s in all_rows(Supplier)}
+    assert all(p.currency == masters[p.supplier_id] for p in legacy)
 
 
 def test_documents_confirmations_aliases_and_statuses(full):
@@ -264,3 +271,100 @@ def test_book_stock_sheet_with_date_in_title(tmp_path):
     assert by_part["CMP-GAM-003"].quantity == 6000 and str(by_part["CMP-GAM-003"].snapshot_date) == "2026-11-21"
     assert by_part["FG-GH6-STD"].quantity == 602000  # packed copies sheet = finished-goods stock
     assert _errors() == []
+
+
+def test_renamed_po_export_is_mapped_offline(tmp_path):
+    """A re-exported PO file with other column names, semicolons and decimal commas still updates the POs
+    without AI (word matching, validated like an AI mapping); no duplicate POs."""
+    import csv
+    import io
+    import shutil
+
+    from backend.core.models import ColumnMapping, PurchaseOrder
+
+    root = tmp_path / "data"
+    shutil.copytree(config.get_settings().data_root, root)
+    system.process_drop(added=system.list_data_files(root), label="seed", data_root=root)
+    path = root / "soony/erp/purchase_orders_2025H2-2026.csv"
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    target = next(r for r in rows if r["status"] == "open" and float(r["quantity"]) > 0)
+    new_qty = int(float(target["quantity"])) + 1234
+    rename = {"quantity": "Order Qty", "status": "PO Status", "requested_date": "Requested Delivery",
+              "promised_date": "Promised Delivery", "unit_price": "Net Price", "supplier_id": "Vendor",
+              "material_id": "Material", "po_line": "Item", "po_number": "PO Number"}
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=";")
+    w.writerow([rename.get(c, c) for c in rows[0]])
+    for r in rows:
+        vals = {**r, "unit_price": r["unit_price"].replace(".", ",")}
+        if r is target:
+            vals["quantity"] = str(new_qty)
+        w.writerow(list(vals.values()))
+    path.write_text(out.getvalue(), encoding="utf-8")
+    before = len(all_rows(PurchaseOrder))
+    system.process_drop(changed=["soony/erp/purchase_orders_2025H2-2026.csv"], label="renamed", data_root=root)
+    po = [p for p in all_rows(PurchaseOrder)
+          if p.po_number == target["po_number"] and p.po_line == int(target["po_line"])]
+    assert [p.quantity for p in po] == [new_qty]
+    assert len(all_rows(PurchaseOrder)) == before
+    with session() as s:
+        methods = {m.method for m in s.exec(select(ColumnMapping)).all()}
+    assert "glossary_words" in methods and _errors() == []
+
+
+def _replay_until(fragment: str) -> None:
+    """Replay real drops up to (and including) the first one that adds a file containing `fragment`."""
+    drops = list_drops()
+    idx = next((i for i, d in enumerate(drops) if any(fragment in f for f in d.added)), None)
+    if idx is None:
+        pytest.skip(f"no drop with {fragment} in history")
+    for _ in range(idx + 1):
+        system.replay_step()
+
+
+def test_audit_fixes_on_the_real_drops():
+    """Independent audit (23:10): packed-copies sheet updates launch status; notes from a second file are added,
+    not swapped; coordinates keep their decimals; every unread scan is counted; Boise's 'on hold' is tagged."""
+    from backend.core.models import Document, LaunchStatus, SupplierPartMap
+
+    _replay_until("stock_update")
+    ls = {r.product_id: r for r in all_rows(LaunchStatus)}
+    assert (ls["FG-GH6-STD"].packed, ls["FG-GH6-STD"].still_to_pack) == (602000, 38000)
+    assert (ls["FG-GH6-CE"].packed, ls["FG-GH6-CE"].still_to_pack) == (60300, 11700)
+    magnet = next(r for r in all_rows(SupplierPartMap) if r.component_id == "CMP-MAG-005")
+    assert "fitted by supplier" in magnet.note and "cannot export" in magnet.note
+    erp = {s.shipment_id: s for s in all_rows(Shipment) if s.source.endswith("open_shipments.csv")}
+    assert erp["SHP-2026-04281"].last_lon == 9.785 and erp["SHP-2026-04276"].last_lat == 53.54
+    scans = [d for d in all_rows(Document) if d.kind == "scan"]
+    issue = next(i for i in all_rows(Issue) if i.type == "scans_unread")
+    assert str(len(scans)) in issue.summary
+    boise = next(d for d in all_rows(Document) if d.path.endswith("OA26144214_4500318769.pdf"))
+    assert "on_hold" in boise.extracted["facts"]["signals"]
+    assert _errors() == []
+
+
+def test_carrier_timestamp_is_not_overwritten(tmp_path):
+    """A frozen tracking feed must stay frozen: when a later export changes a shipment's ETA but not its
+    'updated_at', the stored carrier time must not become the ingest time."""
+    import csv
+    import io
+    import shutil
+
+    root = tmp_path / "data"
+    shutil.copytree(config.get_settings().data_root, root)
+    system.process_drop(added=system.list_data_files(root), label="seed", data_root=root)
+    path = root / "soony/erp/open_shipments.csv"
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    target = rows[0]
+    before = next(s for s in all_rows(Shipment)
+                  if s.shipment_id == target["shipment_id"] and s.source.endswith("open_shipments.csv")).updated_at
+    target["eta"] = "2026-12-31"
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=list(rows[0]))
+    w.writeheader()
+    w.writerows(rows)
+    path.write_text(out.getvalue(), encoding="utf-8")
+    system.process_drop(changed=["soony/erp/open_shipments.csv"], label="eta moved", data_root=root)
+    after = next(s for s in all_rows(Shipment)
+                 if s.shipment_id == target["shipment_id"] and s.source.endswith("open_shipments.csv"))
+    assert str(after.eta).startswith("2026-12-31") and after.updated_at == before

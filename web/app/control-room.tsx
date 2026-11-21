@@ -7,6 +7,7 @@ import {
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
+import DataDrawer from "./data-drawer";
 
 type Snapshot = {
   health: HealthCheckResponse | null;
@@ -39,6 +40,18 @@ const SEVERITY: Record<number, { label: string; cls: string }> = {
   2: { label: "Watch", cls: "bg-act-soft text-act" },
   1: { label: "Info", cls: "bg-dock text-muted" },
 };
+
+/** "Email SUP-0028 · PO 4500318775/2 · SHP-2026-04313" for each action of an option (who it reaches). */
+function actionTargets(actions: Record<string, unknown>[] | undefined): string[] {
+  return (actions ?? []).map((a) => {
+    const v = (k: string) => (a[k] == null || a[k] === "" ? "" : String(a[k]));
+    const po = v("po_number") ? `PO ${v("po_number")}${v("po_line") ? `/${v("po_line")}` : ""}` : "";
+    const type = v("type").replaceAll("_", " ");
+    return [type && type[0].toUpperCase() + type.slice(1), v("supplier_id"), po, v("shipment_id"), v("part")]
+      .filter(Boolean)
+      .join(", ");
+  });
+}
 
 async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
   const [health, forecast, decisions, issues, outbox, inbox, risk, trace] = await Promise.allSettled([
@@ -74,6 +87,8 @@ export default function ControlRoom() {
   const [dropBusy, setDropBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
   const [tab, setTab] = useState<"findings" | "emails" | "risk">("findings");
+  const [showData, setShowData] = useState(false);
+  const closeData = useCallback(() => setShowData(false), []);
 
   const refresh = useCallback(async () => {
     const { snap: next, online: up } = await loadSnapshot();
@@ -122,11 +137,12 @@ export default function ControlRoom() {
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
-  // Cards that recommend the same step are shown once (the newest), with a count.
+  // Cards that recommend the very same step (same headline AND same action, supplier, PO line) are shown once
+  // (the newest), with a count. Same headline but another PO stays a card of its own.
   const decisionGroups = useMemo(() => {
     const groups = new Map<string, DecisionCard[]>();
     for (const d of snap.decisions) {
-      const key = d.summary || d.title;
+      const key = `${d.summary || d.title}|${actionTargets(d.options[d.recommended ?? -1]?.actions).join(";")}`;
       groups.set(key, [...(groups.get(key) ?? []), d]);
     }
     return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
@@ -185,7 +201,7 @@ export default function ControlRoom() {
         </section>
 
         <aside aria-labelledby="agents" className="space-y-6">
-          <AgentLanes trace={snap.trace} now={now} />
+          <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
           <LiveLog trace={snap.trace} />
         </aside>
       </div>
@@ -216,6 +232,7 @@ export default function ControlRoom() {
         {tab === "emails" && <Emails outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
         {tab === "risk" && <Risk rows={snap.risk} />}
       </section>
+      {showData && <DataDrawer onClose={closeData} />}
     </div>
   );
 }
@@ -386,6 +403,11 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
                   {card.recommended === i && <span className="text-xs font-semibold text-act">Recommended</span>}
                 </span>
                 {o.description && <span className="block text-sm text-muted">{o.description}</span>}
+                {actionTargets(o.actions).map((t) => (
+                  <span key={t} className="block text-sm text-ink">
+                    {t}
+                  </span>
+                ))}
                 <span className="mt-1 flex flex-wrap gap-x-4 text-sm tabular">
                   <span>Costs {eur(o.cost_eur)}</span>
                   <span>Gains {fmt(o.copies_gained)} copies</span>
@@ -446,7 +468,7 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
   );
 }
 
-function AgentLanes({ trace, now }: { trace: AgentLogEntry[]; now: number }) {
+function AgentLanes({ trace, now, onOpenData }: { trace: AgentLogEntry[]; now: number; onOpenData: () => void }) {
   const stats = useMemo(() => {
     const out = new Map<string, { last?: AgentLogEntry; count: number; errors: number }>();
     for (const e of trace) {
@@ -473,19 +495,35 @@ function AgentLanes({ trace, now }: { trace: AgentLogEntry[]; now: number }) {
           const active = ts && now ? now - ts.getTime() < 15_000 : false;
           return (
             <li key={a.id} className="transition hover:bg-dock/50">
-              <Link href={`/observability?agent=${a.id}`} className="block px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span
-                    aria-hidden
-                    className={`inline-block h-2.5 w-2.5 rounded-full ${active ? "beat" : ""}`}
-                    style={{ background: a.color, opacity: s ? 1 : 0.3 }}
-                  />
-                  <span className="font-semibold">{a.name}</span>
-                  <span className="ml-auto text-xs text-muted tabular">
-                    {s ? ago(s.last?.ts, now) : "idle"}
-                    {s && s.errors > 0 && <span className="ml-2 font-semibold text-stop">{s.errors} errors</span>}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2 px-4 pt-3">
+                <span
+                  aria-hidden
+                  className={`inline-block h-2.5 w-2.5 rounded-full ${active ? "beat" : ""}`}
+                  style={{ background: a.color, opacity: s ? 1 : 0.3 }}
+                />
+                <span className="font-semibold">{a.name}</span>
+                {a.id === "watcher" && (
+                  <button
+                    onClick={onOpenData}
+                    className="rounded border border-rule px-2 py-0.5 text-xs font-semibold text-act hover:bg-act-soft"
+                    title="Open the data the Watcher fetched, cleaned by Ingest, with SAP table and field names"
+                  >
+                    SAP data
+                  </button>
+                )}
+                <Link
+                  href={`/observability?agent=${a.id}`}
+                  className="rounded border border-rule px-2 py-0.5 text-xs font-semibold text-act hover:bg-act-soft"
+                  title="View agent trace and observability report"
+                >
+                  Report →
+                </Link>
+                <span className="ml-auto text-xs text-muted tabular">
+                  {s ? ago(s.last?.ts, now) : "idle"}
+                  {s && s.errors > 0 && <span className="ml-2 font-semibold text-stop">{s.errors} errors</span>}
+                </span>
+              </div>
+              <Link href={`/observability?agent=${a.id}`} className="block px-4 pb-3 pt-1">
                 <p className="text-xs text-muted">{a.job}</p>
                 {s?.last && (
                   <p className="mt-1 truncate text-sm" title={s.last.detail}>

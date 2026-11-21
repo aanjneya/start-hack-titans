@@ -295,3 +295,48 @@ def part_journey(material_id: Optional[str] = None, limit: int = 500) -> dict:
         sql += " WHERE material_id = :material_id"
         params["material_id"] = material_id
     return ok(query(sql + " LIMIT :limit", **params))
+
+
+# The clean data the Watcher + Ingest built (read-only; the UI shows it with SAP field names).
+_TRUTH_TABLES = {
+    "purchase_orders": "PurchaseOrder", "order_confirmations": "OrderConfirmation", "goods_receipts": "GoodsReceipt",
+    "stock": "StockLot", "shipments": "Shipment", "materials": "Material", "bom": "BomLine", "products": "Product",
+    "suppliers": "Supplier", "supplier_part_map": "SupplierPartMap", "engineering_changes": "EngineeringChange",
+    "packout": "Packout", "launch_status": "LaunchStatus",
+}
+
+
+def _truth_model(table: str):
+    from ..core import models
+
+    if table not in _TRUTH_TABLES:
+        raise HTTPException(404, f"unknown table {table!r}; choose one of {sorted(_TRUTH_TABLES)}")
+    return getattr(models, _TRUTH_TABLES[table])
+
+
+@app.get("/api/truth")
+def truth_tables() -> dict:
+    """Data tables with their row counts."""
+    from sqlalchemy import func
+
+    with session() as s:
+        return ok([{"table": t, "rows": s.exec(select(func.count()).select_from(_truth_model(t))).one()}
+                   for t in _TRUTH_TABLES])
+
+
+@app.get("/api/truth/{table}")
+def truth_rows(table: str, limit: int = 1000, q: Optional[str] = None) -> dict:
+    """Rows of one data table (each with its source file). q = text filter over all fields."""
+    model = _truth_model(table)
+    rows = _rows(model, order=model.id, limit=5000)
+    if q:
+        needle = q.casefold()
+        rows = [r for r in rows if any(needle in str(v).casefold() for v in r.values())]
+    rows = rows[:max(1, min(limit, 5000))]
+    # `source` is where a row first came from; also say which file changed it last (evidence for the shown values)
+    with session() as s:
+        last = {c.row_id: c.source for c in s.exec(select(FieldChange).where(FieldChange.table_name == table)
+                                                   .order_by(FieldChange.id)).all()}
+    for r in rows:
+        r["last_source"] = last.get(r.get("id"), "")
+    return ok(rows)

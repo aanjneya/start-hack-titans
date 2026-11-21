@@ -8,3 +8,5 @@
 - **OCR misreads European thousands** (2026-11-21): "125.000" came back as 125. Fix: model copies `quantity_as_printed`, our `parse_number` converts; hand corrections in `quantity_corrected_by_hand`.
 - **Windows backslashes in stored paths** (2026-11-21, from Tim): `str(Path)` → `soony\erp\…`; use `.as_posix()` for every path that goes into the DB or evidence.
 
+- **`updated_at` on shipments is the carrier's clock, not ours** (2026-11-21, audit): `store.update_row` stamped "now" on every changed row, so an ETA change would have made a frozen tracking feed look fresh. Fix: `store.SOURCE_CLOCK_TABLES = {"shipments"}` are never stamped; test `test_carrier_timestamp_is_not_overwritten`.
+- **"9.785" is a longitude, "42.900" is 42,900** (2026-11-21, audit): a dot + 3 digits is ambiguous. Ingest now decides the decimal mark per column from the column's other values (`IngestNormalizer._decimal_styles`), coordinates are always dot-decimal, and `parse_number` never reads "0.xxx" as thousands.

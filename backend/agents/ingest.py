@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 import typing
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,7 +28,7 @@ from ..core import events, llm
 from ..core.coordinator import Event
 from ..core.models import (
     Alias, Document, InboxMessage, Issue, IssueKind, LaunchStatus, Material, OrderConfirmation, PurchaseOrder,
-    Shipment, ShipmentMaterial, ShipmentPO, Supplier, SupplierPartMap,
+    Shipment, ShipmentMaterial, ShipmentPO, StockLot, Supplier, SupplierPartMap,
 )
 from ..core.parsing import (
     decode, flatten_json, norm_header, norm_name, office_text, parse_date, parse_datetime, parse_number,
@@ -45,6 +45,14 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".webp"}
 SUP_RE = re.compile(r"(SUP-\d{4})(?!\d)")
 
 #: one standard shipment status list (T2.18); carrier/ERP/tracker words -> canonical status
+#: PO status codes of legacy SAP exports (ZZSTAT) in the words of the current export.
+PO_STATUS_MAP = {"gl": "delivered", "geliefert": "delivered", "lo": "cancelled", "gelöscht": "cancelled",
+                 "storniert": "cancelled", "offen": "open"}
+#: Coordinates: a dot is always a decimal mark ('9.785' is a longitude, not 9,785).
+DECIMAL_DOT_FIELDS = {"last_lat", "last_lon"}
+#: Free-text fields: a second source adds its text instead of replacing the first one.
+NOTE_FIELDS = {"note", "notes", "remark"}
+
 STATUS_MAP = {
     "booked": "booked", "planned": "booked", "pending": "booked",
     "in_transit": "in_transit", "in transit": "in_transit", "on the way": "in_transit", "departed": "in_transit",
@@ -102,6 +110,7 @@ class IngestNormalizer(Agent):
         self._unmapped: list[str] = []
         self._scans: list[str] = []
         self._unresolved: set[str] = set()
+        self._packed: list[tuple[dict, datetime, str]] = []  # applied after all files (launch status may come later)
         counts = {"rows_inserted": 0, "rows_updated": 0, "documents": 0}
         self._counts = counts
         for rel in files:
@@ -112,6 +121,8 @@ class IngestNormalizer(Agent):
                 self._unmapped.append(rel)
         for rel in p.get("removed", []):
             self.log("file_removed", f"{rel} was removed from the portal; its rows stay as history", [{"path": rel}])
+        for counted, as_of, rel in sorted(self._packed, key=lambda x: x[1]):
+            self._packed_to_launch_status(counted, as_of, rel)
         self._raise_summary_issues()
         self.log("drop_ingested", f"{len(files)} files: +{counts['rows_inserted']} rows, "
                  f"{counts['rows_updated']} rows updated, {counts['documents']} documents",
@@ -219,11 +230,16 @@ class IngestNormalizer(Agent):
         as_of = parse_datetime(re.search(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?", title).group(0)) if (
             title and re.search(r"\d{4}-\d{2}-\d{2}", title)) else None
         existing = self._existing(target, rel)
+        styles = self._decimal_styles(mapping, rows)
+        po_context = self._po_context(mapping, rows) if target.model is PurchaseOrder else {}
         new_rows, links = [], []
+        counted: dict[str, float] = {}  # finished goods in a timestamped stock sheet = packed copies
         for i, raw in enumerate(rows):
-            values, lists = self._convert(target, mapping, raw)
+            values, lists = self._convert(target, mapping, raw, styles)
             if not any(v not in (None, "") for v in values.values()):
                 continue
+            if target.model is StockLot and as_of and values.get("material_id") and values.get("quantity") is not None:
+                counted[str(values["material_id"])] = values["quantity"]
             if "supplier_id" in target.model.model_fields:
                 sup = values.get("supplier_id")
                 if not sup and file_supplier:
@@ -235,6 +251,8 @@ class IngestNormalizer(Agent):
                 values[target.title_date_field] = as_of.date() if field_type is date else as_of
             if target.model is Shipment and values.get("status"):
                 values["status"] = STATUS_MAP.get(str(values["status"]).lower().strip(), values["status"])
+            if target.model is PurchaseOrder:
+                self._normalize_po(values, po_context)
             key = tuple(values.get(k) for k in target.key)
             if any(v in (None, "") for k, v in zip(target.key, key) if k in target.required):
                 continue
@@ -248,6 +266,8 @@ class IngestNormalizer(Agent):
                 same_source = existing.get(("__source__", row_id)) == rel
                 present = {k: v for k, v in values.items() if v not in (None, "")}  # a missing cell never erases
                 present = self._drop_stale(target.model, row_id, present, rel)
+                if not same_source:
+                    present = self._merge_notes(target.model, row_id, present)
                 res = self.update_row(target.model, row_id, present, source=rel,
                                       reason=f"{'file updated' if same_source else 'other source'}: {rel} row {i + 1}",
                                       on_conflict="overwrite" if same_source else "newest",
@@ -262,10 +282,51 @@ class IngestNormalizer(Agent):
             self._counts["rows_inserted"] += len(new_rows)
         if links:
             self._store_links(links, rel)
+        if counted:
+            self._packed.append((counted, as_of, rel))
         self._tables.add(target.model.__tablename__)
         self.log("table_ingested", f"{rel} -> {target.model.__tablename__}: {len(rows)} rows "
                  f"({'saved mapping' if mapping.reused else mapping.method}, score {mapping.score:.2f})",
                  [{"path": rel}], data={"mapping": mapping.columns, "options": mapping.options})
+
+    def _packed_to_launch_status(self, counted: dict[str, float], as_of: datetime, rel: str) -> None:
+        """A timestamped count of finished goods ('Packed copies DC-HAM, 2026-11-21 20:50') is newer packing
+        progress than the launch status sheet: update packed / still to pack, so every agent sees the same number.
+        Only when the count is strictly newer (a date-only snapshot never beats a same-day status with a time)."""
+        def utc(dt: datetime) -> datetime:
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+        for ls in all_rows(LaunchStatus):
+            qty = counted.get(ls.product_id)
+            if qty is None or ls.day_one_demand is None or (ls.as_of and utc(ls.as_of) >= utc(as_of)):
+                continue
+            values = {"packed": int(qty), "still_to_pack": max(0, int(ls.day_one_demand - qty)), "as_of": as_of}
+            res = self.update_row(LaunchStatus, ls.id, values, source=rel, on_conflict="overwrite",
+                                  reason=f"packed copies counted {as_of:%Y-%m-%d %H:%M} ({rel})",
+                                  entity_key=ls.product_id)
+            if res.changes or res.conflicts:
+                self._results.append(res)
+                self._tables.add(LaunchStatus.__tablename__)
+
+    @staticmethod
+    def _merge_notes(model, row_id: int, values: dict) -> dict:
+        """A second file's note is added to the first one, not swapped in: 'fitted by supplier into CMP-GAM-007'
+        (components.csv) must survive 'sub-supplier cannot export' (components_delta.csv)."""
+        notes = {f: v.strip() for f, v in values.items() if f in NOTE_FIELDS and isinstance(v, str) and v.strip()}
+        if not notes:
+            return values
+        with session() as s:
+            row = s.get(model, row_id)
+        out = dict(values)
+        for field, new in notes.items():
+            old = str(getattr(row, field, "") or "").strip()
+            if not old or old in new:
+                continue  # nothing to keep, or the new text already contains the old one
+            if new in old:
+                out.pop(field)  # already part of the note
+            else:
+                out[field] = f"{old} | {new}"
+        return out
 
     @staticmethod
     def _drop_stale(model, row_id: int, values: dict, rel: str) -> dict:
@@ -305,7 +366,54 @@ class IngestNormalizer(Agent):
             out[("__source__", row.id)] = row.source
         return out
 
-    def _convert(self, target, mapping: Mapping, raw: dict) -> tuple[dict, dict]:
+    @staticmethod
+    def _po_context(mapping: Mapping, rows: list[dict]) -> dict:
+        """What a legacy SAP export lacks: buyer full names (from the other PO exports and this file) and the
+        supplier's currency from the supplier master (all POs with a currency use exactly that currency)."""
+        buyer_col = next((h for h, f in mapping.columns.items() if f == "buyer"), None)
+        names = {p.buyer for p in all_rows(PurchaseOrder) if p.buyer and " " in p.buyer.strip()}
+        if buyer_col:
+            names |= {str(r.get(buyer_col, "")).strip() for r in rows if " " in str(r.get(buyer_col, "")).strip()}
+        currencies = {s.supplier_id: s.currency for s in all_rows(Supplier) if s.supplier_id and s.currency}
+        return {"names": sorted(names), "currencies": currencies}
+
+    @staticmethod
+    def _normalize_po(values: dict, ctx: dict) -> None:
+        """Legacy SAP codes -> the words the newer export uses: status GL/LO -> delivered/cancelled, buyer 'FBRUNN'
+        -> 'Felix Brunner' (initial + surname prefix, only if exactly one known name fits), missing currency ->
+        supplier master currency. Done while reading, so reprocessing the file gives the same values."""
+        status = values.get("status")
+        if status:
+            values["status"] = PO_STATUS_MAP.get(str(status).lower().strip(), status)
+        buyer = str(values.get("buyer") or "").strip()
+        if buyer and " " not in buyer and buyer.isupper() and len(buyer) > 2:
+            hits = [n for n in ctx.get("names", [])
+                    if n.split()[0][:1].upper() == buyer[0] and n.split()[-1].upper().startswith(buyer[1:])]
+            if len(hits) == 1:
+                values["buyer"] = hits[0]
+        if not values.get("currency") and values.get("supplier_id") in ctx.get("currencies", {}):
+            values["currency"] = ctx["currencies"][values["supplier_id"]]
+
+    @staticmethod
+    def _decimal_styles(mapping: Mapping, rows: list[dict]) -> dict[str, bool]:
+        """Per column: is the decimal mark a comma (True) or a dot (False)? Decided from the column's own values
+        ('53.54', '6.11', '0.125' -> dot; '1,52', '1,5200' -> comma). Columns with only '42.900'-style values stay
+        undecided, so the global heuristic (thousands) still applies to them."""
+        out: dict[str, bool] = {}
+        for col, field in mapping.columns.items():
+            if field in DECIMAL_DOT_FIELDS:
+                out[col] = False
+                continue
+            dot = comma = False
+            for r in rows:
+                s = str(r.get(col, "") or "").strip().replace(" ", "")
+                dot |= bool(re.fullmatch(r"-?(\d+\.(\d{1,2}|\d{4,})|0\.\d+)", s))
+                comma |= bool(re.fullmatch(r"-?(\d+,(\d{1,2}|\d{4,})|0,\d+)", s))
+            if dot != comma:
+                out[col] = comma
+        return out
+
+    def _convert(self, target, mapping: Mapping, raw: dict, styles: Optional[dict] = None) -> tuple[dict, dict]:
         values: dict[str, Any] = {}
         lists: dict[str, list[str]] = {}
         opts = mapping.options or {}
@@ -319,7 +427,8 @@ class IngestNormalizer(Agent):
             info = target.model.model_fields.get(field)
             if info is None:
                 continue
-            values[field] = self._coerce(_base_type(info.annotation), val, opts, field)
+            col_opts = {**opts, "decimal_comma": styles[col]} if styles and col in styles else opts
+            values[field] = self._coerce(_base_type(info.annotation), val, col_opts, field)
         return values, lists
 
     @staticmethod
@@ -615,6 +724,10 @@ class IngestNormalizer(Agent):
     def _raise_summary_issues(self) -> None:
         """Ingest's own findings, in FINDING FORMAT v1 (.brain/DATA_FORMAT.md)."""
         if self._scans:
+            # count every scan still unread, not only this drop's (earlier drops' scans are still unread too)
+            pending = [d.path for d in all_rows(Document)
+                       if d.kind == "scan" and str((d.extracted or {}).get("ocr", "")).startswith("pending")]
+            self._scans = sorted(set(pending) | set(self._scans))
             why = "offline mode" if llm.is_mock() else "Claude was not reachable"
             self.raise_issue(
                 type="scans_unread", kind=IssueKind.HUMAN_CHECK, severity=2, key="scans",

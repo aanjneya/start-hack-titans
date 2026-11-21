@@ -7,9 +7,9 @@
 - **Opening visual**: _TBD_
 
 ## 2. Live Demo Flow (0:30 – 2:15)
-1. **Step 1**: _User action → what the judges see_
-2. **Step 2**: _Core AI / sponsor API magic moment_
-3. **Step 3**: _Tangible output / impact metric_
+1. Replay the revision drop. Open the Standard sleeve Finding and show the blocked PackRight lot alongside the two Karton rev C lots.
+2. Compare the €1,215 fresh print (zero extra copies by Sunday) with confirming the existing delivery. Approve the information request and open the simulated Chaser outbox.
+3. Replay the labeled site release and supplier reply. Show the accepted 20,000 sleeves, unchanged Standard total, and game-card constraint. The decision avoids a rush charge with no on-time benefit. Offline command on `jivi`: `backend/.venv/bin/python -m backend.planner_demo`.
 
 ## 3. Backup Plan
 - **Layer 1 (Primary)**: Live deployed cloud URL from `main` (no single-laptop/HDMI failure point).

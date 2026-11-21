@@ -11,7 +11,7 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T17-48 (Europe/Berlin)
+### Drop check 2026-11-21T17-53 (Europe/Berlin)
 Portal now: 318 files, 47.4 MB
 No changes since last check.
 
@@ -19,6 +19,7 @@ No changes since last check.
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 17-53 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T17-53.md) |
 | 2026-11-21 17-48 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T17-48.md) |
 | 2026-11-21 17-23 | 318 · 47.4 MB | 5 | 0 | 0 | **5 added · 0 changed · 0 removed** — `soony/news/2026-11-21_export_controls.json`, `suppliers/SUP-0018_Pune_Diecast_Works/profile.json`, `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv` … Export-control drop: news says China now needs end-use licences for NdFeB magnets (4-8 weeks), and Guangzhou PackRight (SUP-0029) says its magnet sub-supplier cannot export. CMP-MAG-005 (4 lid magnets per Collector's box) is single-source with stock 0, no PO, no receipts; that answers the onboarding question 'why does the stock list show no lid magnets?' only if the magnets ship inside the boxes. Collector's box CMP-GAM-007 stock is 27,500 vs ~18,900 still to pack, but its lead time jumps from 63 to 105 days for December deliveries. Pune Diecast (statue second source) now shows status 'watch' with its conditional release expired on 30 Oct and not extended; profiles now also come as SAP JSON (new format next to the old CSV). | [report](reports/2026-11-21T17-23.md) |
 | 2026-11-21 17-08 | 313 · 47.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T17-08.md) |

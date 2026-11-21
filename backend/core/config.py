@@ -47,6 +47,19 @@ class Settings:
     customer_setup: str
     watch_interval_min: float
     portal_mirror: Path
+    # Chaser mailbox (shared team mailbox; see .brain/tasks/4-chaser.md)
+    mail_address: str = ""
+    mail_password: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: str = "starttls"  # starttls | ssl
+    imap_host: str = ""
+    imap_port: int = 993
+    chaser_send: bool = False  # True only on the ONE instance that really sends + polls the mailbox
+    chaser_min_gap_min: float = 60.0  # minimum minutes between two mails to the same supplier
+    chaser_escalate_h: float = 4.0  # no reply after N hours -> escalate to a buyer
+    chaser_poll_min: float = 0.0  # poll the mailbox every N minutes inside the backend (0 = off)
+    chaser_max_steps: int = 8  # max tool-use iterations of the Chaser agent per finding
 
 
 @lru_cache(maxsize=1)
@@ -72,6 +85,18 @@ def get_settings() -> Settings:
         customer_setup=get("CUSTOMER_SETUP", "soony"),
         watch_interval_min=float(get("WATCH_INTERVAL_MIN", "0") or 0),
         portal_mirror=Path(get("PORTAL_MIRROR", str(BACKEND_ROOT / "data" / "portal"))),
+        mail_address=get("MAIL_ADDRESS"),
+        mail_password=get("MAIL_PASSWORD"),
+        smtp_host=get("SMTP_HOST"),
+        smtp_port=int(get("SMTP_PORT", "587") or 587),
+        smtp_security=get("SMTP_SECURITY", "starttls").lower(),
+        imap_host=get("IMAP_HOST"),
+        imap_port=int(get("IMAP_PORT", "993") or 993),
+        chaser_send=_flag(env.get("CHASER_SEND"), default=False),
+        chaser_min_gap_min=float(get("CHASER_MIN_GAP_MIN", "60") or 60),
+        chaser_escalate_h=float(get("CHASER_ESCALATE_H", "4") or 4),
+        chaser_poll_min=float(get("CHASER_POLL_MIN", "0") or 0),
+        chaser_max_steps=int(get("CHASER_MAX_STEPS", "8") or 8),
     )
 
 

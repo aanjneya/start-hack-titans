@@ -36,6 +36,22 @@ def _watch_loop(stop) -> None:
             trace.log("watcher", "error", f"timer: {type(exc).__name__}: {exc}")
 
 
+def _chaser():
+    system.bus()
+    return next(a for a in system._agents if a.name == "chaser")
+
+
+def _chaser_poll_loop(stop) -> None:
+    minutes = get_settings().chaser_poll_min
+    while not stop.wait(minutes * 60):
+        try:
+            with system._lock:
+                _chaser().poll_inbox()
+                system.bus().run_until_idle()
+        except Exception as exc:  # keep the timer alive
+            trace.log("chaser", "error", f"poll timer: {type(exc).__name__}: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     import threading
@@ -45,6 +61,8 @@ async def lifespan(_: FastAPI):
     s = get_settings()
     if s.watch_interval_min > 0 and not s.mock_mode:
         threading.Thread(target=_watch_loop, args=(stop,), daemon=True, name="watcher").start()
+    if s.chaser_poll_min > 0 and s.chaser_send and not s.mock_mode:
+        threading.Thread(target=_chaser_poll_loop, args=(stop,), daemon=True, name="chaser-poll").start()
     yield
     stop.set()
 
@@ -112,6 +130,15 @@ def replay_step() -> dict:
 def watch_check() -> dict:
     """Live portal check now (Watcher). Does nothing in MOCK mode."""
     return ok(system.watch_once())
+
+
+@app.post("/api/chaser/poll")
+def chaser_poll() -> dict:
+    """Read new supplier replies from the shared mailbox now (only on the CHASER_SEND instance)."""
+    with system._lock:
+        result = _chaser().poll_inbox()
+        result["steps"] = system.bus().run_until_idle()
+    return ok(result)
 
 
 @app.get("/api/drops")

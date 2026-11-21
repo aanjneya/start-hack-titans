@@ -167,9 +167,11 @@ export interface OutboxMessage {
   subject: string;
   body: string;
   body_en: string;
-  status: 'draft' | 'approved' | 'sent' | 'replied' | 'failed';
+  status: 'draft' | 'approved' | 'sent' | 'replied' | 'failed' | 'escalated';
   created_at: string;
   sent_at: string | null;
+  message_id: string; // Message-ID we sent; replies are matched by In-Reply-To
+  run_id: string;
 }
 
 export interface CustomerSetup {

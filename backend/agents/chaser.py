@@ -46,7 +46,9 @@ How to work:
 4. Escalate to a buyer (escalate_to_buyer) instead of emailing when: the supplier has no contact address,
    the matter needs a commercial decision (prices, bank details, contract changes), or send_email refuses
    because a question is still open and the finding is severity 5.
-5. Finish with one sentence saying what you did and why.
+5. If get_finding shows an approved_decision_id, a human already approved this action: send exactly the
+   requested message (order / confirmation request with our references) and do not escalate it again.
+6. Finish with one sentence saying what you did and why.
 
 Suppliers stop answering if they are spammed: when send_email refuses, accept it and do not retry."""
 
@@ -82,13 +84,25 @@ class Chaser(Agent):
         self.chase(issue_id=issue.id, supplier_id=issue.supplier_id)
 
     def on_email_requested(self, event: Event) -> None:
+        """Planner hand-off after a human approved a decision (Jivi's contract, handoff 2055):
+        payload {supplier_id, decision_id, issue_id, po_number, po_line, shipment_id, part, ask}.
+        Exactly one mail per decision_id; the decision_id is kept on the outbox row."""
         p = event.payload
+        decision_id = p.get("decision_id")
+        if decision_id:
+            with session() as s:
+                done = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == decision_id)).first()
+            if done:
+                self.log("skip", f"decision #{decision_id} already has mail #{done.id}",
+                         data={"decision_id": decision_id, "outbox_id": done.id})
+                return
+        request = {k: p.get(k) for k in ("po_number", "po_line", "shipment_id", "part") if p.get(k)}
         self.chase(issue_id=p.get("issue_id"), supplier_id=p.get("supplier_id", ""),
-                   ask=p.get("ask", ""), decision_id=p.get("decision_id"))
+                   ask=p.get("ask", ""), decision_id=decision_id, request=request)
 
     # -- main entry ----------------------------------------------------------
     def chase(self, *, issue_id: Optional[int], supplier_id: str = "", ask: str = "",
-              decision_id: Optional[int] = None) -> dict:
+              decision_id: Optional[int] = None, request: Optional[dict] = None) -> dict:
         issue = None
         if issue_id:
             with session() as s:
@@ -98,7 +112,7 @@ class Chaser(Agent):
             self.log("skip", f"finding #{issue_id}: no supplier_id, nobody to ask", data={"issue_id": issue_id})
             return {"status": "skipped", "reason": "no supplier"}
         ctx = {"issue": issue, "issue_id": issue_id, "supplier_id": supplier_id, "ask": ask,
-               "decision_id": decision_id, "outbox_id": None, "escalated": False}
+               "decision_id": decision_id, "request": request or {}, "outbox_id": None, "escalated": False}
         if llm.is_mock():
             return self._fallback(ctx)
         try:
@@ -146,11 +160,19 @@ class Chaser(Agent):
                             "source": str(pc.relative_to(root.parent))}
         return {"supplier_id": supplier_id, "email": "", "error": "no contact found"}
 
-    def blocked_reason(self, supplier_id: str) -> Optional[str]:
-        """Anti-spam rule (T4.2): one open question per supplier and a minimum gap. None = allowed."""
+    def blocked_reason(self, supplier_id: str, decision_id: Optional[int] = None) -> Optional[str]:
+        """Anti-spam rule (T4.2): one open question per supplier and a minimum gap. None = allowed.
+
+        Mails that execute a human-approved decision are never blocked by open questions (they are
+        deduplicated per decision_id instead): a buyer's approved order must not wait for an unrelated reply."""
+        if decision_id:
+            with session() as s:
+                dup = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == decision_id)).first()
+            return f"decision #{decision_id} already has mail #{dup.id}" if dup else None
         gap = timedelta(minutes=get_settings().chaser_min_gap_min)
         with session() as s:
             rows = s.exec(select(OutboxMessage).where(OutboxMessage.supplier_id == supplier_id)
+                          .where(OutboxMessage.decision_id.is_(None))
                           .order_by(OutboxMessage.id.desc())).all()
         open_rows = [r for r in rows if r.status in OPEN_STATUSES]
         if open_rows:
@@ -177,7 +199,7 @@ class Chaser(Agent):
     def write_mail(self, ctx: dict, subject: str, body: str, body_en: str) -> dict:
         """Store + (maybe) send one mail. All safety rules are enforced here."""
         supplier_id = ctx["supplier_id"]
-        reason = self.blocked_reason(supplier_id)
+        reason = self.blocked_reason(supplier_id, ctx["decision_id"])
         if reason:
             self.log("skip_rate_limit", reason, data={"issue_id": ctx["issue_id"], "supplier_id": supplier_id})
             return {"sent": False, "refused": reason}
@@ -206,9 +228,14 @@ class Chaser(Agent):
                 self._set_outbox(msg.id, status="failed")
                 self.log("error", f"send #{msg.id} failed: {exc}", data={"outbox_id": msg.id})
                 return {"sent": False, "outbox_id": msg.id, "error": str(exc)}
+        elif llm.is_mock():
+            # offline demo: delivery is simulated, so the Planner sees the decision as dispatched
+            self._set_outbox(msg.id, status="sent", sent_at=utcnow())
+            self.log("mock_send", f"#{msg.id} to {supplier_id} ({msg.language}) simulated (MOCK_MODE): {subject}",
+                     evidence, data={"outbox_id": msg.id, "issue_id": ctx["issue_id"], "mocked": True})
         else:
-            self.log("draft_email", f"#{msg.id} to {supplier_id} ({msg.language}) NOT sent (CHASER_SEND off "
-                     f"or mock): {subject}", evidence, data={"outbox_id": msg.id, "issue_id": ctx["issue_id"]})
+            self.log("draft_email", f"#{msg.id} to {supplier_id} ({msg.language}) NOT sent (CHASER_SEND off): "
+                     f"{subject}", evidence, data={"outbox_id": msg.id, "issue_id": ctx["issue_id"]})
         if ctx["issue_id"]:
             self._set_issue_status(ctx["issue_id"], "asked")
         return {"sent": live, "outbox_id": msg.id, "to": msg.to_email,
@@ -241,7 +268,8 @@ class Chaser(Agent):
         def get_finding() -> str:
             """Get the finding (problem) you must clarify, incl. ids, impact, suggested actions and evidence files."""
             issue = ctx["issue"]
-            data: dict[str, Any] = {"supplier_id": ctx["supplier_id"], "request_from_planner": ctx["ask"] or None}
+            data: dict[str, Any] = {"supplier_id": ctx["supplier_id"], "request_from_planner": ctx["ask"] or None,
+                                    "approved_decision_id": ctx["decision_id"], **ctx["request"]}
             if issue:
                 data.update({k: getattr(issue, k) for k in (
                     "id", "type", "severity", "summary", "reason", "part_id", "supplier_id", "shipment_id",
@@ -336,7 +364,11 @@ class Chaser(Agent):
     # -- fallback (MOCK_MODE) -------------------------------------------------
     def _fallback(self, ctx: dict) -> dict:
         issue = ctx["issue"]
-        refs = " / ".join(x for x in ((issue.po_number, issue.shipment_id, issue.part_id) if issue else ()) if x)
+        r = ctx["request"]
+        po = f"{r['po_number']}/{r['po_line']}" if r.get("po_number") and r.get("po_line") else r.get("po_number")
+        parts = (po, r.get("shipment_id"), r.get("part")) if r else (
+            (issue.po_number, issue.shipment_id, issue.part_id) if issue else ())
+        refs = " / ".join(str(x) for x in parts if x)
         question = ctx["ask"] or (issue.summary if issue else "please confirm the open point")
         contact = self.contact(ctx["supplier_id"])
         name = contact.get("contact_name") or "Sir or Madam"

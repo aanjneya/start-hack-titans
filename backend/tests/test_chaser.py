@@ -42,12 +42,12 @@ def test_contact_comes_from_supplier_profile():
     assert c29["email"] and c29["language"]
 
 
-def test_missing_info_finding_creates_one_draft_and_marks_asked():
+def test_missing_info_finding_creates_one_mail_and_marks_asked():
     ch = _chaser()
     issue = _raise(ch)
     rows = _outbox()
     assert len(rows) == 1
-    assert rows[0].status == "draft"  # mock mode: never really sent
+    assert rows[0].status == "sent"  # mock mode: delivery simulated, nothing really sent
     assert rows[0].to_email.startswith("a.nowak.karton-nowak@")
     assert "SHP-2026-04276" in rows[0].subject
     with session() as s:
@@ -108,3 +108,32 @@ def test_finding_without_supplier_is_skipped():
                    summary="Unknown sender", evidence=[{"path": "soony/erp/open_shipments.csv"}])
     system.bus().run_until_idle()
     assert _outbox() == []
+
+
+def _request(decision_id, supplier="SUP-0028"):
+    from backend.core import events
+
+    system.bus().emit(events.EMAIL_REQUESTED, {
+        "supplier_id": supplier, "decision_id": decision_id, "issue_id": None, "po_number": "4500318792",
+        "po_line": 1, "shipment_id": "SHP-2026-04276", "part": "CMP-GAM-004",
+        "ask": "Confirm released revision, quantity and timed site delivery for PO 4500318792/1."}, source="planner")
+    system.bus().run_until_idle()
+
+
+def test_planner_request_one_mail_per_decision_keeps_decision_id():
+    _chaser()
+    _request(41)
+    _request(41)  # planner re-emits: no second mail
+    rows = [r for r in _outbox() if r.decision_id == 41]
+    assert len(rows) == 1
+    assert rows[0].status in ("sent", "replied")  # Planner marks the decision executed on sent/replied
+    assert "4500318792/1" in rows[0].subject
+
+
+def test_approved_decision_is_not_blocked_by_open_question():
+    ch = _chaser()
+    _raise(ch)  # open question to SUP-0028
+    assert ch.blocked_reason("SUP-0028")
+    _request(42)
+    assert any(r.decision_id == 42 for r in _outbox())
+    assert "still open" in ch.blocked_reason("SUP-0028")  # questions stay limited

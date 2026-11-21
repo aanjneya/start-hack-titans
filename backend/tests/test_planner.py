@@ -15,6 +15,11 @@ from backend.core.store import all_rows
 from backend.planner_demo import run
 
 
+
+def _decision_mails():
+    """Planner-dispatched mails only. The live Chaser also writes question mails for missing_info findings."""
+    return [o for o in all_rows(OutboxMessage) if o.decision_id]
+
 def test_partial_late_and_repeated_deliveries_use_remaining_line_capacity():
     at = datetime(2026, 1, 1, 8, tzinfo=timezone.utc)
     end = at + timedelta(hours=2)
@@ -63,7 +68,7 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
     # Repeated approvals and replies do not send another email or count the same units again.
     assert client.post(f"/api/decisions/{result['decision_id']}/approve", json={}).status_code == 409
     system.emit(events.DECISION_APPROVED, {"decision_id": result["decision_id"]})
-    assert len(all_rows(OutboxMessage)) == 1
+    assert len(_decision_mails()) == 1
     reply = result["reply"]
     client.post("/api/inbox", json=reply).raise_for_status()
     assert "Duplicate" in all_rows(InboxMessage)[-1].result["review"]
@@ -118,7 +123,7 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
                     if "rev blocked" in c["title"] and c["title"].endswith("CMP-GAM-004"))
     card = current()
     assert client.post(f"/api/decisions/{card['id']}/approve", json={"by": "Paul Winter"}).status_code == 200
-    msg = all_rows(OutboxMessage)[-1]
+    msg = _decision_mails()[-1]
     reply = {"outbox_id": msg.id, "issue_id": msg.issue_id, "supplier_id": msg.supplier_id, "body": "[MOCK]"}
     fact = {"shipment_id": "SHP-2026-04313", "po_number": "4500318775", "po_line": 2, "revision": "C",
             "quantity": 20000, "arrival": arrival.isoformat()}
@@ -134,14 +139,14 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
     assert option["cost_eur"] == 500 and option["approval_value_eur"] > 50000
     signers = ["Sofia Marchetti", "Jonas Lindqvist"] if mode == "air" else ["Sofia Marchetti"]
     assert option["approvers"] == signers and option["needs_approval"]
-    assert card["status"] == "proposed" and len(all_rows(OutboxMessage)) == 1
+    assert card["status"] == "proposed" and len(_decision_mails()) == 1
     url = f"/api/decisions/{card['id']}/approve"
     assert client.post(url, json={"by": "Paul Winter"}).status_code == 403
     if mode == "air":
         assert client.post(url, json={"by": signers[0]}).status_code == 403
     client.post(url, json={"by": signers[0], "approvals": signers[1:]}).raise_for_status()
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before
-    spend = all_rows(OutboxMessage)[-1]
+    spend = _decision_mails()[-1]
     assert spend.decision_id == card["id"]
     client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before + option["copies_gained"]
@@ -154,7 +159,7 @@ def test_rejection_and_auto_threshold(tmp_path, monkeypatch):
     system.run_full()
     card = next(c for c in all_rows(DecisionCard) if "rev blocked" in c.title and c.title.endswith("CMP-GAM-004") and c.status == "proposed")
     client.post(f"/api/decisions/{card.id}/reject", json={"by": "buyer"}).raise_for_status()
-    assert not all_rows(OutboxMessage)
+    assert not _decision_mails()
     policy_path = tmp_path / "auto.json"
     settings = {"customer": "Example", "autonomy": {"mode": "auto", "auto_execute_below_eur": 1},
                 "approval_matrix": [{"below_eur": None, "approvers": ["Buyer"]}]}
@@ -165,7 +170,7 @@ def test_rejection_and_auto_threshold(tmp_path, monkeypatch):
     # An explicitly rejected recommendation stays rejected for the same evidence.
     system.emit(events.TRUTH_UPDATED, {"tables": ["inbox"]})
     return_cards = [c for c in all_rows(DecisionCard) if c.title == card.title]
-    assert not any(o.issue_id in card.issue_ids for o in all_rows(OutboxMessage))
+    assert not any(o.issue_id in card.issue_ids for o in _decision_mails())
     assert return_cards[-1].status == "rejected"
     assert any(c.decided_by == "policy" for c in all_rows(DecisionCard) if c.title != card.title)
     assert policy.needs_approval(1) and not policy.needs_approval(0)

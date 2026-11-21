@@ -11,7 +11,7 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T22-08 (Europe/Berlin)
+### Drop check 2026-11-21T22-23 (Europe/Berlin)
 Portal now: 332 files, 53.2 MB
 No changes since last check.
 
@@ -19,6 +19,7 @@ No changes since last check.
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 22-23 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T22-23.md) |
 | 2026-11-21 22-08 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T22-08.md) |
 | 2026-11-21 21-54 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T21-54.md) |
 | 2026-11-21 21-38 | 332 · 53.2 MB | 14 | 0 | 0 | **14 added · 0 changed · 0 removed** — `soony/erp/goods_receipts_update.csv`, `soony/erp/stock_update_2026-11-21.xlsx`, `soony/receiving/DC-HAM/20260903_DN-260831-382.jpg` … Evening drop: 12 new delivery-note scans, a goods-receipt update and book stock after the late shift. Packed at 20:50: Standard 602,000 (38,000 left), Collector's 60,300 (11,700 left). Book stock shows clear cases CMP-GAM-003 at only 6,000 vs ~38,000 Standard still to pack, while 350,000 cases sit at CTA Hamburg (SHP-2026-04276, ready for pick-up); game cards CMP-GAM-001 at 42,900 vs ~49,700 needed (Hwaseong delivered 28,000 of 48,000, rest after launch). New traps: one pallet booked as GH6 sleeves CMP-GAM-004 holds 4,000 GH5 sleeves; and Art Book book stock 77,800 still includes the 72,000 phantom books from WZ-261116-473, so real stock is ~5,800 vs 11,700 Collector's copies left. | [report](reports/2026-11-21T21-38.md) |

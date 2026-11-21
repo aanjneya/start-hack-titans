@@ -11,7 +11,7 @@ from backend.agents.planner_options import approvers
 from backend.app.main import app
 from backend.core import events
 from backend.core.replay import list_drops
-from backend.core.models import AgentLog, DecisionCard, Document, Forecast, InboxMessage, LaunchStatus, OutboxMessage
+from backend.core.models import AgentLog, DecisionCard, Document, Forecast, InboxMessage, Issue, LaunchStatus, OutboxMessage
 from backend.core.store import all_rows
 from backend.planner_demo import SLEEVE_SCENARIO_COMMIT, run, sleeve_scenario_steps
 
@@ -216,6 +216,10 @@ def test_latest_replay_retires_received_sleeve_request():
     saw_receipt = False
     for drop in list_drops():
         system.replay_step()
+        cards = all_rows(DecisionCard)
+        for card in cards:
+            if card.status == "proposed" and card.options[0].get("remaining_shortfall", 0):
+                assert card.options[card.recommended]["description"] != "baseline"
         if drop.commit == SLEEVE_SCENARIO_COMMIT:
             historical_id, = [c.id for c in all_rows(DecisionCard) if c.status == "proposed"
                                and "rev blocked" in c.title and c.title.endswith("CMP-GAM-004")]
@@ -227,7 +231,6 @@ def test_latest_replay_retires_received_sleeve_request():
             assert editions["FG-GH6-STD"].still_to_pack == 38000
             assert editions["FG-GH6-CE"].still_to_pack == 11700
             assert plan.stock["CMP-GAM-003"] <= 6000
-            cards = all_rows(DecisionCard)
             assert next(c.status for c in cards if c.id == historical_id) == "outdated"
             for c in cards:
                 if c.status == "proposed" and c.recommended is not None:
@@ -238,3 +241,45 @@ def test_latest_replay_retires_received_sleeve_request():
     forecasts = simulate(load_plan())
     assert forecasts
     assert all(f.projected_packed is not None and f.shortfall >= 0 for f in forecasts.values())
+
+
+def test_received_sleeves_route_review_and_repair_persisted_cards():
+    for drop in list_drops():
+        system.replay_step()
+        if "soony/erp/goods_receipts_update.csv" in drop.added:
+            break
+    else:
+        pytest.fail("The sleeve receipt is missing from the replay history.")
+    cards = all_rows(DecisionCard)
+    sleeve, = [c for c in cards if c.status == "proposed" and c.title.startswith("Standard")
+               and "rev blocked" in c.title and c.title.endswith("CMP-GAM-004")]
+    assert sleeve.options[sleeve.recommended]["description"] == "human review"
+    # Restoring a database from before the recommendation fix also retires the stale card.
+    from backend.core.store import session
+    with session() as db:
+        persisted = db.get(DecisionCard, sleeve.id)
+        persisted.recommended = 0
+        db.add(persisted)
+        db.commit()
+    system._bus = None
+    system.bus().run_until_idle()
+    cards = all_rows(DecisionCard)
+    assert next(c.status for c in cards if c.id == sleeve.id) == "outdated"
+    sleeve, = [c for c in cards if c.title == sleeve.title and c.status == "proposed"]
+    review = sleeve.options[sleeve.recommended]
+    assert review["description"] == "human review" and review["available"] and review["needs_approval"]
+    assert review["actions"][0]["part"] == simulate(load_plan())["FG-GH6-STD"].limiting_part
+    assert review["remaining_shortfall"] == 34800
+    rush, = [o for o in sleeve.options if o["label"] == "Order a fresh rush print"]
+    assert rush["cost_eur"] == 1215 and rush["copies_gained"] == 0 and not rush["available"]
+    client = TestClient(app)
+    url = f"/api/decisions/{sleeve.id}/approve"
+    approval = {"by": review["approvers"][0], "approvals": review["approvers"][1:]}
+    response = client.post(url, json=approval)
+    response.raise_for_status()
+    assert response.json()["data"]["decision"]["status"] == "executed"
+    system.emit(events.DECISION_APPROVED, {"decision_id": sleeve.id})
+    followup, = [i for i in all_rows(Issue) if i.type == "recovery_review"]
+    assert followup.kind == "human_check" and followup.part_id == review["actions"][0]["part"]
+    assert followup.impact["copies_at_risk"] == 34800
+    assert not _decision_mails(sleeve.id)

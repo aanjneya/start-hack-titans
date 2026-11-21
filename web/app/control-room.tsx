@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ago, API_URL, clock, eur, fmt, getData, parseTs, postData,
@@ -277,6 +278,13 @@ function TopBar(props: {
         >
           {props.busy ? "Agents are working" : "Play next data drop"}
         </button>
+        <Link
+          href="/observability"
+          className="rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-semibold text-ink hover:border-act hover:text-act"
+          title="Open dedicated AI Observability dashboard with per-agent visual reports"
+        >
+          AI Observability
+        </Link>
       </div>
     </header>
   );
@@ -464,28 +472,30 @@ function AgentLanes({ trace, now }: { trace: AgentLogEntry[]; now: number }) {
           const ts = parseTs(s?.last?.ts);
           const active = ts && now ? now - ts.getTime() < 15_000 : false;
           return (
-            <li key={a.id} className="px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span
-                  aria-hidden
-                  className={`inline-block h-2.5 w-2.5 rounded-full ${active ? "beat" : ""}`}
-                  style={{ background: a.color, opacity: s ? 1 : 0.3 }}
-                />
-                <span className="font-semibold">{a.name}</span>
-                <span className="ml-auto text-xs text-muted tabular">
-                  {s ? ago(s.last?.ts, now) : "idle"}
-                  {s && s.errors > 0 && <span className="ml-2 font-semibold text-stop">{s.errors} errors</span>}
-                </span>
-              </div>
-              <p className="text-xs text-muted">{a.job}</p>
-              {s?.last && (
-                <p className="mt-1 truncate text-sm" title={s.last.detail}>
-                  {s.last.detail || s.last.action}
-                </p>
-              )}
-              <div className="mt-2 h-1 rounded bg-dock" aria-hidden>
-                <div className="h-1 rounded" style={{ width: `${((s?.count ?? 0) / max) * 100}%`, background: a.color }} />
-              </div>
+            <li key={a.id} className="transition hover:bg-dock/50">
+              <Link href={`/observability?agent=${a.id}`} className="block px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span
+                    aria-hidden
+                    className={`inline-block h-2.5 w-2.5 rounded-full ${active ? "beat" : ""}`}
+                    style={{ background: a.color, opacity: s ? 1 : 0.3 }}
+                  />
+                  <span className="font-semibold">{a.name}</span>
+                  <span className="ml-auto text-xs text-muted tabular">
+                    {s ? ago(s.last?.ts, now) : "idle"}
+                    {s && s.errors > 0 && <span className="ml-2 font-semibold text-stop">{s.errors} errors</span>}
+                  </span>
+                </div>
+                <p className="text-xs text-muted">{a.job}</p>
+                {s?.last && (
+                  <p className="mt-1 truncate text-sm" title={s.last.detail}>
+                    {s.last.detail || s.last.action}
+                  </p>
+                )}
+                <div className="mt-2 h-1 rounded bg-dock" aria-hidden>
+                  <div className="h-1 rounded" style={{ width: `${((s?.count ?? 0) / max) * 100}%`, background: a.color }} />
+                </div>
+              </Link>
             </li>
           );
         })}

@@ -45,6 +45,9 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".webp"}
 SUP_RE = re.compile(r"(SUP-\d{4})(?!\d)")
 
 #: one standard shipment status list (T2.18); carrier/ERP/tracker words -> canonical status
+#: PO status codes of legacy SAP exports (ZZSTAT) in the words of the current export.
+PO_STATUS_MAP = {"gl": "delivered", "geliefert": "delivered", "lo": "cancelled", "gelöscht": "cancelled",
+                 "storniert": "cancelled", "offen": "open"}
 #: Coordinates: a dot is always a decimal mark ('9.785' is a longitude, not 9,785).
 DECIMAL_DOT_FIELDS = {"last_lat", "last_lon"}
 #: Free-text fields: a second source adds its text instead of replacing the first one.
@@ -228,6 +231,7 @@ class IngestNormalizer(Agent):
             title and re.search(r"\d{4}-\d{2}-\d{2}", title)) else None
         existing = self._existing(target, rel)
         styles = self._decimal_styles(mapping, rows)
+        po_context = self._po_context(mapping, rows) if target.model is PurchaseOrder else {}
         new_rows, links = [], []
         counted: dict[str, float] = {}  # finished goods in a timestamped stock sheet = packed copies
         for i, raw in enumerate(rows):
@@ -247,6 +251,8 @@ class IngestNormalizer(Agent):
                 values[target.title_date_field] = as_of.date() if field_type is date else as_of
             if target.model is Shipment and values.get("status"):
                 values["status"] = STATUS_MAP.get(str(values["status"]).lower().strip(), values["status"])
+            if target.model is PurchaseOrder:
+                self._normalize_po(values, po_context)
             key = tuple(values.get(k) for k in target.key)
             if any(v in (None, "") for k, v in zip(target.key, key) if k in target.required):
                 continue
@@ -359,6 +365,34 @@ class IngestNormalizer(Agent):
             out[key] = row.id
             out[("__source__", row.id)] = row.source
         return out
+
+    @staticmethod
+    def _po_context(mapping: Mapping, rows: list[dict]) -> dict:
+        """What a legacy SAP export lacks: buyer full names (from the other PO exports and this file) and the
+        supplier's currency from the supplier master (all POs with a currency use exactly that currency)."""
+        buyer_col = next((h for h, f in mapping.columns.items() if f == "buyer"), None)
+        names = {p.buyer for p in all_rows(PurchaseOrder) if p.buyer and " " in p.buyer.strip()}
+        if buyer_col:
+            names |= {str(r.get(buyer_col, "")).strip() for r in rows if " " in str(r.get(buyer_col, "")).strip()}
+        currencies = {s.supplier_id: s.currency for s in all_rows(Supplier) if s.supplier_id and s.currency}
+        return {"names": sorted(names), "currencies": currencies}
+
+    @staticmethod
+    def _normalize_po(values: dict, ctx: dict) -> None:
+        """Legacy SAP codes -> the words the newer export uses: status GL/LO -> delivered/cancelled, buyer 'FBRUNN'
+        -> 'Felix Brunner' (initial + surname prefix, only if exactly one known name fits), missing currency ->
+        supplier master currency. Done while reading, so reprocessing the file gives the same values."""
+        status = values.get("status")
+        if status:
+            values["status"] = PO_STATUS_MAP.get(str(status).lower().strip(), status)
+        buyer = str(values.get("buyer") or "").strip()
+        if buyer and " " not in buyer and buyer.isupper() and len(buyer) > 2:
+            hits = [n for n in ctx.get("names", [])
+                    if n.split()[0][:1].upper() == buyer[0] and n.split()[-1].upper().startswith(buyer[1:])]
+            if len(hits) == 1:
+                values["buyer"] = hits[0]
+        if not values.get("currency") and values.get("supplier_id") in ctx.get("currencies", {}):
+            values["currency"] = ctx["currencies"][values["supplier_id"]]
 
     @staticmethod
     def _decimal_styles(mapping: Mapping, rows: list[dict]) -> dict[str, bool]:

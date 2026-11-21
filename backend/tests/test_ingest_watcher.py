@@ -42,6 +42,13 @@ def test_legacy_sap_orders_are_normalized(full):
     assert po.po_line == 1  # SAP item 00010 -> line 1
     assert 0 < po.unit_price < 100  # decimal comma "1,5200" -> 1.52
     assert po.order_date and po.requested_date and po.requested_date.month in range(1, 13)  # US dates
+    # legacy codes in the words of the current export (audit 23:18): GL/LO, buyer initials, currency from master
+    assert {p.status for p in legacy} <= {"delivered", "cancelled", "open"}
+    assert all(p.quantity < 0 for p in legacy if p.status == "cancelled")
+    current_buyers = {p.buyer for p in all_rows(PurchaseOrder) if not p.source.endswith("legacy_2024-2025H1.csv")}
+    assert {p.buyer for p in legacy} <= current_buyers
+    masters = {s.supplier_id: s.currency for s in all_rows(Supplier)}
+    assert all(p.currency == masters[p.supplier_id] for p in legacy)
 
 
 def test_documents_confirmations_aliases_and_statuses(full):

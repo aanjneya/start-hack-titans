@@ -594,10 +594,11 @@ class IngestNormalizer(Agent):
     # ------------------------------------------------------------- issues
     def _raise_summary_issues(self) -> None:
         """Ingest's own findings, in FINDING FORMAT v1 (.brain/DATA_FORMAT.md)."""
-        if self._scans and llm.is_mock():
+        if self._scans:
+            why = "offline mode" if llm.is_mock() else "Claude was not reachable"
             self.raise_issue(
                 type="scans_unread", kind=IssueKind.HUMAN_CHECK, severity=2, key="scans",
-                summary=f"{len(self._scans)} scanned delivery notes stored but not read yet (offline mode)",
+                summary=f"{len(self._scans)} scanned delivery notes stored but not read yet ({why})",
                 reason="Receiving books what is on the paper, so a scan can hide a short or damaged delivery. "
                        "File names already link each scan to its delivery-note number; the content needs OCR.",
                 subject_type="drop", subject_id="scans",

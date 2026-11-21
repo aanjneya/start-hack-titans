@@ -162,7 +162,10 @@ def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, 
             + json.dumps({n: list(t.synonyms) for n, t in TARGETS.items()})
             + "\nReturn target_table (or '' if none fits) and columns {header: field} using only listed fields."
         )
-        answer = llm.extract(prompt, LLMMapping, agent=agent, task="ingest.map_columns")
+        try:
+            answer = llm.extract(prompt, LLMMapping, agent=agent, task="ingest.map_columns")
+        except llm.LLMError:
+            answer = None  # Claude unavailable: keep the file as a plain table
         if answer and answer.target_table in TARGETS:
             name, cols, method = answer.target_table, {h: f for h, f in answer.columns.items() if h in headers}, "llm"
             score = len(cols) / max(len(headers), 1)

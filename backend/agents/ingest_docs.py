@@ -145,7 +145,10 @@ def llm_extract(text: str, kind: str, rel_path: str, agent: str) -> Optional[dic
         "key facts (dates, quantities, prices, part numbers, PO numbers, bank details, delays, conditions). "
         "Every fact needs a verbatim quote copied exactly from the document.\n\n---\n" + text[:20000]
     )
-    result = llm.extract(prompt, DocExtraction, agent=agent, task=f"ingest.doc.{kind}")
+    try:
+        result = llm.extract(prompt, DocExtraction, agent=agent, task=f"ingest.doc.{kind}")
+    except llm.LLMError:
+        return None  # Claude unavailable: keep the regex facts, never fail the file
     if result is None:
         return None
     flat = " ".join(text.split())

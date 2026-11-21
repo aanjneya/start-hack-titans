@@ -117,6 +117,9 @@ def complete(
     except anthropic.APIConnectionError as exc:
         trace.log(agent, "error", f"llm {task}: connection error", data={"task": task})
         raise LLMError(str(exc)) from exc
+    except Exception as exc:  # e.g. no credentials configured, invalid input
+        trace.log(agent, "error", f"llm {task}: {type(exc).__name__}: {str(exc)[:200]}", data={"task": task})
+        raise LLMError(str(exc)) from exc
 
     trace.log(agent, "llm_call", task, data={"task": task, **_usage(resp)})
     if resp.stop_reason == "refusal":
@@ -167,6 +170,9 @@ def extract(
         raise LLMError(str(exc)) from exc
     except anthropic.APIConnectionError as exc:
         trace.log(agent, "error", f"llm {task}: connection error", data={"task": task})
+        raise LLMError(str(exc)) from exc
+    except Exception as exc:  # e.g. no credentials configured, invalid input
+        trace.log(agent, "error", f"llm {task}: {type(exc).__name__}: {str(exc)[:200]}", data={"task": task})
         raise LLMError(str(exc)) from exc
 
     trace.log(agent, "llm_call", task, data={"task": task, "files": [Path(f).name for f in files], **_usage(resp)})

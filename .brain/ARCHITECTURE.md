@@ -5,7 +5,9 @@
 
 ## System Overview
 
-<!-- Brief summary of what we are building and the end-to-end demo flow. -->
+**Adopted plan: [`PLAN.md`](PLAN.md)** (process, agents, screen, demo case, build order).
+We sell a standard, agent-run process that gets every part from order to the line before a hard deadline; Soony's GH6 launch is customer #1.
+Loop: Watcher (15-min portal SHA diff) → Ingest & Normalizer → Reconciler & Gate → Chaser / Launch Planner & Decision Copilot → one-click human approval → execute → next drop confirms or reopens. Risk Rater feeds checks and plans; a Coordinator logs every step to the AI-traceability drawer.
 
 ## Tech Stack
 

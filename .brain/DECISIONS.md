@@ -28,3 +28,8 @@
   2. Added `.githooks/pre-push` (fast-passes `.brain/` & `challenge/`, verifies code on `main`, blocks `.env` & >25MB, has `ALLOW_MAIN_PUSH=1` escape hatch), stack-agnostic `scripts/verify.sh`, and `scripts/setup.sh`.
   3. Replaced `CLAUDE.md` symlink with `@AGENTS.md`, added `.claude/settings.json` allowlist for zero-intervention brain sync, collapsed live docs to 3-file core + 3h staleness guard, and added 2–3h rolling merge cadence.
 - **Trade-offs**: `.githooks/pre-push` requires each teammate to run `./scripts/setup.sh <id>` once; Antigravity/Codex users click "Always allow `./scripts/brain-push.sh`" once for zero-prompt auto-sync.
+
+### [17:35] Adopt merged end-to-end plan (by daksh)
+- **Context**: Two plan suggestions (aanjneya: 7-step story, data traps, pack simulation, one screen; daksh: closed loop, watcher, hand-offs, build order) needed one direction.
+- **Decision**: Adopt the merge as `.brain/PLAN.md`: sell the process (not a product), 5 agents + coordinator, one screen + trace drawer, hero demo = CMP-GAM-004 rev trap with Karton Nowak express offer.
+- **Trade-offs**: Dock-scan OCR and supplier scout pushed to P2; owners for the four P0 slices and the stack still open; `GOAL.md` still needs explicit team approval to be filled from the plan.

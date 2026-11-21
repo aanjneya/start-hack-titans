@@ -40,6 +40,18 @@ const SEVERITY: Record<number, { label: string; cls: string }> = {
   1: { label: "Info", cls: "bg-dock text-muted" },
 };
 
+/** "Email SUP-0028 · PO 4500318775/2 · SHP-2026-04313" for each action of an option (who it reaches). */
+function actionTargets(actions: Record<string, unknown>[] | undefined): string[] {
+  return (actions ?? []).map((a) => {
+    const v = (k: string) => (a[k] == null || a[k] === "" ? "" : String(a[k]));
+    const po = v("po_number") ? `PO ${v("po_number")}${v("po_line") ? `/${v("po_line")}` : ""}` : "";
+    const type = v("type").replaceAll("_", " ");
+    return [type && type[0].toUpperCase() + type.slice(1), v("supplier_id"), po, v("shipment_id"), v("part")]
+      .filter(Boolean)
+      .join(", ");
+  });
+}
+
 async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
   const [health, forecast, decisions, issues, outbox, inbox, risk, trace] = await Promise.allSettled([
     getData<HealthCheckResponse>("/api/health"),
@@ -124,11 +136,12 @@ export default function ControlRoom() {
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
-  // Cards that recommend the same step are shown once (the newest), with a count.
+  // Cards that recommend the very same step (same headline AND same action, supplier, PO line) are shown once
+  // (the newest), with a count. Same headline but another PO stays a card of its own.
   const decisionGroups = useMemo(() => {
     const groups = new Map<string, DecisionCard[]>();
     for (const d of snap.decisions) {
-      const key = d.summary || d.title;
+      const key = `${d.summary || d.title}|${actionTargets(d.options[d.recommended ?? -1]?.actions).join(";")}`;
       groups.set(key, [...(groups.get(key) ?? []), d]);
     }
     return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
@@ -382,6 +395,11 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
                   {card.recommended === i && <span className="text-xs font-semibold text-act">Recommended</span>}
                 </span>
                 {o.description && <span className="block text-sm text-muted">{o.description}</span>}
+                {actionTargets(o.actions).map((t) => (
+                  <span key={t} className="block text-sm text-ink">
+                    {t}
+                  </span>
+                ))}
                 <span className="mt-1 flex flex-wrap gap-x-4 text-sm tabular">
                   <span>Costs {eur(o.cost_eur)}</span>
                   <span>Gains {fmt(o.copies_gained)} copies</span>

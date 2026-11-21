@@ -35,6 +35,8 @@ CACHE_TTL_SEC = 300.0  # 5-minute in-memory cache so reruns stay fast & polite
 POLYMARKET_EVENTS_URL = "https://gamma-api.polymarket.com/events"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
+FEDERAL_REGISTER_URL = "https://www.federalregister.gov/api/v1/documents.json"
+EURLEX_RSS_URL = "https://eur-lex.europa.eu/EN/display-feed.rss"
 
 
 @dataclass
@@ -303,7 +305,10 @@ class PolymarketProvider:
                     if any(kw in q_low for kw in keywords):
                         seen_slugs.add(slug)
                         if is_relief:
-                            summary = f"Polymarket {risk_prob * 100:.0f}% disruption odds (Yes={yes_prob * 100:.0f}%): {question}"
+                            summary = (
+                                f"Polymarket {risk_prob * 100:.0f}% odds disruption persists "
+                                f"(only {yes_prob * 100:.0f}% chance of recovery): {question}"
+                            )
                         else:
                             summary = f"Polymarket odds {risk_prob * 100:.0f}%: {question}"
                         signals.append(ExternalSignal(
@@ -657,11 +662,173 @@ class TelemetryProvider:
         return signals
 
 
+# ---------------------------------------------------------------------------
+# 5. Official Regulatory Change Provider (US Federal Register BIS/USTR + EUR-Lex)
+# ---------------------------------------------------------------------------
+_REG_RULES: list[tuple[tuple[str, ...], list[str], list[str], float]] = [
+    (("china", "chinese", "uyghur", "mofcom", "rare earth", "magnet"), ["CN"], ["export-control", "tariffs"], 78.0),
+    (("maritime", "shipbuilding", "port", "shipping", "vessel"), ["CN", "KR", "IN"], ["maritime", "section-301"], 72.0),
+    (("semiconductor", "chip", "memory", "end-user", "entity list"), ["CN", "KR", "US"], ["semiconductors", "bis"], 74.0),
+    (("section 301", "tariff", "customs", "anti-dumping", "duties"), ["CN", "US", "IN"], ["tariffs"], 65.0),
+    (("packaging", "labelling", "labeling", "age-rating", "usk", "rohs", "reach", "cbam"), ["DE", "PL", "CN"], ["eu-compliance"], 62.0),
+]
+
+_REG_SKIP = ("information collection", "binational panels", "appointing a member", "appointing an alternate")
+
+_MOCK_REGULATIONS: list[dict[str, Any]] = [
+    {
+        "title": "US BIS Rule: Export & End-User Controls on Advanced Semiconductors and Listed Affiliates",
+        "countries": ["CN", "KR", "US"],
+        "tags": ["bis", "export-control", "semiconductors"],
+        "score": 74.0,
+        "url": "https://www.federalregister.gov/agencies/industry-and-security-bureau",
+        "quote": "Federal Register BIS Rule (offline regulatory snapshot)",
+    },
+    {
+        "title": "USTR Section 301 Modification: China Maritime, Logistics, and Shipbuilding Targeting",
+        "countries": ["CN", "US"],
+        "tags": ["ustr", "section-301", "maritime"],
+        "score": 76.0,
+        "url": "https://www.federalregister.gov/agencies/trade-representative-office-of-united-states",
+        "quote": "Federal Register USTR Notice (offline regulatory snapshot)",
+    },
+    {
+        "title": "EU Packaging, Product Safety & Age-Rating Labelling Update (EUR-Lex / USK 2026)",
+        "countries": ["DE", "PL"],
+        "tags": ["eu-compliance", "labeling"],
+        "score": 60.0,
+        "url": "https://eur-lex.europa.eu/EN/display-feed.rss?rssId=162",
+        "quote": "EUR-Lex legislative act (offline regulatory snapshot)",
+    },
+]
+
+
+class RegulationChangeProvider:
+    """Tracks official regulatory changes from US Federal Register (BIS/USTR) and EUR-Lex RSS.
+
+    Zero API keys required. Extensible to domain-specific regulatory packs (e.g. UNECE automotive, FDA)
+    without changing core Risk Rater code.
+    """
+
+    name = "regulations"
+
+    def fetch(self, *, countries: set[str], ports: dict[str, dict[str, Any]],
+              shipments: list[Shipment], documents: list[Document],
+              reference_now: datetime) -> list[ExternalSignal]:
+        if not llm.is_mock():
+            live_ok, live_signals = self._fetch_live(countries)
+            if live_ok:
+                return live_signals
+        return self._mock_signals(countries)
+
+    def _fetch_live(self, countries: set[str]) -> tuple[bool, list[ExternalSignal]]:
+        signals: list[ExternalSignal] = []
+        any_ok = False
+
+        # 5a. US Federal Register (BIS export controls + USTR Section 301 tariffs)
+        fr_data = _cached_get_json(
+            FEDERAL_REGISTER_URL,
+            {
+                "conditions[agencies][]": [
+                    "industry-and-security-bureau",
+                    "trade-representative-office-of-united-states",
+                ],
+                "per_page": 10,
+                "order": "newest",
+            },
+        )
+        results = (fr_data or {}).get("results") if isinstance(fr_data, dict) else None
+        if isinstance(results, list):
+            any_ok = True
+            for doc in results:
+                title = str(doc.get("title") or "").strip()
+                if not title:
+                    continue
+                t_low = title.lower()
+                if any(sk in t_low for sk in _REG_SKIP):
+                    continue
+                pub_date = str(doc.get("publication_date") or "")
+                doc_type = str(doc.get("type") or "Rule")
+                url = str(doc.get("html_url") or FEDERAL_REGISTER_URL)
+                for keywords, rule_countries, tags, base_score in _REG_RULES:
+                    hit = [c for c in rule_countries if not countries or c in countries]
+                    if hit and any(kw in t_low for kw in keywords):
+                        signals.append(ExternalSignal(
+                            provider=self.name,
+                            category="regulatory_change",
+                            title=title,
+                            score_0_100=base_score if doc_type.lower() == "rule" else base_score - 4.0,
+                            summary=f"US Federal Register ({doc_type}, {pub_date}): {title}",
+                            countries=hit,
+                            tags=list(tags) + ["federal-register"],
+                            source_url=url,
+                            quote=f"{doc_type} published {pub_date}: {title[:140]} (live Federal Register API)",
+                            live=True,
+                        ))
+                        break
+
+        # 5b. EUR-Lex official EU adopted legislation RSS (filter for trade/customs/safety/packaging)
+        xml_text = _cached_get_text(EURLEX_RSS_URL, {"rssId": "162"})
+        if xml_text:
+            try:
+                root = ET.fromstring(xml_text)
+                any_ok = True
+                for item in root.findall(".//item")[:25]:
+                    title = (item.findtext("title") or "").strip()
+                    link = (item.findtext("link") or EURLEX_RSS_URL).strip()
+                    t_low = title.lower()
+                    if not title or any(sk in t_low for sk in _REG_SKIP):
+                        continue
+                    for keywords, rule_countries, tags, base_score in _REG_RULES:
+                        hit = [c for c in rule_countries if not countries or c in countries]
+                        if hit and any(kw in t_low for kw in keywords):
+                            signals.append(ExternalSignal(
+                                provider=self.name,
+                                category="regulatory_change",
+                                title=title[:140],
+                                score_0_100=base_score,
+                                summary=f"EUR-Lex EU Regulation: {title[:140]}",
+                                countries=hit,
+                                tags=list(tags) + ["eur-lex"],
+                                source_url=link,
+                                quote=f"{title[:160]} (live EUR-Lex RSS)",
+                                live=True,
+                            ))
+                            break
+                    if len(signals) >= 10:
+                        break
+            except ET.ParseError:
+                pass
+
+        return any_ok, signals
+
+    def _mock_signals(self, countries: set[str]) -> list[ExternalSignal]:
+        signals: list[ExternalSignal] = []
+        for reg in _MOCK_REGULATIONS:
+            hit = [c for c in reg["countries"] if not countries or c in countries]
+            if not hit:
+                continue
+            signals.append(ExternalSignal(
+                provider=self.name,
+                category="regulatory_change",
+                title=reg["title"],
+                score_0_100=float(reg["score"]),
+                summary=f"Regulatory watch: {reg['title']}",
+                countries=hit,
+                tags=list(reg["tags"]),
+                source_url=reg["url"],
+                quote=reg["quote"],
+                live=False,
+            ))
+        return signals
+
+
 DEFAULT_PROVIDERS: tuple[SignalProvider, ...] = (
     PolymarketProvider(),
     OpenMeteoWeatherProvider(),
     PoliticalNewsProvider(),
     TelemetryProvider(),
+    RegulationChangeProvider(),
 )
 
 

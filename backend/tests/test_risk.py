@@ -14,6 +14,7 @@ from backend.agents.risk_signals import (
     OpenMeteoWeatherProvider,
     PoliticalNewsProvider,
     PolymarketProvider,
+    RegulationChangeProvider,
     clear_cache,
 )
 from backend.core import config, events
@@ -212,6 +213,45 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
     news_sigs = PoliticalNewsProvider().fetch(countries={"CN"}, ports=ports, shipments=ships, documents=[], reference_now=now)
     assert len(news_sigs) == 1 and news_sigs[0].provider == "gnews" and news_sigs[0].live is True
     assert news_sigs[0].score_0_100 == 65.0
+
+    # Official regulatory feed (Federal Register + EUR-Lex)
+    def fake_reg_json(url: str, params: dict[str, Any] | None = None):
+        if "federalregister.gov" in url:
+            return {
+                "results": [
+                    {
+                        "title": "Addressing Remote Access to Advanced Semiconductors",
+                        "type": "Rule",
+                        "publication_date": "2026-11-19",
+                        "html_url": "https://www.federalregister.gov/documents/2026/11/19/test",
+                    },
+                    {
+                        "title": "Agency Information Collection Activities",
+                        "type": "Notice",
+                        "publication_date": "2026-11-20",
+                        "html_url": "https://www.federalregister.gov/documents/2026/11/20/skip",
+                    },
+                ]
+            }
+        return fake_get_json(url, params)
+
+    def fake_reg_text(url: str, params: dict[str, Any] | None = None):
+        if "eur-lex.europa.eu" in url:
+            return (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<rss version="2.0"><channel><item>'
+                '<title>Council Regulation (EU) 2026/2568 on maritime sanctions and port access</title>'
+                '<link>https://eur-lex.europa.eu/legal-content/AUTO/?uri=CELEX:32026R2568</link>'
+                '</item></channel></rss>'
+            )
+        return fake_get_text(url, params)
+
+    monkeypatch.setattr(risk_signals, "_cached_get_json", fake_reg_json)
+    monkeypatch.setattr(risk_signals, "_cached_get_text", fake_reg_text)
+    reg_sigs = RegulationChangeProvider().fetch(countries={"CN", "KR", "US"}, ports=ports, shipments=ships, documents=[], reference_now=now)
+    assert len(reg_sigs) == 2 and all(s.live and s.category == "regulatory_change" for s in reg_sigs)
+    assert any("federalregister.gov" in s.source_url for s in reg_sigs)
+    assert any("eur-lex.europa.eu" in s.source_url for s in reg_sigs)
 
     monkeypatch.setenv("MOCK_MODE", "true")
     config.reset_settings()

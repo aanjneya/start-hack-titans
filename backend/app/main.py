@@ -11,7 +11,10 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlmodel import select
+
+from ..agents.planner_delivery import DeliveryAdvice, SupplierQuote, already_requested
 
 from .. import system
 from ..core import events, policy, trace
@@ -143,18 +146,35 @@ def decisions(status: Optional[str] = None) -> dict:
 
 class DecideRequest(BaseModel):
     by: str = "unknown"
+    approvals: list[str] = []
     option: Optional[int] = None  # index into options; default = recommended
 
 
 def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
     with session() as s:
+        s.execute(text("BEGIN IMMEDIATE"))  # serialize status check and claim on SQLite
         card = s.get(DecisionCard, decision_id)
         if card is None:
             raise HTTPException(404, f"decision {decision_id} not found")
-        if card.status not in {"proposed", "outdated"}:
+        if card.status != "proposed":
             raise HTTPException(409, f"decision {decision_id} is already {card.status}")
-        card.status, card.decided_by, card.decided_at = status, req.by, utcnow()
-        card.chosen_option = req.option if req.option is not None else card.recommended
+        selected = req.option if req.option is not None else card.recommended
+        if status == "approved":
+            if selected is None or not 0 <= selected < len(card.options):
+                raise HTTPException(422, "Choose a valid option.")
+            option = card.options[selected]
+            if not option.get("available", True):
+                raise HTTPException(409, "The evidence does not support executing this option.")
+            if card.created_by == "planner" and already_requested(s, option.get("actions")):
+                raise HTTPException(409, "This action was already authorized on a related decision.")
+            if option.get("approvers"):
+                signers = {name.strip().casefold() for name in [req.by, *req.approvals]}
+                if any(name.casefold() not in signers for name in option["approvers"]):
+                    raise HTTPException(403, "The chosen option requires " + " + ".join(option["approvers"]))
+                card.approver = " + ".join(option["approvers"])
+                card.needs_approval = option.get("needs_approval", True)
+        card.status, card.decided_by, card.decided_at = status, " + ".join([req.by, *req.approvals]), utcnow()
+        card.chosen_option = selected if status == "approved" else None
         s.add(card)
         s.commit()
         s.refresh(card)
@@ -168,7 +188,9 @@ def approve(decision_id: int, req: DecideRequest | None = None) -> dict:
     trace.log("human", "approve", f"decision {decision_id} by {req.by}", data={"decision_id": decision_id})
     result = system.emit(events.DECISION_APPROVED,
                          {"decision_id": decision_id, "option": card.chosen_option, "by": req.by})
-    return ok({"decision": card.model_dump(mode="json"), **result})
+    with session() as s:
+        current = s.get(DecisionCard, decision_id)
+        return ok({"decision": current.model_dump(mode="json"), **result})
 
 
 @app.post("/api/decisions/{decision_id}/reject")
@@ -208,6 +230,8 @@ def inbox() -> dict:
 
 
 class ReplyRequest(BaseModel):
+    delivery: DeliveryAdvice | None = None
+    quote: SupplierQuote | None = None
     supplier_id: str
     body: str
     issue_id: Optional[int] = None
@@ -220,7 +244,10 @@ class ReplyRequest(BaseModel):
 @app.post("/api/inbox")
 def post_reply(req: ReplyRequest) -> dict:
     """Feed a supplier reply into the loop (demo / manual test): inbox -> Ingest -> Reconciler."""
-    return ok(system.receive_reply(**req.model_dump(), source="api"))
+    if req.delivery and req.quote:
+        raise HTTPException(422, "Submit the quote and the confirmed delivery as separate replies.")
+    return ok(system.receive_reply(**req.model_dump(exclude={"delivery", "quote"}),
+                                   delivery=req.delivery, quote=req.quote, source="api"))
 
 
 @app.get("/api/setup")

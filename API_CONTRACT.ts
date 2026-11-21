@@ -97,6 +97,13 @@ export interface DecisionOption {
   copies_gained: number | null;
   actions: Record<string, unknown>[];
   risk_note: string;
+  /** Planner options carry the chosen option's forecast and policy result. */
+  remaining_shortfall?: number | null;
+  approval_value_eur?: number | null;
+  approvers?: string[];
+  needs_approval?: boolean;
+  available?: boolean;
+  evidence?: Evidence[];
 }
 
 export type DecisionStatus = 'proposed' | 'approved' | 'rejected' | 'executed' | 'outdated';
@@ -211,7 +218,26 @@ export interface InboxMessage {
   result: Record<string, unknown>;
 }
 
+/** Structured supplier advice on the approved PO line. A supplier cannot release the receiving dock. */
+export interface DeliveryAdvice {
+  po_number: string;
+  po_line: number;
+  shipment_id: string;
+  revision: string;
+  quantity: number;
+  arrival: string; // ISO timestamp with timezone at the receiving site
+  supersedes_inbox_id?: number; // explicit correction to earlier accepted advice
+}
+
+export interface SupplierQuote extends DeliveryAdvice {
+  mode: 'expedite' | 'air' | 'pickup';
+  incremental_cost_eur: number; // all-in extra charge to the existing PO
+  valid_until: string;
+}
+
 export interface ReplyRequest {
+  quote?: SupplierQuote; // conditional alternative; mutually exclusive with delivery
+  delivery?: DeliveryAdvice; // requires matching decision-linked outbox_id
   supplier_id: string;
   body: string;
   issue_id?: number;
@@ -242,7 +268,8 @@ export interface RunRequest {
 
 export interface DecideRequest {
   by: string;
-  option?: number; // default: recommended
+  option?: number; // default: recommended; invalid indexes return 422, stale cards 409
+  approvals?: string[]; // additional signers for jointly approved options
 }
 
 /**

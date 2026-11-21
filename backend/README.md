@@ -33,7 +33,7 @@ The baseline uses the workbook timestamp, working shifts, eligible lots and conf
 
 A decision-linked supplier reply enters `POST /api/inbox` with the outbox ID and either `quote` or `delivery` as specified in `API_CONTRACT.ts`. A plain-text confirmation can also identify one PO/line, shipment, quantity, revision and timezone-qualified arrival. Ambiguous answers remain in the inbox for review. Correcting an accepted answer requires its inbox ID in `supersedes_inbox_id`.
 
-An internal receiving table supplies `receiving_site`, `delivery_reference` (shipment ID), `approved_revision` and `dock_released_at` (ISO time). The demo labels and injects its simulated site release separately from the supplier confirmation. In mock mode the Chaser handoff records a simulated outbox message when the installed Chaser has not recorded one.
+An internal receiving table supplies `receiving_site`, `delivery_reference` (shipment ID), `approved_revision` and `dock_released_at` (ISO time). The demo labels and injects its simulated site release separately from the supplier confirmation. In mock mode Chaser creates the decision-linked outbox message. The pickup integration test feeds a threaded supplier reply through its mailbox reader and verifies the resulting forecast.
 
 ## Layout
 

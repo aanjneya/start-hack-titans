@@ -33,9 +33,6 @@ def bus() -> Coordinator:
         init_db()
         _bus = Coordinator()
         _agents = [cls(_bus) for cls in REGISTRY]
-        if get_settings().mock_mode:
-            from .agents.planner_delivery import mock_outbox
-            _bus.subscribe(events.EMAIL_REQUESTED, "chaser", mock_outbox)
     return _bus
 
 

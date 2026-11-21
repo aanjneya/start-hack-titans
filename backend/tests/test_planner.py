@@ -155,7 +155,35 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before
     spend, = _decision_mails(card["id"])
     assert spend.decision_id == card["id"]
-    client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
+    if mode == "air":
+        client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
+    else:
+        # The supplier replies to Tim's actual message. Substitute only the mailbox transport and its gate.
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from backend.agents import chaser
+        from backend.app.main import _chaser
+
+        assert spend.message_id and spend.status == "sent"
+        assert "4500318775/2" in spend.body and fact["shipment_id"] in spend.body
+        assert any(log.action == "mock_send" and log.data.get("outbox_id") == spend.id
+                   for log in all_rows(AgentLog))
+        mail = chaser.mailbox.IncomingMail("1", "<supplier-reply@example.test>", spend.message_id, "",
+                "supplier-dispatch@example.test", "Re: " + spend.subject, f"Confirmed PO 4500318775/2, SHP-2026-04313, "
+                f"20000 units, rev C, arrival {arrival.isoformat()}.")
+        settings = replace(chaser.get_settings(), chaser_send=True)
+        with monkeypatch.context() as transport:
+            transport.setattr(chaser, "get_settings", lambda: settings)
+            transport.setattr(chaser, "llm", SimpleNamespace(is_mock=lambda: False))
+            transport.setattr(chaser.mailbox, "is_configured", lambda: True)
+            transport.setattr(chaser.mailbox, "fetch_unseen", lambda: [mail])
+            assert _chaser().poll_inbox()["matched"] == 1
+        system.bus().run_until_idle()
+        inbound, = [m for m in all_rows(InboxMessage) if m.outbox_id == spend.id]
+        assert inbound.processed and inbound.issue_id == spend.issue_id
+        assert inbound.result["confirmed_delivery"]["quantity"] == fact["quantity"]
+        assert _decision_mails(card["id"])[0].status == "replied"
+        assert not [log.detail for log in all_rows(AgentLog) if log.action == "error"]
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before + option["copies_gained"]
 
 
@@ -193,6 +221,12 @@ def test_latest_replay_retires_received_sleeve_request():
                                and "rev blocked" in c.title and c.title.endswith("CMP-GAM-004")]
         if "soony/erp/goods_receipts_update.csv" in drop.added:
             saw_receipt = True
+            plan = load_plan()
+            editions = {r.product_id: r for r in plan.editions}
+            assert plan.as_of.isoformat().startswith("2026-11-21T20:50")
+            assert editions["FG-GH6-STD"].still_to_pack == 38000
+            assert editions["FG-GH6-CE"].still_to_pack == 11700
+            assert plan.stock["CMP-GAM-003"] <= 6000
             cards = all_rows(DecisionCard)
             assert next(c.status for c in cards if c.id == historical_id) == "outdated"
             for c in cards:

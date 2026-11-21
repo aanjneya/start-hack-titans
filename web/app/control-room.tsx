@@ -6,6 +6,7 @@ import {
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
+import DataDrawer from "./data-drawer";
 
 type Snapshot = {
   health: HealthCheckResponse | null;
@@ -73,6 +74,8 @@ export default function ControlRoom() {
   const [dropBusy, setDropBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
   const [tab, setTab] = useState<"findings" | "emails" | "risk">("findings");
+  const [showData, setShowData] = useState(false);
+  const closeData = useCallback(() => setShowData(false), []);
 
   const refresh = useCallback(async () => {
     const { snap: next, online: up } = await loadSnapshot();
@@ -184,7 +187,7 @@ export default function ControlRoom() {
         </section>
 
         <aside aria-labelledby="agents" className="space-y-6">
-          <AgentLanes trace={snap.trace} now={now} />
+          <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
           <LiveLog trace={snap.trace} />
         </aside>
       </div>
@@ -215,6 +218,7 @@ export default function ControlRoom() {
         {tab === "emails" && <Emails outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
         {tab === "risk" && <Risk rows={snap.risk} />}
       </section>
+      {showData && <DataDrawer onClose={closeData} />}
     </div>
   );
 }
@@ -438,7 +442,7 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
   );
 }
 
-function AgentLanes({ trace, now }: { trace: AgentLogEntry[]; now: number }) {
+function AgentLanes({ trace, now, onOpenData }: { trace: AgentLogEntry[]; now: number; onOpenData: () => void }) {
   const stats = useMemo(() => {
     const out = new Map<string, { last?: AgentLogEntry; count: number; errors: number }>();
     for (const e of trace) {
@@ -472,6 +476,15 @@ function AgentLanes({ trace, now }: { trace: AgentLogEntry[]; now: number }) {
                   style={{ background: a.color, opacity: s ? 1 : 0.3 }}
                 />
                 <span className="font-semibold">{a.name}</span>
+                {a.id === "watcher" && (
+                  <button
+                    onClick={onOpenData}
+                    className="rounded border border-rule px-2 py-0.5 text-xs font-semibold text-act hover:bg-act-soft"
+                    title="Open the data the Watcher fetched, cleaned by Ingest, with SAP table and field names"
+                  >
+                    SAP data
+                  </button>
+                )}
                 <span className="ml-auto text-xs text-muted tabular">
                   {s ? ago(s.last?.ts, now) : "idle"}
                   {s && s.errors > 0 && <span className="ml-2 font-semibold text-stop">{s.errors} errors</span>}

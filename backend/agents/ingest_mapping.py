@@ -133,6 +133,36 @@ def _score(headers: list[str], target: Target, has_title_date: bool = False) -> 
     return len(cols) / max(len(normed), 1), cols
 
 
+def _score_words(headers: list[str], target: Target, has_title_date: bool = False) -> tuple[float, dict[str, str]]:
+    """Fallback when no table matches exactly (renamed export, e.g. 'Order Qty', 'PO Status', 'Requested
+    Delivery'): exact names first, then a header whose words contain all words of a synonym (fewest extra words
+    wins). Only used when the exact glossary fails; the result must still pass validate_mapping."""
+    _, cols = _score(headers, target, has_title_date)
+    used = set(cols.values())
+    normed = {h: norm_header(h) for h in headers if h}
+    for fname, names in target.synonyms.items():
+        if fname in used:
+            continue
+        best: Optional[tuple[int, str]] = None
+        for h, n in normed.items():
+            if h in cols:
+                continue
+            words = set(n.split("_"))
+            for syn in names:
+                syn_words = set(syn.split("_"))
+                if syn and (len(syn_words) > 1 or len(syn) >= 3) and syn_words <= words:
+                    extra = len(words - syn_words)
+                    if best is None or extra < best[0]:
+                        best = (extra, h)
+        if best:
+            cols[best[1]] = fname
+            used.add(fname)
+    satisfied = used | ({target.title_date_field} if has_title_date and target.title_date_field else set())
+    if not all(r in satisfied for r in target.required):
+        return 0.0, cols
+    return len(cols) / max(len(normed), 1), cols
+
+
 def _options(headers: list[str], rows: list[dict], cols: dict[str, str], delimiter: str = "") -> dict:
     date_cols = [h for h, f in cols.items() if "date" in f or f in {"etd", "eta", "valid_from", "valid_to", "last_count",
                                                                    "effective_from", "qualification_valid_until"}]
@@ -208,6 +238,15 @@ def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, 
             best = (sc, name, cols)
     score, name, cols = best
     method = "glossary"
+    if score == 0:  # no exact match at all: renamed columns? try word matching, checked like an AI mapping
+        words: tuple[float, str, dict] = (0.0, "", {})
+        for tname, target in TARGETS.items():
+            sc, wcols = _score_words(headers, target, has_title_date)
+            if sc > words[0]:
+                words = (sc, tname, wcols)
+        if words[0] >= 0.5 and validate_mapping(TARGETS[words[1]], words[2], rows)[0]:
+            score, name, cols = words
+            method = "glossary_words"
     if score < 0.5:  # weak: ask Claude (None offline -> unmapped)
         prompt = (
             f"Does {path} contain rows of one of our target tables? Only map it if each row really IS such a record "

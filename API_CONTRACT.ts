@@ -274,6 +274,12 @@ export interface DecideRequest {
   approvals?: string[]; // additional signers for jointly approved options
 }
 
+/** One clean data table (purchase_orders, order_confirmations, goods_receipts, stock, shipments, ...). */
+export interface TruthTableInfo {
+  table: string;
+  rows: number;
+}
+
 /**
  * Route registry — keep endpoint paths and HTTP methods in sync here.
  * Backend base URL in dev: http://localhost:8000
@@ -298,4 +304,6 @@ export const API_ROUTES = {
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)
   CHANGES: '/api/changes', // GET ?table= -> FieldChange[] (change log of the source of truth)
   INBOX: '/api/inbox', // GET -> InboxMessage[]; POST ReplyRequest -> feeds a supplier reply into the loop
+  TRUTH: '/api/truth', // GET -> TruthTableInfo[] (clean data tables built by Watcher + Ingest, with row counts)
+  TRUTH_ROWS: '/api/truth/:table', // GET ?limit=&q= -> rows of one data table (each with its source file)
 } as const;

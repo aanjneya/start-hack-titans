@@ -264,3 +264,42 @@ def test_book_stock_sheet_with_date_in_title(tmp_path):
     assert by_part["CMP-GAM-003"].quantity == 6000 and str(by_part["CMP-GAM-003"].snapshot_date) == "2026-11-21"
     assert by_part["FG-GH6-STD"].quantity == 602000  # packed copies sheet = finished-goods stock
     assert _errors() == []
+
+
+def test_renamed_po_export_is_mapped_offline(tmp_path):
+    """A re-exported PO file with other column names, semicolons and decimal commas still updates the POs
+    without AI (word matching, validated like an AI mapping); no duplicate POs."""
+    import csv
+    import io
+    import shutil
+
+    from backend.core.models import ColumnMapping, PurchaseOrder
+
+    root = tmp_path / "data"
+    shutil.copytree(config.get_settings().data_root, root)
+    system.process_drop(added=system.list_data_files(root), label="seed", data_root=root)
+    path = root / "soony/erp/purchase_orders_2025H2-2026.csv"
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    target = next(r for r in rows if r["status"] == "open" and float(r["quantity"]) > 0)
+    new_qty = int(float(target["quantity"])) + 1234
+    rename = {"quantity": "Order Qty", "status": "PO Status", "requested_date": "Requested Delivery",
+              "promised_date": "Promised Delivery", "unit_price": "Net Price", "supplier_id": "Vendor",
+              "material_id": "Material", "po_line": "Item", "po_number": "PO Number"}
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=";")
+    w.writerow([rename.get(c, c) for c in rows[0]])
+    for r in rows:
+        vals = {**r, "unit_price": r["unit_price"].replace(".", ",")}
+        if r is target:
+            vals["quantity"] = str(new_qty)
+        w.writerow(list(vals.values()))
+    path.write_text(out.getvalue(), encoding="utf-8")
+    before = len(all_rows(PurchaseOrder))
+    system.process_drop(changed=["soony/erp/purchase_orders_2025H2-2026.csv"], label="renamed", data_root=root)
+    po = [p for p in all_rows(PurchaseOrder)
+          if p.po_number == target["po_number"] and p.po_line == int(target["po_line"])]
+    assert [p.quantity for p in po] == [new_qty]
+    assert len(all_rows(PurchaseOrder)) == before
+    with session() as s:
+        methods = {m.method for m in s.exec(select(ColumnMapping)).all()}
+    assert "glossary_words" in methods and _errors() == []

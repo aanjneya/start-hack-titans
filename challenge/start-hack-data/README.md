@@ -11,14 +11,74 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T15-53 (Europe/Berlin)
-Portal now: 308 files, 47.2 MB
-No changes since last check.
+### Drop check 2026-11-21T16-08 (Europe/Berlin)
+Portal now: 313 files, 47.3 MB
+**5 added · 1 changed · 0 removed**
+Where: `soony/context` (3), `soony/master` (3)
+
+### ➕ `soony/context/launch_status.xlsx` (5,911 B)
+```
+## sheet1.xml
+Grand Heist 6 launch status &#183; Saturday 13:00 &#183; CONFIDENTIAL
+Edition |  | Copies |  |  | Pack-out | 
+Name | Product | Day-one demand | Packed | Still to pack | Rate per hour | Line status
+Standard | FG-GH6-STD | 640.000 | 554.000 | 86.000 | 6000 | running
+Collector's | FG-GH6-CE | 72.000 | 53.100 | 18.900 | 900 | running
+## sheet2.xml
+Note
+```
+
+### ➕ `soony/context/memo_launch_priorities.docx` (37,271 B)
+```
+Memo: Launch priorities for Grand Heist 6
+From: Jonas Lindqvist, CPOTo: Procurement, Logistics, DC HamburgCc: Henrik Dahl, Clara WeissDate: 2026-11-21
+Effective immediately and until Grand Heist 6 is on sale (Sunday 20:00), the following applies:
+Collector's Edition first. All 72,000 copies are pre-ordered and numbered. Where a part is short, it goes to the Collector's cell before the Standard lines. This includes game cards.
+No copy leaves Hamburg with a part that is not released. Quality &amp; Compliance has the last word, not the pack-out plan.
+Air freight and rush orders above the policy limits reach me the same hour, with cost against copies gained.
+After the launch I want a second source for every part that has one supplier today. Proposals by the end of next week.
+One page per day on what can stop a line. Not forty dashboards.
+```
+
+### ➕ `soony/context/org_chart_v2.pdf` (64,121 B)
+
+### ➕ `soony/master/bom_delta_2026-11-21.csv` (348 B)
+```
+change_id,parent_id,child_id,action,qty_per_old,qty_per_new,rev_old,rev_new,use_up_old_rev,effective_from,reason
+ECN-2026-118,FG-GH6-STD,CMP-GAM-004,revision,1,1,B,C,N,2026-11-21,new age-rating mark (USK 2026); parts to rev B must not be packed
+ECN-2026-119,FG-GH6-CE,CMP-GAM-009,revision,1,1,A,B,Y,2026-11-21,fold pattern changed; use up rev A
+```
+
+### ➕ `soony/master/components_update_2026-11-21.csv` (204 B)
+```
+component_id,field,old,new,changed_by
+CMP-GAM-004,drawing_rev,B,C,Sofia Marchetti
+CMP-GAM-009,drawing_rev,A,B,Sofia Marchetti
+CMP-GAM-010,critical,N,Y,Mei Lin
+CMP-GAM-001,abc_class,A,A,Felix Brunner
+```
+
+### ✏️ `soony/master/products.csv` (402 → 470 B)
+- header changed: +['weekly_plan_qty', 'day_one_qty', 'valid_from'] −['plan_weekly_units']
+- rows: 3 → 3 (+0)
+- rows removed/changed: 3, rows added/changed: 3
+```diff
+@@ -1,4 +1,4 @@
+-product_id,name,product_line,lifecycle,launch_date,plan_weekly_units,plants,std_cost_eur
+-FG-GH5-STD,Grand Heist 5 – Standard Edition (game card),Grand Heist,running,2013-09-17,30000,DC-HAM,7.8
+-FG-GH6-STD,Grand Heist 6 – Standard Edition (game card),Grand Heist,launch,2026-11-22,160000,DC-HAM,11.9
+-FG-GH6-CE,Grand Heist 6 – Collector's Edition,Grand Heist,launch,2026-11-22,12000,DC-HAM,34.5
++product_id,name,product_line,lifecycle,launch_date,weekly_plan_qty,day_one_qty,plants,std_cost_eur,valid_from
++FG-GH5-STD,Grand Heist 5 – Standard Edition (game card),Grand Heist,running,2013-09-17,30000,,DC-HAM,7.8,2026-11-21
++FG-GH6-STD,Grand Heist 6 – Standard Edition (game card),Grand Heist,launch,2026-11-22,160000,640000,DC-HAM,11.9,2026-11-21
++FG-GH6-CE,Grand Heist 6 – Collector's Edition,Grand Heist,launch,2026-11-22,12000,72000,DC-HAM,34.5,2026-11-21
+```
 
 ## All checks (newest first, Europe/Berlin)
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 16-08 | 313 · 47.3 MB | 5 | 1 | 0 | **5 added · 1 changed · 0 removed** — `soony/context/launch_status.xlsx`, `soony/context/memo_launch_priorities.docx`, `soony/context/org_chart_v2.pdf` … | [report](reports/2026-11-21T16-08.md) |
 | 2026-11-21 15-53 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T15-53.md) |
 | 2026-11-21 15-38 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T15-38.md) |
 | 2026-11-21 15-23 | 308 · 47.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T15-23.md) |

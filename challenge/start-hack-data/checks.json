@@ -114,5 +114,27 @@
   "gist": "no changes",
   "changed_paths": [],
   "removed_paths": []
+ },
+ {
+  "run": "2026-11-21T16-08",
+  "time": "16:08",
+  "files": 313,
+  "mb": 47.3,
+  "added": 5,
+  "changed": 1,
+  "removed": 0,
+  "paths": [
+   "soony/context/launch_status.xlsx",
+   "soony/context/memo_launch_priorities.docx",
+   "soony/context/org_chart_v2.pdf",
+   "soony/master/bom_delta_2026-11-21.csv",
+   "soony/master/components_update_2026-11-21.csv",
+   "soony/master/products.csv"
+  ],
+  "gist": "5 added \u00b7 1 changed \u00b7 0 removed",
+  "changed_paths": [
+   "soony/master/products.csv"
+  ],
+  "removed_paths": []
  }
 ]

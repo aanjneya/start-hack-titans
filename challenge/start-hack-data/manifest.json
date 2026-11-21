@@ -11,6 +11,18 @@
   "sha256": "4859226a0db4e531160f5e7ce9525c39404fef21e2dd62653300f89936ba2491",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/context/launch_plan_GH6.xlsx"
  },
+ "soony/context/launch_status.xlsx": {
+  "bytes": 5911,
+  "path": "soony/context/launch_status.xlsx",
+  "sha256": "fb07ebc36f4e770c38ca763af2d6a6d3573ba5f29e4ea8950db8b2ecf7dcdfd8",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/context/launch_status.xlsx"
+ },
+ "soony/context/memo_launch_priorities.docx": {
+  "bytes": 37271,
+  "path": "soony/context/memo_launch_priorities.docx",
+  "sha256": "10faff7f2e0f48b6ca54a7070f8e3c582a32b4e668269293ad480b05fe4738ae",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/context/memo_launch_priorities.docx"
+ },
  "soony/context/onboarding_notes.md": {
   "bytes": 2460,
   "path": "soony/context/onboarding_notes.md",
@@ -22,6 +34,12 @@
   "path": "soony/context/org_chart_procurement.pdf",
   "sha256": "8fe454f3fdd607de3830fede7552976e114898143d9679125f424b416a7373f7",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/context/org_chart_procurement.pdf"
+ },
+ "soony/context/org_chart_v2.pdf": {
+  "bytes": 64121,
+  "path": "soony/context/org_chart_v2.pdf",
+  "sha256": "3c4b977283aa73e0e5a47d42acc90aeed3ee2ad1a91208dee205e6f8d26d6343",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/context/org_chart_v2.pdf"
  },
  "soony/erp/goods_receipts.csv": {
   "bytes": 40445,
@@ -71,11 +89,23 @@
   "sha256": "894799f12f93bd558c1f14c539800a8cd4f250482c1cc417df2bd19fb5d46c4b",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/bom.csv"
  },
+ "soony/master/bom_delta_2026-11-21.csv": {
+  "bytes": 348,
+  "path": "soony/master/bom_delta_2026-11-21.csv",
+  "sha256": "00c848c9fd86d8192299b8e054335d5f61ab81620f6f3fe2d05ccf8701e232fc",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/bom_delta_2026-11-21.csv"
+ },
  "soony/master/components.csv": {
   "bytes": 958,
   "path": "soony/master/components.csv",
   "sha256": "059cc988a9de3d97abf6423f4a859defb3e9448d7f72a230ae0dda73b41c4342",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/components.csv"
+ },
+ "soony/master/components_update_2026-11-21.csv": {
+  "bytes": 204,
+  "path": "soony/master/components_update_2026-11-21.csv",
+  "sha256": "965d749bf0edcd27fa9cd91e904f5443da8ca7bac805357b9a3b5472d4a7cb65",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/components_update_2026-11-21.csv"
  },
  "soony/master/logistics_providers.csv": {
   "bytes": 237,
@@ -90,9 +120,9 @@
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/ports.csv"
  },
  "soony/master/products.csv": {
-  "bytes": 402,
+  "bytes": 470,
   "path": "soony/master/products.csv",
-  "sha256": "6c01543d9b0e45b28533709568c37cb6382d2d1edc9737faf217414d58d65096",
+  "sha256": "b9d487bb6051dac24016377116a3c07497a2869e94ccfdf1a90a552fa978c714",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/products.csv"
  },
  "soony/master/routes.csv": {

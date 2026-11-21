@@ -87,3 +87,8 @@
 - **Context**: The Anthropic org has no API credits yet; Daksh added an OpenAI provider and live-tested Ingest/OCR with it.
 - **Decision**: Keep the Anthropic API as the main provider (Tim's Chaser tool-use agent depends on it). `backend/core/llm.py` keeps both: `LLM_PROVIDER=auto` uses Claude when `ANTHROPIC_API_KEY` is set, otherwise OpenAI; one provider per backend instance.
 - **Trade-offs**: Until Claude credits exist, a live demo on OpenAI has OCR + document reading, but the Chaser falls back to its non-AI mode.
+
+### [23:05] Read-only data routes for the UI (daksh)
+- **Context**: The team wants to see the clean data Agent 1+2 (Watcher + Ingest) built, in SAP terms.
+- **Decision**: Added (additive only) `GET /api/truth` (tables + row counts) and `GET /api/truth/{table}?q=` (rows with their source file) in `backend/app/main.py`, mirrored in `API_CONTRACT.ts` (`TRUTH`, `TRUTH_ROWS`, `TruthTableInfo`). The SAP field names (EKPO-EBELN, MSEG-MBLNR, MARD-LABST …) live only in the UI, the DB keeps our field names.
+- **Trade-offs**: Read-only, max 5,000 rows per table; no paging yet.

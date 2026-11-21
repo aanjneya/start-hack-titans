@@ -7,7 +7,7 @@
 ## Now (Active Sprint)
 
 - [x] @daksh 1 Watcher (`backend/agents/watcher.py`) ✅ Sat 19:35
-- [x] @daksh 2 Ingest & Normalizer (`backend/agents/ingest*.py`) ✅ Sat 19:35 · OCR of scans built 19:50 (needs live Claude to run)
+- [x] @daksh 2 Ingest & Normalizer (`backend/agents/ingest*.py`) ✅ Sat 19:35 · OCR 19:50 · **live-tested 21:15 with OpenAI** (60/60 scans, 0 errors) · handles the 21:38 drop (stock date from sheet title) · 63 tests green on `daksh` (22:10)
 - [x] @aanjneya 3 Reconciler & Gate (`backend/agents/reconciler.py`, `backend/agents/reconciler_rules.py`, `backend/tests/test_reconciler.py`, `.brain/tasks/3-reconciler-gate.md`) ✅ Sat 20:38 · Finding Format v1, 3-drop replay green (34 tests)
 - [~] @tim 4 Chaser: merged into `main` at `5480c9e`. The Planner → Chaser → supplier reply loop passed offline. First live email to Karton Nowak remains open (`backend/agents/chaser.py`, `backend/core/mail.py`, `backend/core/config.py`, `backend/core/models.py`, `backend/app/main.py`, `API_CONTRACT.ts`)
 - [x] @jivi 5 Launch Planner & Decision Copilot (merged shortage recommendation fix `d6e40fe`. All 62 backend tests and `verify.sh` passed, including the pinned 17:23 scenario and the 21:38 receipt) (`backend/agents/planner.py`, `.brain/tasks/5-launch-planner.md`)

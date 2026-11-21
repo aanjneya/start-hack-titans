@@ -68,11 +68,14 @@ CMP-MAG-005,SUP-0029,flag,63,,1.0,Y,sub-supplier cannot export; no second source
     "legalName": "Guangzhou PackRight Packaging Co., Ltd.",
 ```
 
+## Agent feedback
+Export-control drop: news says China now needs end-use licences for NdFeB magnets (4-8 weeks), and Guangzhou PackRight (SUP-0029) says its magnet sub-supplier cannot export. CMP-MAG-005 (4 lid magnets per Collector's box) is single-source with stock 0, no PO, no receipts; that answers the onboarding question 'why does the stock list show no lid magnets?' only if the magnets ship inside the boxes. Collector's box CMP-GAM-007 stock is 27,500 vs ~18,900 still to pack, but its lead time jumps from 63 to 105 days for December deliveries. Pune Diecast (statue second source) now shows status 'watch' with its conditional release expired on 30 Oct and not extended; profiles now also come as SAP JSON (new format next to the old CSV).
+
 ## All checks (newest first, Europe/Berlin)
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
-| 2026-11-21 17-23 | 318 · 47.4 MB | 5 | 0 | 0 | **5 added · 0 changed · 0 removed** — `soony/news/2026-11-21_export_controls.json`, `suppliers/SUP-0018_Pune_Diecast_Works/profile.json`, `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv` … | [report](reports/2026-11-21T17-23.md) |
+| 2026-11-21 17-23 | 318 · 47.4 MB | 5 | 0 | 0 | **5 added · 0 changed · 0 removed** — `soony/news/2026-11-21_export_controls.json`, `suppliers/SUP-0018_Pune_Diecast_Works/profile.json`, `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv` … Export-control drop: news says China now needs end-use licences for NdFeB magnets (4-8 weeks), and Guangzhou PackRight (SUP-0029) says its magnet sub-supplier cannot export. CMP-MAG-005 (4 lid magnets per Collector's box) is single-source with stock 0, no PO, no receipts; that answers the onboarding question 'why does the stock list show no lid magnets?' only if the magnets ship inside the boxes. Collector's box CMP-GAM-007 stock is 27,500 vs ~18,900 still to pack, but its lead time jumps from 63 to 105 days for December deliveries. Pune Diecast (statue second source) now shows status 'watch' with its conditional release expired on 30 Oct and not extended; profiles now also come as SAP JSON (new format next to the old CSV). | [report](reports/2026-11-21T17-23.md) |
 | 2026-11-21 17-08 | 313 · 47.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T17-08.md) |
 | 2026-11-21 16-53 | 313 · 47.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T16-53.md) |
 | 2026-11-21 16-38 | 313 · 47.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T16-38.md) |

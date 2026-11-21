@@ -137,6 +137,12 @@
   "sha256": "d98a042d0e5de34658805d8fe7ec0eaacc5ebc150aa90b5922b71bb14bd15da0",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/master/sites.csv"
  },
+ "soony/news/2026-11-21_export_controls.json": {
+  "bytes": 1143,
+  "path": "soony/news/2026-11-21_export_controls.json",
+  "sha256": "5b86f4728d3b9a7f4efd382497485cc27fcf37ae1fe0f27cb060de8ee442706a",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/news/2026-11-21_export_controls.json"
+ },
  "soony/receiving/DC-HAM/20260907_DN-260902-677.png": {
   "bytes": 1312559,
   "path": "soony/receiving/DC-HAM/20260907_DN-260902-677.png",
@@ -1253,6 +1259,12 @@
   "sha256": "2cb89b7f4eb9c0a71e190557f3e63a03aee9afbba357489edf92dae0eee25908",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0018_Pune_Diecast_Works/profile.csv"
  },
+ "suppliers/SUP-0018_Pune_Diecast_Works/profile.json": {
+  "bytes": 1054,
+  "path": "suppliers/SUP-0018_Pune_Diecast_Works/profile.json",
+  "sha256": "01ba8418f1d29ce3e72c9f4ea82bd86c8cc5be906ee37c41f28cc77060c99fac",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0018_Pune_Diecast_Works/profile.json"
+ },
  "suppliers/SUP-0019_Dongguan_Precision_Housings/components.csv": {
   "bytes": 353,
   "path": "suppliers/SUP-0019_Dongguan_Precision_Housings/components.csv",
@@ -1709,6 +1721,12 @@
   "sha256": "40ab55dcd7df2527c26e18286a1e59db5c0673fd342a02ef076519757e0cf73f",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0029_Guangzhou_PackRight/components.csv"
  },
+ "suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv": {
+  "bytes": 276,
+  "path": "suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv",
+  "sha256": "83ebc27ebdab81c062d3c150e8a95427d762119858d3ac92906a01744fc91b4a",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv"
+ },
  "suppliers/SUP-0029_Guangzhou_PackRight/contracts/SUP-0029_Framework_Supply_Agreement_2023.pdf": {
   "bytes": 67108,
   "path": "suppliers/SUP-0029_Guangzhou_PackRight/contracts/SUP-0029_Framework_Supply_Agreement_2023.pdf",
@@ -1720,6 +1738,12 @@
   "path": "suppliers/SUP-0029_Guangzhou_PackRight/notices/Price_list_20250624.xlsx",
   "sha256": "355bacd8e004e0c8a2d7d9601c65e52eb1ad0fb6bbec2a600ea0ae4320f3efcf",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0029_Guangzhou_PackRight/notices/Price_list_20250624.xlsx"
+ },
+ "suppliers/SUP-0029_Guangzhou_PackRight/notices/Supply_notice_export_licence_2026-11-21.pdf": {
+  "bytes": 73532,
+  "path": "suppliers/SUP-0029_Guangzhou_PackRight/notices/Supply_notice_export_licence_2026-11-21.pdf",
+  "sha256": "0251401ec2bb23acc247213debd3011bfec3eab9393e587b858c112ff317524c",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0029_Guangzhou_PackRight/notices/Supply_notice_export_licence_2026-11-21.pdf"
  },
  "suppliers/SUP-0029_Guangzhou_PackRight/order_confirmations/OA25353920_4500318598.pdf": {
   "bytes": 63944,
@@ -1876,5 +1900,11 @@
   "path": "suppliers/SUP-0029_Guangzhou_PackRight/profile.csv",
   "sha256": "e6d5fb238d91d843289397d0a2dad58c1a1f3964babcff47236d8422b85dcf89",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0029_Guangzhou_PackRight/profile.csv"
+ },
+ "suppliers/SUP-0029_Guangzhou_PackRight/profile.json": {
+  "bytes": 1006,
+  "path": "suppliers/SUP-0029_Guangzhou_PackRight/profile.json",
+  "sha256": "ce5c3eb5bb3291515dc8fd60f1f5956fe4fadfaf1e020e15e00acf9984cac773",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0029_Guangzhou_PackRight/profile.json"
  }
 }

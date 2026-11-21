@@ -185,11 +185,16 @@ def language(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Scans (photos of delivery notes, packing lists, image-only PDFs): Claude vision OCR
 # ---------------------------------------------------------------------------
+OCR_VERSION = 2  # bump when the OCR prompt/schema changes -> cached scans are read again once
+
+
 class ScanLine(BaseModel):
     part_number: str  # exactly as printed (our CMP-… or the supplier's own number)
     description: str = ""
     quantity_as_printed: str = ""  # character for character, e.g. "125.000" (we parse it, locale-aware)
-    quantity: Optional[float] = None  # filled by our parser from quantity_as_printed
+    quantity_corrected_by_hand: str = ""  # if someone crossed out/overwrote the quantity by hand: the new value
+    quantity: Optional[float] = None  # filled by our parser (hand correction wins over the printed value)
+    printed_quantity: Optional[float] = None  # filled by our parser from quantity_as_printed
     unit: str = ""
     packages: Optional[float] = None
 
@@ -203,7 +208,7 @@ class ScanExtraction(BaseModel):
     lines: list[ScanLine] = []
     carrier_reference: str = ""
     remarks: str = ""  # printed remarks field, translated to English
-    handwritten_notes: str = ""  # any handwriting except the signature (e.g. "2 cartons damaged"), in English
+    handwritten_notes: str = ""  # handwriting that CHANGES meaning (corrections, damage, shortage), in English
     received_by: str = ""
     language: str = ""  # ISO code of the printed document
     summary_en: str = ""  # one English sentence
@@ -214,9 +219,11 @@ SCAN_PROMPT = (
     "It may be Polish, Korean, Chinese, German or English. Transcribe exactly what is printed: document type, "
     "number, date (as YYYY-MM-DD), supplier, purchase order numbers, every line (part number exactly as printed, "
     "description, quantity_as_printed copied character for character including dots/commas/spaces, e.g. '125.000' "
-    "or '48,000', unit, packages), carrier reference, "
-    "the remarks field and ANY handwritten notes other than the signature (translate both to English), who "
-    "received it, and a one-sentence English summary. Leave a field empty if it is not on the document; never guess."
+    "or '48,000', and if a quantity was crossed out or overwritten by hand, the handwritten value in "
+    "quantity_corrected_by_hand; unit, packages), carrier reference, the printed remarks field (English), "
+    "handwritten_notes ONLY for handwriting that changes the meaning (corrections, damage, shortage, refusal; "
+    "NOT received-stamps, dates or signatures), who received it, and a one-sentence English summary. "
+    "Leave a field empty if it is not on the document; never guess."
 )
 
 
@@ -229,10 +236,13 @@ def normalize_scan(r: ScanExtraction) -> ScanExtraction:
     low = (r.document_type or "").lower()
     r.document_type = next((k for k, rx in _DOC_TYPES if re.search(rx, low)), "other")
     for line in r.lines:
-        if line.quantity_as_printed:
-            parsed = parse_number(line.quantity_as_printed)
-            if parsed is not None:
-                line.quantity = parsed
+        printed = parse_number(line.quantity_as_printed) if line.quantity_as_printed else None
+        corrected = parse_number(line.quantity_corrected_by_hand) if line.quantity_corrected_by_hand else None
+        line.printed_quantity = printed if printed is not None else line.quantity
+        line.quantity = corrected if corrected is not None else line.printed_quantity
+    if re.fullmatch(r"\s*(none|n/?a|-|no|nothing)[^a-z]*.*", (r.handwritten_notes or "").lower()) or \
+            re.search(r"only the signature|none other", (r.handwritten_notes or "").lower()):
+        r.handwritten_notes = ""
     return r
 
 

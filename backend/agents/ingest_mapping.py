@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import date, datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -135,6 +137,48 @@ def _options(headers: list[str], rows: list[dict], cols: dict[str, str], delimit
     return {"decimal_comma": True if delimiter == ";" else None, "date_order": detect_date_order(sample)}
 
 
+def _shape(value: str) -> str:
+    return re.sub(r"[A-Za-z]", "A", re.sub(r"\d", "9", str(value).strip()))
+
+
+def validate_mapping(target: Target, cols: dict[str, str], rows: list[dict]) -> tuple[bool, str]:
+    """Guard against AI mappings that would pollute the truth (T2.15): required fields present, sample values
+    convert to the field types, and key values look like the ids already in that table."""
+    mapped = set(cols.values())
+    missing = [f for f in target.required if f not in mapped]
+    if missing:
+        return False, f"missing required {missing}"
+    from typing import get_args
+
+    from ..core.parsing import parse_date, parse_number
+
+    bad = total = 0
+    for row in rows[:20]:
+        for header, field in cols.items():
+            info = target.model.model_fields.get(field)
+            val = str(row.get(header, "") or "").strip()
+            if info is None or not val:
+                continue
+            kinds = [a for a in get_args(info.annotation) if a is not type(None)] or [info.annotation]
+            kind = kinds[0]
+            total += 1
+            if kind is date or kind is datetime:
+                bad += parse_date(val) is None
+            elif kind in (int, float):
+                bad += parse_number(val) is None
+    if total and bad / total > 0.2:
+        return False, f"{bad}/{total} sample values don't fit the field types"
+    with session() as s:
+        existing = s.exec(select(getattr(target.model, target.key[0])).limit(50)).all()
+    key_col = next((h for h, f in cols.items() if f == target.key[0]), None)
+    if existing and key_col:
+        shapes = {_shape(v) for v in existing if v}
+        sample = [str(r.get(key_col, "")) for r in rows[:20] if r.get(key_col)]
+        if sample and sum(_shape(v) in shapes for v in sample) / len(sample) < 0.5:
+            return False, f"key values {sample[:2]} don't look like existing {target.key[0]}s"
+    return True, ""
+
+
 class ColumnPair(BaseModel):
     header: str
     field: str
@@ -162,7 +206,10 @@ def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, 
     method = "glossary"
     if score < 0.5:  # weak: ask Claude (None offline -> unmapped)
         prompt = (
-            f"Map the columns of {path} to one target table.\nHeaders: {headers}\nSample rows: "
+            f"Does {path} contain rows of one of our target tables? Only map it if each row really IS such a record "
+            "(e.g. a purchase order line, a shipment); reference lists like ports, routes, sites or price lists are "
+            "NOT shipments or suppliers -> answer target_table ''. Never map a column to a field of another meaning."
+            f"\nHeaders: {headers}\nSample rows: "
             f"{json.dumps(rows[:5], ensure_ascii=False, default=str)}\nTarget tables and fields: "
             + json.dumps({n: list(t.synonyms) for n, t in TARGETS.items()})
             + "\nReturn target_table (or '' if none fits) and columns as [{header, field}] using only listed fields."
@@ -171,12 +218,16 @@ def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, 
             answer = llm.extract(prompt, LLMMapping, agent=agent, task="ingest.map_columns")
         except llm.LLMError:
             answer = None  # Claude unavailable: keep the file as a plain table
+        name, cols, method = "", {}, "unmapped"
         if answer and answer.target_table in TARGETS:
-            name, method = answer.target_table, "llm"
-            cols = {p.header: p.field for p in answer.columns if p.header in headers}
-            score = len(cols) / max(len(headers), 1)
-        else:
-            name, cols, method = "", {}, "unmapped"
+            cand = {p.header: p.field for p in answer.columns
+                    if p.header in headers and p.field in TARGETS[answer.target_table].synonyms}
+            ok, why = validate_mapping(TARGETS[answer.target_table], cand, rows)
+            if ok:
+                name, cols, method = answer.target_table, cand, "llm"
+                score = len(cols) / max(len(headers), 1)
+            else:
+                method = f"llm_rejected: {why}"
     mapping = Mapping(name or None, cols, _options(headers, rows, cols, delimiter) if name else {}, method, score, fp)
     with session() as s:
         s.add(ColumnMapping(fingerprint=fp, target_table=name, mapping=cols, options=mapping.options,

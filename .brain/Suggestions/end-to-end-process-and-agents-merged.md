@@ -10,6 +10,23 @@ Soony has a system of record for only 2 of 7 steps. We close the other five.
 ```
 **One loop (from daksh):** new drop or email → normalize into one truth → check against what the launch needs → chase what's missing → Plan A/B/C with **€ cost vs copies gained** → human approves in one click → agent executes → **next drop or reply confirms it, or the issue reopens.**
 
+## 1b. The process we sell (team decision: sell the process, not a product)
+**Offer:** a standard, agent-run process that gets every part from order to line before a hard deadline, the same for every company. Soony is customer #1; the screen is the proof, not the product.
+| Step | Always happens, any company |
+|---|---|
+| 1 Watch | Every source checked continuously; nothing waits for someone to remember |
+| 2 Normalize | Every format and language → one truth; every value traceable to its source |
+| 3 Check | Same checks every time: sources disagree, feed went silent, confirmation ≠ order, revision changed, bank details changed |
+| 4 Chase | Missing info requested automatically, politely, rate-limited |
+| 5 Decide | Every problem → decision card: options, cost vs. gain, the right approver |
+| 6 Act & confirm | Approved fix executed, then verified; reopens if it didn't happen |
+| 7 Learn | Risk scores update; the next launch starts smarter |
+
+**Per-company setup only (read from their data, never hardcoded):** data sources, the deadline, line rates, priority rules, approval matrix. Soony = GH6 Sun 20:00, `launch_status.xlsx` rates, "Collector's first" memo, PP-07 + org chart.
+**Pricing idea:** per launch / critical deadline; value = copies saved × margin + buyer hours no longer spent chasing. Ask Maren "What does a missing copy cost on day one?" for the anchor.
+**Next 10 customers:** anyone with a hard date + many suppliers (console/phone launches, fashion drops, toys before Christmas, plant start-ups).
+**Judging caveat:** Taste and Technical Depth score a working product and real agent actions, so pitch the process and prove it live on Soony's data.
+
 ## 2. Agents (5 + coordinator; one verb each, so not "one big prompt")
 | # | Agent | Job | Key inputs | Hands off to | Human gate |
 |---|---|---|---|---|---|

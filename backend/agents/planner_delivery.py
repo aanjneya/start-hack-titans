@@ -1,4 +1,4 @@
-"""Decision-linked delivery advice. Ingest owns accepted facts; Chaser owns the mock outbox."""
+"""Decision-linked delivery advice. Ingest owns accepted facts; Chaser owns the outbox."""
 from __future__ import annotations
 
 import re
@@ -8,7 +8,7 @@ from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import select
 
 from ..core import trace
-from ..core.models import DecisionCard, InboxMessage, Issue, OrderConfirmation, OutboxMessage, Supplier, utcnow
+from ..core.models import DecisionCard, InboxMessage, Issue, OrderConfirmation, OutboxMessage
 from ..core.store import session
 from .ingest import IngestNormalizer
 
@@ -36,24 +36,6 @@ def already_requested(s, actions):
     cards = s.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
                    DecisionCard.status.in_(["approved", "executed"]))).all()
     return any(c.chosen_option is not None and c.options[c.chosen_option].get("actions") == actions for c in cards)
-
-
-def mock_outbox(event):
-    """Offline transport for Planner requests. A native Chaser's delivery takes precedence."""
-    p = event.payload
-    if not p.get("decision_id") or not p.get("ask"):
-        return
-    with session() as s:
-        existing = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == p["decision_id"])).first()
-        if existing:
-            return
-        supplier = s.exec(select(Supplier).where(Supplier.supplier_id == p["supplier_id"])).first()
-        msg = OutboxMessage(supplier_id=p["supplier_id"], issue_id=p["issue_id"], decision_id=p["decision_id"],
-                            subject="[MOCK] " + p["ask"], body=p["ask"], body_en=p["ask"], language="en",
-                            to_email=supplier.contact_email if supplier else "", status="sent", sent_at=utcnow())
-        s.add(msg)
-        s.commit()
-    trace.log("chaser", "mock_dispatch", p["ask"], data={"decision_id": p["decision_id"], "mocked": True})
 
 
 class PlanningReplyIngest(IngestNormalizer):

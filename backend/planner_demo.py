@@ -1,4 +1,4 @@
-"""Run the real data replay and an explicitly simulated supplier reply in a fresh temporary database.
+"""Replay the historical sleeve scenario and an explicitly simulated supplier reply in a fresh temporary database.
 
 From the repository root: backend/.venv/bin/python -m backend.planner_demo
 """
@@ -12,9 +12,22 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
+# The 17:23 drop has the revision finding and an outstanding sleeve delivery.
+# The evening receipt legitimately changes the recommended action.
+SLEEVE_SCENARIO_COMMIT = "f832f462bf8fbca26f1cad93f124a62d3a43a853"
+
+
+def sleeve_scenario_steps():
+    from .core.replay import list_drops
+
+    for index, drop in enumerate(list_drops(), start=1):
+        if drop.commit == SLEEVE_SCENARIO_COMMIT:
+            return index
+    raise RuntimeError("The historical sleeve demo requires the repository's full data-drop history.")
+
+
 def run(client, scratch):
     from . import system
-    from .core.replay import list_drops
 
     def get(path):
         result = client.get(path)
@@ -26,7 +39,7 @@ def run(client, scratch):
         result.raise_for_status()
         return result.json()["data"]
 
-    for _ in list_drops():
+    for _ in range(sleeve_scenario_steps()):
         post("/api/replay/step")
     cards = get("/api/decisions?status=proposed")
     revision_findings = {i["id"] for i in get("/api/issues") if i["type"] == "rev_blocked"}
@@ -70,7 +83,8 @@ def run(client, scratch):
     errors = [e for e in get("/api/trace?limit=500") if e["action"] == "error"]
     if errors:
         raise RuntimeError(errors)
-    return {"mode": "MOCK — real drops, simulated site release and supplier reply",
+    return {"mode": "MOCK — historical sleeve scenario, simulated site release and supplier reply",
+            "through_commit": SLEEVE_SCENARIO_COMMIT,
             "editions": [{k: f[k] for k in ("edition", "projected_packed", "shortfall", "limiting_part")}
                          for f in {row["product_id"]: row for row in reversed(forecasts)}.values()],
             "decision_id": sleeve["id"], "options": [{k: o[k] for k in ("label", "cost_eur", "copies_gained")}

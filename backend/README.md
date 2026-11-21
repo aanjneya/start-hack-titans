@@ -27,13 +27,13 @@ Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude 
 
 ## Launch Planner demo
 
-Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID.
+Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops through the 17:23 sleeve scenario into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID. For the latest data, run the full replay in an isolated database. The 21:38 drop includes the receipt for that shipment.
 
 The baseline uses the workbook timestamp, working shifts, eligible lots and confirmed line-ready inbound. An option’s copies gained measures its effect on finished copies by the deadline. The published print quote excludes freight. For an amendment to an existing PO, approval uses the whole priced PO plus the incremental charge.
 
 A decision-linked supplier reply enters `POST /api/inbox` with the outbox ID and either `quote` or `delivery` as specified in `API_CONTRACT.ts`. A plain-text confirmation can also identify one PO/line, shipment, quantity, revision and timezone-qualified arrival. Ambiguous answers remain in the inbox for review. Correcting an accepted answer requires its inbox ID in `supersedes_inbox_id`.
 
-An internal receiving table supplies `receiving_site`, `delivery_reference` (shipment ID), `approved_revision` and `dock_released_at` (ISO time). The demo labels and injects its simulated site release separately from the supplier confirmation. In mock mode the Chaser handoff records a simulated outbox message when the installed Chaser has not recorded one.
+An internal receiving table supplies `receiving_site`, `delivery_reference` (shipment ID), `approved_revision` and `dock_released_at` (ISO time). The demo labels and injects its simulated site release separately from the supplier confirmation. In mock mode Chaser creates the decision-linked outbox message. The pickup integration test feeds a threaded supplier reply through its mailbox reader and verifies the resulting forecast.
 
 ## Layout
 

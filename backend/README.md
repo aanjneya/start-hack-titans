@@ -25,6 +25,16 @@ Then:
 `MOCK_MODE=true` (default, from `.env`) = fully offline: no Claude calls, no emails, no portal calls.
 Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude for real.
 
+## Launch Planner demo
+
+Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID.
+
+The baseline uses the workbook timestamp, working shifts, eligible lots and confirmed line-ready inbound. An option’s copies gained measures its effect on finished copies by the deadline. The published print quote excludes freight. For an amendment to an existing PO, approval uses the whole priced PO plus the incremental charge.
+
+A decision-linked supplier reply enters `POST /api/inbox` with the outbox ID and either `quote` or `delivery` as specified in `API_CONTRACT.ts`. A plain-text confirmation can also identify one PO/line, shipment, quantity, revision and timezone-qualified arrival. Ambiguous answers remain in the inbox for review. Correcting an accepted answer requires its inbox ID in `supersedes_inbox_id`.
+
+An internal receiving table supplies `receiving_site`, `delivery_reference` (shipment ID), `approved_revision` and `dock_released_at` (ISO time). The demo labels and injects its simulated site release separately from the supplier confirmation. In mock mode the Chaser handoff records a simulated outbox message when the installed Chaser has not recorded one.
+
 ## Layout
 
 ```
@@ -45,7 +55,8 @@ backend/
   agents/base.py       Agent base class: subscriptions, log(), emit(), raise_issue() (dedup + reopen)
   agents/watcher.py    ✅ agent 1: portal diff (live) / replay (demo)
   agents/ingest*.py    ✅ agent 2: tables (learned column mappings), documents (OA parser, facts, Claude), aliases, replies
-  agents/*.py          the other agents are still STUBS: replace the TODOs (see .brain/tasks/<n>-<agent>.md)
+  agents/planner*.py   pack projection, option comparison, approval handoff and correlated delivery advice
+  agents/*.py          other agent implementations and assigned tasks in .brain/tasks/
   tests/               pytest; each test gets its own temp DB
 ```
 

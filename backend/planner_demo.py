@@ -1,0 +1,91 @@
+"""Run the real data replay and an explicitly simulated supplier reply in a fresh temporary database.
+
+From the repository root: backend/.venv/bin/python -m backend.planner_demo
+"""
+from __future__ import annotations
+
+import csv
+import json
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+
+def run(client, scratch):
+    from . import system
+    from .core.replay import list_drops
+
+    def get(path):
+        result = client.get(path)
+        result.raise_for_status()
+        return result.json()["data"]
+
+    def post(path, payload=None):
+        result = client.post(path, json=payload)
+        result.raise_for_status()
+        return result.json()["data"]
+
+    for _ in list_drops():
+        post("/api/replay/step")
+    cards = get("/api/decisions?status=proposed")
+    revision_findings = {i["id"] for i in get("/api/issues") if i["type"] == "rev_blocked"}
+    sleeve = next(card for card in cards if revision_findings.intersection(card["issue_ids"])
+                  and any(o["label"] == "Order a fresh rush print" for o in card["options"]))
+    chosen = sleeve["options"][sleeve["recommended"]]
+    action = chosen["actions"][0]
+    forecasts = get("/api/forecast")
+    baseline = next(f for f in forecasts if any(x["shipment_id"] == action["shipment_id"] for x in f["details"]["inbound"]))
+    inbound = next(x for x in baseline["details"]["inbound"] if x["shipment_id"] == action["shipment_id"])
+    as_of = datetime.fromisoformat(baseline["details"]["as_of"])
+    arrival = as_of + timedelta(hours=5)
+
+    # Internal site release is separate from supplier evidence. Only the simulation adds this document.
+    rel = "site/mock_site_release.csv"
+    path = scratch / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as output:
+        writer = csv.writer(output)
+        writer.writerow(["receiving_site", "delivery_reference", "approved_revision", "dock_released_at"])
+        from .core.models import Shipment
+        from .core.store import find_rows
+        site = find_rows(Shipment, shipment_id=action["shipment_id"])[0].dest_site
+        writer.writerow([site, action["shipment_id"], inbound["revision"], arrival.isoformat()])
+    system.process_drop(added=[rel], data_root=scratch, label="MOCK site lead release for existing delivery")
+    sleeve = next(c for c in get("/api/decisions?status=proposed") if c["title"] == sleeve["title"])
+    chosen = sleeve["options"][sleeve["recommended"]]
+    post(f"/api/decisions/{sleeve['id']}/approve", {"by": chosen["approvers"][0], "approvals": chosen["approvers"][1:]})
+    out = next(m for m in get("/api/outbox") if m["decision_id"] == sleeve["id"])
+    fact = {key: inbound[key] for key in ("po_number", "po_line", "shipment_id", "revision", "quantity")}
+    fact["arrival"] = arrival.isoformat()
+    payload = {"subject": "[MOCK] Existing delivery confirmed", "supplier_id": out["supplier_id"],
+               "issue_id": out["issue_id"], "outbox_id": out["id"],
+               "body": f"[MOCK] Confirmed {int(fact['quantity'])} units, rev {fact['revision']}, at {fact['arrival']}.",
+               "delivery": fact}
+    receipt = post("/api/inbox", payload)
+    after = next(f for f in get("/api/forecast") if f["product_id"] == baseline["product_id"])
+    entry = next(x for x in after["details"]["inbound"] if x["shipment_id"] == fact["shipment_id"])
+    if not entry["eligible"]:
+        raise RuntimeError("Mock delivery did not reach the projection.")
+    errors = [e for e in get("/api/trace?limit=500") if e["action"] == "error"]
+    if errors:
+        raise RuntimeError(errors)
+    return {"mode": "MOCK — real drops, simulated site release and supplier reply",
+            "editions": [{k: f[k] for k in ("edition", "projected_packed", "shortfall", "limiting_part")}
+                         for f in {row["product_id"]: row for row in reversed(forecasts)}.values()],
+            "decision_id": sleeve["id"], "options": [{k: o[k] for k in ("label", "cost_eur", "copies_gained")}
+                                                    for o in sleeve["options"]],
+            "outbox_id": out["id"], "inbox_id": receipt["inbox_id"], "reply": payload,
+            "before": baseline["projected_packed"], "after": after["projected_packed"],
+            "remaining_shortfall": after["shortfall"], "confirmed_delivery": entry,
+            "trace_run": receipt["run_id"]}
+
+
+if __name__ == "__main__":
+    with TemporaryDirectory(prefix="launch-planner-") as temp:
+        scratch = Path(temp)
+        os.environ.update(MOCK_MODE="true", DB_PATH=str(scratch / "demo.db"), REPLAY_DIR=str(scratch / "replay"))
+        from fastapi.testclient import TestClient
+        from .app.main import app
+        with TestClient(app) as client:
+            print(json.dumps(run(client, scratch), indent=2))

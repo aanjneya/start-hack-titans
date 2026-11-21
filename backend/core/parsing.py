@@ -108,8 +108,10 @@ def file_text(path: Path) -> str | None:
 
 
 def _unescape(s: str) -> str:
-    return (s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-             .replace("&quot;", '"').replace("&apos;", "'").replace("&#183;", "·"))
+    """XML/HTML entities incl. numeric ones ('&#8211;' -> '–', '&amp;' -> '&')."""
+    import html
+
+    return html.unescape(s)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +133,7 @@ def parse_number(value, decimal_comma: bool | None = None) -> float | None:
         s = s.replace(".", "").replace(",", ".")
     elif decimal_comma is False:
         s = s.replace(",", "")
-    elif _THOUSANDS_DOT.match(s):
+    elif _THOUSANDS_DOT.match(s) and not re.match(r"^-?0\.", s):  # '0.125' is never 125
         s = s.replace(".", "")
     elif _THOUSANDS_COMMA.match(s):
         s = s.replace(",", "")

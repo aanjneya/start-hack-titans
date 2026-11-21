@@ -183,6 +183,10 @@ def _coerce(model: type[SQLModel], field_name: str, value):
     return TypeAdapter(info.annotation).validate_python(value)
 
 
+#: Tables whose `updated_at` column is data from the source (never overwritten with "now" on update).
+SOURCE_CLOCK_TABLES = {"shipments"}
+
+
 def update_row(
     model: type[T],
     row_id: int,
@@ -250,7 +254,9 @@ def update_row(
                 change_type=change_type, source=source, agent=agent, reason=reason,
                 confidence=confidence, issue_id=issue_id,
             ))
-        if result.changes and hasattr(row, "updated_at"):
+        # Bookkeeping time. Not for tables where updated_at is the SOURCE's own clock (shipments: the carrier's
+        # last update) - overwriting it would make a frozen tracking feed look fresh.
+        if result.changes and hasattr(row, "updated_at") and table not in SOURCE_CLOCK_TABLES:
             row.updated_at = utcnow()
         s.add(row)
         s.add_all(result.changes + result.conflicts)

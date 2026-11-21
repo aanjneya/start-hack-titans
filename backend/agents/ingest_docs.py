@@ -35,6 +35,7 @@ RISK_WORDS = {
     "bank_change": r"bank details|new account|IBAN|zmiana rachunku",
     "price_change": r"price (?:increase|change)|new price|\+\s?\d+\s?%",
     "rush_offer": r"rush|express|ekspres",
+    "on_hold": r"on hold|not accept|do not accept|refuse|will not release|until .{0,40}confirm",
 }
 
 KIND_BY_FOLDER = {"order_confirmations": "order_confirmation", "notices": "notice", "contracts": "contract",

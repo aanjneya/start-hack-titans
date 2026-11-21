@@ -1,0 +1,130 @@
+Speaker A: the results. I need to be like, I need to see the actions. What should we do?
+Speaker B: Okay.
+Speaker A: I don't care about those fucking dashboards where you don't get anything. I need actions.
+Speaker B: Actions. Actions.
+Speaker C: How important is AI traceability for you as the head of the company?
+Speaker A: What? Sorry?
+Speaker C: AI traceability.
+Speaker A: Traceability? Yep. What do you mean by example?
+Speaker C: For example, there are a lot of agents doing a lot of stuff, right? Would it interest you to know what each agent The agent has done what's in its domain.
+Speaker A: Yeah, like for me personally, I trust all the AI, but once again, like the other people, they are all from like, you know, you know how this is, I guess. You guys are the cool guys. I wish I would be like you, but to be honest, so the traceability, I guess, is very nice. Yeah, yeah, yeah. You, you, especially if like one of those agents is doing, is learning from my colleagues, so just doing mistakes all the time, then we would need to know who did the mistakes. Yeah.
+Speaker C: And the option is either human in the loop Other people who don't want to loop just get excluded from the loop. So it's just purely AI agents.
+Speaker A: You misunderstood there, I guess, like the configure— to configure, I still have to discuss with my boss if we want to have like human-in-the-loop or not. But isn't it easy for you to like do the setting and then I just switch on the agents and they go full mode? Or I just say like, okay, now we want to have control over them and I switch it off. So then we have this old approach that I just told you with the different limits.
+Speaker B: And you were also thinking about like displaying a risk behind recommendations made by the agent.
+Speaker A: What do you mean? Give me an example.
+Speaker C: I'll go into detail about that. For example, in the supply chain, there are a lot of companies you work with. A lot of companies.
+Speaker A: Yeah, very complex, yes, I know.
+Speaker C: Exactly. So how would it be if we were to make a risk rating of each product? So for example, if you're importing wax statues from a single supplier and there are already some problems with the supplier, so that's an extremely high risk.
+Speaker A: Yes, yes, yes. So we had that in the past before and it was horrible because we only got to know about it too late.
+Speaker C: Exactly.
+Speaker A: So can't go too much details.
+Speaker C: Yeah, I understand.
+Speaker A: So that's only why I got into this position because prior customers— anyways, anyways, wait, let's get back to the topic here.
+Speaker C: So the risk is high. It would make sense to either, you know, have a very big inventory for that product or have different suppliers as well, you know.
+Speaker A: Yes, yes.
+Speaker C: So how would it be? Would it be helpful for you as a company if we were to have this risk analysis of each supplier and each product.
+Speaker A: And how are you doing this risk analysis? Are you having like external data suppliers and something like this?
+Speaker C: From like news, external news.
+Speaker B: I'm using also historical data from the supplier.
+Speaker A: And then you get like it all into one platform and then you— but I don't need the risk. Honestly, I don't need the risk. Actually, I need the risk, but I want the solution. You want the action. We don't want to think ourselves, we want the solution. Also, instead of telling you like there is a risk, what should I do? Yeah, but if you can tell me like whatever, get a second supplier, in your example, whatever. And we can—
+Speaker D: suggestion is also good, right? We can suggest you.
+Speaker B: Yeah, basically like the main thing you want is like suggestions and the action. Yeah, yeah, that's it.
+Speaker D: So we can tell you why also, right? So the risk and possible solutions.
+Speaker A: Yeah, especially for my old colleagues, because as I said, like when they want to know about what AI was like hallucinating, how they always call it, um, that is very important. All right, cool.
+Speaker C: Makes sense. Would it be better if we were to just give the solution or actually show why we chose this solution? You as Soonie.
+Speaker A: If you show the solution or give the solution?
+Speaker B: No, like how we came, how the agency—
+Speaker C: What was the reason why we made this decision of going to another supplier? Would you want the decision to be seen or you just care about, yeah, we got a new supplier, I don't care as long as I get
+Speaker A: something done? No, no, we should see the reason.
+Speaker D: Reason needs to be seen. So the risks need to be named and then the solution needs to be offered.
+Speaker A: Yeah.
+Speaker B: And I'm guessing you wanted the reasoning to be as concise as possible. Like you don't need to read through a whole, or do you want it to be more?
+Speaker A: I mean, some of my colleagues, I guess they have a lot of free time. They maybe they can read the whole report. I obviously need like an executive summary, but maybe if the reason is also like has more detail, then like why not do both? Okay.
+Speaker D: When we show you the demo, would you rather See it from a view of executive like you, or more of a view from your under people who are under you?
+Speaker A: I guess it depends. Like you just have to be consistent. Okay. Like jumping out of the road, just decide and say it.
+Speaker C: As Suni, do you care about the process or you just care about the solution? You just want to, you know, fulfill the customer's orders. Like how we do it.
+Speaker A: What do you mean by that? Like, obviously it should be like a long-term solution.
+Speaker C: As SUNY?
+Speaker A: Yeah. Like long-term solution in the sense of I don't want to— if you say, hey, we need a new supplier, I don't want you to go there and tell them they need to do it, otherwise we will burn their houses or whatever. It should be like a long-term solution, but I don't know if I'm answering your
+Speaker C: question. No, I got it. I understood it.
+Speaker D: Could you repeat maybe the numbers from the first task, from the first question which we had?
+Speaker A: What was the first question?
+Speaker D: What was the first question?
+Speaker A: Like human
+Speaker D: in the loop, how much the numbers and things.
+Speaker A: Yeah, so below 50K the buyer has to approve. The category lead below 500K, you could also just write it down though. Me, I have to approve below 2 million. The CPO below five million and everything above that CPO and CFO approval is needed.
+Speaker B: So do you think like in the platform we should have like different users, like like within the platform for each like different profiles kind of for each level?
+Speaker A: Yeah, yeah, obviously. Like you saw, you always have different roles, right?
+Speaker B: Yeah, yeah, yeah.
+Speaker A: Those those other people don't see what I see, right? Like when I do something, I'm character. Oh no, they don't see what you see.
+Speaker D: You're executable.
+Speaker A: Yeah, yeah, yeah. You're the last. Yeah, yeah. Very important. Ah, honestly, unfortunately, the CTO is the people's boss. Yeah. I like I'm just the smart because I'm a doctor, you know. Yep. Makes sense. And my job will not get automated by AI because I think strategy. I am just like my like I know that the agents are very smart. He's not even listening to me. I guess I have to fire him.
+Speaker B: Okay, wait. One question though. With your experience with agents, what do you think is like the Like sometimes you see some like really bad suggestion, and what do you think Leon having like?
+Speaker A: Yes, yes.
+Speaker C: But maybe we're asking this as Leo and not such.
+Speaker B: Ah, okay. Yeah, wait then never mind.
+Speaker C: Wait, so thank you for your Sunni persona.
+Speaker B: Yeah.
+Speaker C: We want to ask some questions to the Leo person.
+Speaker A: Can we? Okay. Yes. Two minutes. Two minutes.
+Speaker C: All right, let's go.
+Speaker B: Wait here.
+Speaker D: Him, right?
+Speaker C: You want to ask? Go,
+Speaker B: go, ask. Okay,
+Speaker C: okay, I'll ask it. How important is it for Leo that the process is good? But maybe we can't save the thing tomorrow, but the process is really good, you know. Do you care more about long-term results or the short-term? Do you just care about this customer as Leo, or you just want to make sure that, uh, we build something which is good for every customer regardless of the situation? Because for example, Suni, it's They release one game in a decade and they have a backlog. That's not going to be every company.
+Speaker A: So you're saying, okay, if there is not a backlog, then maybe you have a solution that is saving even if there is no backlog?
+Speaker C: Yeah, kind of. Because this is a dire situation which doesn't happen a lot. Or does it?
+Speaker A: Yeah, I mean, this is this is nothing for a Leo here, obviously. It's just a challenge. But like, from the judging criteria, I think it's difficult to say because obviously kind of the judging criteria is that you made it work. But then also, I don't know all day what means making it work in the end, because let's say if you build a dashboard, like, how do you make it work? Maybe there are good solutions that are only tackling one part of the problem, but not actually saving the thing. I don't know, because I also didn't do the challenge before. That's maybe also the issue here. Yeah, difficult. Maybe you— I mean, if you feel— let's put— maybe let's put it like this. If you feel like— Yeah. that just in general, your pitch and your business idea and stuff would be better if you build the product that is not saving the launch, but useful in general, then maybe go with this. Because obviously I also don't want to push you into an idea where you are feeling, okay, I don't know if it's too cool. Then rather do the cooler thing that is Well, valuable in general. Mm-hmm. And then just phrase it like this in your pitch as well. Because then in the end, the judging criteria is like, okay, is, is, does your pitch stick in a sense of, is it reasonable from a like business side and reasonable from like a technical side? And if you just feel like, okay, we have something more interesting even though we fuck up the launch, Then I guess that's maybe the higher chance to win, so to say.
+Speaker C: I'll ask you one more question. As Soony, you care about the results, you know, you want to launch your stuff. But as Leo, again, do you want to see the whole process, how we make each decision? Again, coming back to the risk rating, for example, and the dashboard.
+Speaker A: I guess that's something I can't answer out of like only this question because there I guess you have to ask yourself, okay, how do I bring the— How do I bring the— deliver the value through the pitch? And there, I guess, if you open your VS Code or whatever and you show, hey, line 25 does exactly this, and everyone is falling asleep. But if you just say, and with one click, everything is solved, everyone will be like, yeah, what the hell did you actually do? Yeah, yeah. So, I guess there you kind of have to figure out yourself Because even if I could help you, I guess it's a little bit unfair if I help you here, but I also don't have enough information, like what you would present.
+Speaker C: Exactly. I think Leo is new to the supply chain problems, right? That's what I heard from others. So what's your biggest pain point right now? What's stopping you from becoming the best in the supply chain management?
+Speaker A: totally made-up case in that sense that we— like, our idea was just from the supplier relationship management module that we are currently developing where we go kind of into this area, and then it was just like evolving. So we— like, you're not winning, if this is the underlying question, by solving any LEO problem because that's not at all our Goal. Oh, okay. It's like we are here for branding and like hiring. So if you are very smart and you are searching for a job, that is more important for us than solving our actual product problems, so to say. I guess filling the GDA is very important, you know. That was how we tried to get the best people into our challenge. Makes a lot of sense.
+Speaker D: Any other questions? I don't know, my Claude just made like a— what do you call this? Yes. Like, just made like a random thing where like you'd be able to see the standard edition.
+Speaker B: Wait, like with the dashboard, right? You mentioned earlier that you just, you don't want to see a lot of stuff, just like the actions, right? On the dashboard, what they do.
+Speaker D: Yeah, true.
+Speaker A: I guess in the end, the dashboard is nice, but the real value is in the action.
+Speaker B: Yeah, okay.
+Speaker D: Yeah, so like something like this where you see the standard edition of the GTA, right? And then collector's edition, how many copies you want to get out, right? And then you would see like this thing and it's on track. So like, like a bar which shows you, okay, what is going on wrong. And then you would see the detect. So it would first detect from the all of the data which comes out, right? It first gets put into like an SAP format, everything. So we like do that kind of formatting so everything comes into one, you know, one format, so it's normalized. Then it consolidates, so it checks if everything is fine, like takes your export and finds out that, yeah, not stated in any documents or something was missing. So it actively, actively reaches out here, like an agent reaches out to your suppliers, stuff like, and emails them like, hey, this is missing, give us this data. Once it's back, then it assesses again, everything is fine, and then it shows you the option. For example, if something went wrong, right, like, I don't know, if a supplier is doing bad, then it will show you the options. Like, okay, this is this, and copies covered this much, cost was this much. I don't know, like, it would just show you like different things, but like with a human in the loop, so you would be able to decide, right? And you would be able to prove like, okay, it will cost this much. And then you as like, I don't know, the head of procurement, then you would be like, okay, approve. Then we'll get approved, like everything will be fine, and like just complete. And then you would see this whole log audit trail. But this is like, it's, it's like full like hard-coded right now because I just wanted to show you if the way it's presentable, if like this, this follow-through, this line of, you know, like how it goes through is feasible to you.
+Speaker C: And if
+Speaker D: this is getting the data
+Speaker B: brutally
+Speaker D: honest, brutally honest, this is shit.
+Speaker A: Again, what is this doing?
+Speaker D: No, this is, this is, this is like the The way to having your product to your customers. First, if I just remove this, if I just tell you from my— just from my mouth now, your suppliers give you data in different formats, not in SAP format, and you said that SAP format is like, you know, what you want. So then our agent will go through the data and make it all into one format, so it's all on your platform. Okay. So now you have all the formats and everything cleared. Another agent goes through it and checks if something is missing. If something is missing, that agent then actively emails your supplier saying that, hey, this is missing, give it back to me. And like, it does that not all the time, so it's like you're annoying, but like, you know, it does it enough so that you get some response back. Once it's back, then it also checks externally through, I don't know, Google Zuko or something, if your supply chain has some risk. You know, like for example, I don't know, In China, some some material is going to get banned for exporting, for example.
+Speaker B: And if that's flying watcher in the background, always checking for yeah.
+Speaker D: But that's like some agent who's like running over the like watcher in the background. Everything's going fine. And once that is done, then it shows you the process also of your supply chain. And I don't know if like you are if you have a truck with like a bunch of GTS six inside there and like. it just stopped in between because the tire got punctured, then you would be like, hey, I need the order right now. So it would give you suggestions for rerouting like that, you know, like, hey, yeah, um, get another truck there and fly the things in with the plane to Hamburg, you know, something like that. Yeah. And at the end you see a progress bar, everything is fine, and you can also email the people Also in person, and yeah, see that everything is working fine.
+Speaker A: That's what you said is really cool, but this it's not really like a sequential task, right?
+Speaker B: Okay, like it looks too sequential. Like yeah,
+Speaker A: I mean that's also how you described it in the interview. You have a new supplier. The next step is not checking the supply chain.
+Speaker D: Yeah,
+Speaker A: this is like more or less running in parallel, right? Because you also have already other suppliers. Exactly. The risk of the broken tire can be while you're onboarding another supplier and while you're checking that the supply chain is at risk because of news at the same time. So I don't really like to see the sequential part in it. Yeah, yeah. But from the rest of it, it sounded cool.
+Speaker D: Okay. Do you think there's like something which is Unique or like nothing so unique yet? Unique in the process. Like how do we stand out from the others? I don't know if you can ask that.
+Speaker A: You are the first one to describe what you are doing. Yeah. It's nothing where I was like, oh my gosh, I didn't.
+Speaker E: Are you Felix or?
+Speaker A: No. Okay, so
+Speaker E: where's Felix? We have Felix.
+Speaker A: Oh, I'm super sorry. I guess he's sick today. I don't know. Just I guess they have already.
+Speaker E: Sorry to interrupt you. Okay, we will wait for
+Speaker A: him. Yeah, maybe they. I guess he has another meeting. Maybe they went somewhere. Yeah.
+Speaker D: Yeah. So we can describe our process.
+Speaker A: I mean, there was, but there was like, to be honest, also nothing where I was like. Okay, that's totally crazy now. Yeah. Doesn't have to be bad because I just also didn't hear anything else that was super crazy. Yeah,
+Speaker D: no, it has to be something that stands out. Yeah, it has to be like, oh, that was something crazy.
+Speaker A: I mean, kind of, yes, but then the issue here is, and I also don't have the perfect solution for that issue, I guess you kind of want to build something that is crazy, but you also don't want to build like something where you click a button and then everything is exploding, whatever, and then you're like, yeah, bro, no, no one needs that. Yeah. So, um,
+Speaker D: you need to find like a middle point of this somehow.
+Speaker A: I mean, in the end, the question is also like, I guess you can always win with a simple solution that is just very nice, but obviously the complex solution that is Very nice. Yeah. This is also super hard for the judge to say on the first evening, like, is there something special? Because maybe all the other teams were like focusing on one specific problem and then in the end showing some dashboards where they can actually use, like, how do you say when you put all the data into one format, like the data, let's say, Kind of it's mostly exactly it's not possible.
+Speaker D: Yeah, mostly that's actually kind of.
+Speaker B: Do you think there's anything like major we're missing? Maybe from the like some
+Speaker C: aspect
+Speaker B: maybe we overlooked like from the challenge.
+Speaker A: Are I don't know to be honest, but are there any events out already that you checked or got like?
+Speaker D: Yeah, last event last event was the China thing that like something got stopped in Chinese market. So like we have an active thing which is every 15 minutes it checks the Leo website for if the data has been renewed and stuff. So you guys do update things, which is good to know that my thing is working. But yeah, it's cool. You have some events which are interesting like that, like, you know, your supply chain can get like interrupted because a regulation came out or something, you know. Mm-hmm. So they're going into that and like giving actually a way to offer the PRs and I don't know what's the head of procurement like different options of supply companies and stuff. That's something like which is kind of interesting, I guess, giving options. Yeah, to change. Maybe I'll be add like a list of what current
+Speaker A: The issue from my perspective here now is I don't have something crazy in mind.
+Speaker D: Yeah, yeah.
+Speaker A: Even if I would have, I wouldn't tell you. Yeah, of course, of course. But I honestly just don't have. I guess you already named, let's say, everything of like the things that I came up with already. Which doesn't mean that it's everything, but also like nothing is missing that I'm like instantly thinking of. Maybe I'm also just tired and this is why I'm like not super like, oh my gosh, so nice. And also because I just saw a lot of people.
+Speaker C: I would have maybe one last question. Are you looking for something crazy which might change Do you want to change everything but not quite be ready to, ready to be deployable at NEO, or you want something which you can deploy from day one and which actually works? Maybe a bad question, but I just want to hear your thoughts on it.
+Speaker A: Once, like, same answer, like, to the answers before, in the sense of Yes, Sid will hate you if you just have like a whiteboard, okay, this will definitely work sometime someday in the future thing. And depending on how much in the future, it sounds like I will also hate you. Mm-hmm. But then again, if you have an idea where only the first step is achievable in 24 hours and the second or third step or whatever It's a, like, okay, we're developing into this direction now. This can also be cool, you know. It's also difficult to answer for me without comparing it exactly.
+Speaker C: And maybe I'll rephrase the question in another way. Would you also judge based on how deployable it is?
+Speaker A: Yes. Yes, but then it's not like the make or break thing. Mm-hmm. If you have a crazy pitch, and with crazy I don't mean, but like, okay, we figured out this is the problem, this is the solution, step 1 works, step 2 and 3 are coming, and we want to give you a live demo of 1, 2, and 3. And yeah, to be honest, step 1 works, but step 2 and 3 are more like, well, step 2 works mostly and step 3 is just hardcoded. But we want to show you the vision. I guess this is also something that could win in the end.
+Speaker D: Interesting. 3 weeks, that was it? Yeah, I think that's it.
+Speaker A: I'm sorry that I— No, no, it's nice. I feel like a politician, you know? I mean, it depends. You have to be. Especially because it's not like, okay, we have one specific

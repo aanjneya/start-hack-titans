@@ -135,9 +135,14 @@ def _options(headers: list[str], rows: list[dict], cols: dict[str, str], delimit
     return {"decimal_comma": True if delimiter == ";" else None, "date_order": detect_date_order(sample)}
 
 
+class ColumnPair(BaseModel):
+    header: str
+    field: str
+
+
 class LLMMapping(BaseModel):
     target_table: str
-    columns: dict[str, str]
+    columns: list[ColumnPair]  # list (not dict) so both Claude and OpenAI strict schemas accept it
 
 
 def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, delimiter: str = "") -> Mapping:
@@ -160,14 +165,15 @@ def map_columns(headers: list[str], rows: list[dict], *, path: str, agent: str, 
             f"Map the columns of {path} to one target table.\nHeaders: {headers}\nSample rows: "
             f"{json.dumps(rows[:5], ensure_ascii=False, default=str)}\nTarget tables and fields: "
             + json.dumps({n: list(t.synonyms) for n, t in TARGETS.items()})
-            + "\nReturn target_table (or '' if none fits) and columns {header: field} using only listed fields."
+            + "\nReturn target_table (or '' if none fits) and columns as [{header, field}] using only listed fields."
         )
         try:
             answer = llm.extract(prompt, LLMMapping, agent=agent, task="ingest.map_columns")
         except llm.LLMError:
             answer = None  # Claude unavailable: keep the file as a plain table
         if answer and answer.target_table in TARGETS:
-            name, cols, method = answer.target_table, {h: f for h, f in answer.columns.items() if h in headers}, "llm"
+            name, method = answer.target_table, "llm"
+            cols = {p.header: p.field for p in answer.columns if p.header in headers}
             score = len(cols) / max(len(headers), 1)
         else:
             name, cols, method = "", {}, "unmapped"

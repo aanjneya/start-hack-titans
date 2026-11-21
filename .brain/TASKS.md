@@ -7,7 +7,7 @@
 ## Now (Active Sprint)
 
 - [x] @daksh 1 Watcher (`backend/agents/watcher.py`) ✅ Sat 19:35
-- [x] @daksh 2 Ingest & Normalizer (`backend/agents/ingest*.py`) ✅ Sat 19:35 · OCR of scans built 19:55 (needs live Claude to run)
+- [x] @daksh 2 Ingest & Normalizer (`backend/agents/ingest*.py`) ✅ Sat 19:35 · OCR of scans built 19:50 (needs live Claude to run)
 - [~] @aanjneya 3 Reconciler & Gate (`backend/agents/reconciler.py`, `.brain/tasks/3-reconciler-gate.md`)
 - [~] @tim 4 Chaser (`backend/agents/chaser.py`, `.brain/tasks/4-chaser.md`)
 - [~] @jivi 5 Launch Planner & Decision Copilot (`backend/agents/planner.py`, `.brain/tasks/5-launch-planner.md`)

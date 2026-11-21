@@ -2,7 +2,7 @@
 
 **Owner:** @daksh · ✅ **built Sat ~19:35** (`backend/agents/ingest.py`, `ingest_mapping.py`, `ingest_docs.py`; tests `backend/tests/test_ingest_watcher.py`). All 318 files in ~1.5 s, no errors.
 
-**Scans (OCR) built Sat ~19:55:** `llm.extract(..., files=[...])` sends images/PDFs to Claude vision; each delivery note is cross-checked (number vs file name, PO known, parts resolved, quantity vs the goods receipt with the same delivery-note number, handwritten notes kept) and cached per file hash, so reruns cost nothing. **Still open:** OCR, document summaries and the Claude fallback for unmatched part numbers only run with `MOCK_MODE=false` + an API key (not tested live yet); offline, scans stay "pending" with file-name facts.
+**Scans (OCR) built Sat ~19:50:** `llm.extract(..., files=[...])` sends images/PDFs to Claude vision; each delivery note is cross-checked (number vs file name, PO known, parts resolved, quantity vs the goods receipt with the same delivery-note number, handwritten notes kept) and cached per file hash, so reruns cost nothing. **Still open:** OCR, document summaries and the Claude fallback for unmatched part numbers only run with `MOCK_MODE=false` + an API key (not tested live yet); offline, scans stay "pending" with file-name facts.
 
 ## What this agent does
 It reads every file Soony and the suppliers send (spreadsheets, Excel, PDFs, files in Polish, Chinese or Korean) and turns them into **one clean database with the same IDs everywhere**. Every value remembers which file it came from. It never deletes old values; it adds new facts next to them.

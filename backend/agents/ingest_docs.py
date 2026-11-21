@@ -124,8 +124,8 @@ def parse_order_confirmation(text: str) -> Optional[dict]:
 class KeyFact(BaseModel):
     name: str  # e.g. "delivery_date", "quantity_shipped", "price_increase_pct", "bank_iban"
     value: str
-    part_id: str = ""
-    po_number: str = ""
+    part_id: str = ""  # our CMP-… id if the fact is about one of our parts, else ""
+    po_number: str = ""  # 4500… order number if mentioned, else ""
     quote: str  # verbatim text from the document
 
 
@@ -152,7 +152,13 @@ def llm_extract(text: str, kind: str, rel_path: str, agent: str) -> Optional[dic
     if result is None:
         return None
     flat = " ".join(text.split())
-    grounded = [f.model_dump() for f in result.facts if f.quote and " ".join(f.quote.split()) in flat]
+    grounded = []
+    for f in result.facts:
+        if f.quote and " ".join(f.quote.split()) in flat:
+            fact = f.model_dump()
+            fact["part_id"] = f.part_id if PART_RE.fullmatch(f.part_id or "") else ""
+            fact["po_number"] = f.po_number if PO_RE.fullmatch(f.po_number or "") else ""
+            grounded.append(fact)
     return {"title_en": result.title_en, "summary_en": result.summary_en, "facts": grounded,
             "dropped_ungrounded": len(result.facts) - len(grounded)}
 
@@ -182,13 +188,14 @@ def language(text: str) -> str:
 class ScanLine(BaseModel):
     part_number: str  # exactly as printed (our CMP-… or the supplier's own number)
     description: str = ""
-    quantity: Optional[float] = None  # plain number, no thousands separators
+    quantity_as_printed: str = ""  # character for character, e.g. "125.000" (we parse it, locale-aware)
+    quantity: Optional[float] = None  # filled by our parser from quantity_as_printed
     unit: str = ""
     packages: Optional[float] = None
 
 
 class ScanExtraction(BaseModel):
-    document_type: str  # delivery_note | packing_list | inspection_report | other
+    document_type: str  # delivery_note | packing_list | inspection_report | other (normalized by our code)
     document_number: str = ""
     document_date: str = ""  # YYYY-MM-DD
     supplier_name: str = ""
@@ -206,13 +213,31 @@ SCAN_PROMPT = (
     "This is a scanned document received at a distribution centre (delivery note, packing list or similar). "
     "It may be Polish, Korean, Chinese, German or English. Transcribe exactly what is printed: document type, "
     "number, date (as YYYY-MM-DD), supplier, purchase order numbers, every line (part number exactly as printed, "
-    "description, quantity as a plain number without thousands separators, unit, packages), carrier reference, "
+    "description, quantity_as_printed copied character for character including dots/commas/spaces, e.g. '125.000' "
+    "or '48,000', unit, packages), carrier reference, "
     "the remarks field and ANY handwritten notes other than the signature (translate both to English), who "
     "received it, and a one-sentence English summary. Leave a field empty if it is not on the document; never guess."
 )
 
 
+_DOC_TYPES = [("delivery_note", r"deliver|lieferschein|\bwz\b|wydani|dostaw|送货|납품|출하|\bdn\b"),
+              ("packing_list", r"packing|packliste|装箱"), ("inspection_report", r"inspect|prüf|検査|검사")]
+
+
+def normalize_scan(r: ScanExtraction) -> ScanExtraction:
+    """Deterministic clean-up after the AI: document type to our list, quantities parsed by OUR parser."""
+    low = (r.document_type or "").lower()
+    r.document_type = next((k for k, rx in _DOC_TYPES if re.search(rx, low)), "other")
+    for line in r.lines:
+        if line.quantity_as_printed:
+            parsed = parse_number(line.quantity_as_printed)
+            if parsed is not None:
+                line.quantity = parsed
+    return r
+
+
 def ocr_scan(path, rel_path: str, agent: str) -> Optional[ScanExtraction]:
-    """Claude vision on one scan (live mode). MOCK mode -> None unless a mock is registered."""
-    return llm.extract(f"{SCAN_PROMPT}\nFile: {rel_path}", ScanExtraction, agent=agent, task="ingest.scan_ocr",
-                       files=[path])
+    """Vision OCR on one scan (live mode; Claude or OpenAI). MOCK mode -> None unless a mock is registered."""
+    r = llm.extract(f"{SCAN_PROMPT}\nFile: {rel_path}", ScanExtraction, agent=agent, task="ingest.scan_ocr",
+                    files=[path])
+    return normalize_scan(r) if r else None

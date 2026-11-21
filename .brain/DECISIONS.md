@@ -73,3 +73,7 @@
 - **Context**: The Planner and the human decide on what the other agents report, so it must arrive in one shape.
 - **Decision**: FINDING FORMAT v1 (`.brain/DATA_FORMAT.md`): type, kind, severity 1–5, one-line summary, reason, subject + our IDs, impact {copies_at_risk, hours_buffer, due_by, cost_eur}, suggested_actions [{type, label, target, owner, cost_eur, copies_gained}], evidence, confidence. Enforced by `Agent.raise_issue` (invalid findings are rejected). Risk Rater also raises findings for grade ≥ 5. All events carry `_meta {from, run_id, ts, v}`.
 - **Trade-offs**: Agents may only add fields (bump the version) – no private formats.
+
+### Planner decision and reply contract (jivi)
+- Shared contract commit `2f3e24d`. An approved option carries its own signers and PO value. The API rejects stale options and duplicate authorizations. A decision-linked quote changes scenarios. A matched supplier confirmation plus a separately released receiving slot changes the packing forecast.
+- `POST /api/inbox` accepts an outbox ID and either `quote` or `delivery`. Ambiguous or contradictory replies are retained for review. The existing `reply.received` Ingest subscription handles both API and Chaser-originated replies.

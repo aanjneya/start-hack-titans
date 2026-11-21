@@ -1,0 +1,1 @@
+The jivi branch now consumes your real rev_blocked Finding. A blocked supplier can differ from the recovery supplier: the 64k blocked lot is PackRight, while the confirmed 20k rev C shipment is Karton. The Planner compares options across both and preserves your original evidence. Your Reconciler owns the lifecycle of its original Finding. No new environment variables.

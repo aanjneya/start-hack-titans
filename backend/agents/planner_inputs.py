@@ -10,6 +10,7 @@ from datetime import timedelta
 from ..core import models as m
 from ..core.parsing import parse_datetime
 from ..core.store import all_rows
+from .planner_counts import site_counts
 from .planner_forecast import Plan
 
 
@@ -57,6 +58,31 @@ def load_plan():
     if not shifts or not snapshots:
         return None
     as_of, status_doc = max(snapshots, key=lambda x: x[0])
+    lots = list(all_rows(m.StockLot))
+    sites = {r.site for r in lots}
+    site = next(iter(sites)) if len(sites) == 1 else None
+    for d in documents:
+        match = re.search(r"packed at [^\n]*?\(([\w-]+)\)", d.text, re.I) if d.kind == "context" else None
+        if match:
+            site = match[1]
+            break
+    # Packed copies are finished goods. A later site count changes both remaining demand and line time.
+    counts = list(site_counts(notes, documents, lots, site))
+    packed_updates = []
+    for title, note, quantities in counts:
+        at = clock(title, launch_day)
+        if (title.lower().startswith("packed copies") and at and at > as_of
+                and all(r.product_id in quantities and r.day_one_demand is not None for r in editions)):
+            packed_updates.append((at, note, quantities))
+    if packed_updates:
+        as_of, status_doc, quantities = max(packed_updates, key=lambda update: update[0])
+        for row in editions:
+            row.packed = quantities[row.product_id]
+            row.still_to_pack = max(0, row.day_one_demand - row.packed)
+            ev.append(evidence(status_doc.path, f"{site}/{row.product_id}", f"Packed copies: {row.packed}"))
+    # Batchless workbook totals constrain lot evidence. They cannot establish revision or Quality release.
+    book_sheets = {note.path.removesuffix("#notes") for title, note, _ in counts if "book stock" in title.lower()}
+    lots = [lot for lot in lots if lot.source not in book_sheets]
     shifts = sorted(set(shifts))
     deadline = max(end for _, end in shifts)
     # A separately stated launch cutoff can be earlier than the scheduled shift end.
@@ -100,14 +126,6 @@ def load_plan():
     confirmations = defaultdict(list)
     for row in all_rows(m.OrderConfirmation):
         confirmations[(row.supplier_id, row.po_number, row.po_line, row.material_id)].append(row)
-    lots = list(all_rows(m.StockLot))
-    sites = {r.site for r in lots}
-    site = next(iter(sites)) if len(sites) == 1 else None
-    for d in documents:
-        match = re.search(r"packed at [^\n]*?\(([\w-]+)\)", d.text, re.I) if d.kind == "context" else None
-        if match:
-            site = match[1]
-            break
     lots = [r for r in lots if r.site == site and r.snapshot_date and r.snapshot_date <= as_of.date()]
     dates_by_part = {r.material_id: r.snapshot_date for r in sorted(lots, key=lambda r: r.snapshot_date)}
     inspections = [d for d in documents if d.kind == "inspection" and re.search(r"blocking requested|rejected", d.text, re.I)]
@@ -169,6 +187,20 @@ def load_plan():
                 plan.consumption.append({"part": part, "product": row.product_id, "quantity": used * per,
                                          "evidence": proof})
             plan.stock[part] = max(0, plan.stock[part] - used * per)
+    if packed_updates:
+        # The companion late-shift inventory and pack-out describe the same site and report.
+        for title, note, quantities in counts:
+            if ("book stock" in title.lower() and note.path.partition("#")[0] == status_doc.path.partition("#")[0]):
+                for part, qty in quantities.items():
+                    if part in plan.stock:
+                        plan.stock[part] = min(plan.stock[part], qty)
+                        ev.append(evidence(note.path, f"{site}/{part}", f"Book stock upper bound: {qty}"))
+                plan.assumptions.append("Site book quantities cap remaining lot-backed stock. Unverified receipts "
+                                        "and differences between physical and book counts remain unresolved.")
+    if packed_updates and any(d.kind == "scan" and isinstance(d.extracted.get("ocr"), str)
+                              and d.extracted["ocr"].startswith("pending") for d in documents):
+        plan.assumptions.append("Receiving scans await transcription. Handwritten quantity corrections and "
+                                "wrong-material receipts can reduce available stock below this projection.")
     _inbound(plan, site, confirmations, receipts, changes, documents)
     return plan
 

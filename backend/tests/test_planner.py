@@ -10,15 +10,22 @@ from backend.agents.planner_inputs import load_plan
 from backend.agents.planner_options import approvers
 from backend.app.main import app
 from backend.core import events
-from backend.core.models import DecisionCard, Document, Forecast, InboxMessage, LaunchStatus, OutboxMessage
+from backend.core.replay import list_drops
+from backend.core.models import AgentLog, DecisionCard, Document, Forecast, InboxMessage, Issue, LaunchStatus, OutboxMessage
 from backend.core.store import all_rows
-from backend.planner_demo import run
+from backend.planner_demo import SLEEVE_SCENARIO_COMMIT, run, sleeve_scenario_steps
 
 
+def _decision_mails(decision_id=None):
+    return [m for m in all_rows(OutboxMessage) if m.decision_id is not None
+            and (decision_id is None or m.decision_id == decision_id)]
 
-def _decision_mails():
-    """Planner-dispatched mails only. The live Chaser also writes question mails for missing_info findings."""
-    return [o for o in all_rows(OutboxMessage) if o.decision_id]
+
+@pytest.fixture
+def sleeve_snapshot():
+    for _ in range(sleeve_scenario_steps()):
+        system.replay_step()
+
 
 def test_partial_late_and_repeated_deliveries_use_remaining_line_capacity():
     at = datetime(2026, 1, 1, 8, tzinfo=timezone.utc)
@@ -68,7 +75,7 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
     # Repeated approvals and replies do not send another email or count the same units again.
     assert client.post(f"/api/decisions/{result['decision_id']}/approve", json={}).status_code == 409
     system.emit(events.DECISION_APPROVED, {"decision_id": result["decision_id"]})
-    assert len(_decision_mails()) == 1
+    assert len(_decision_mails(result["decision_id"])) == 1
     reply = result["reply"]
     client.post("/api/inbox", json=reply).raise_for_status()
     assert "Duplicate" in all_rows(InboxMessage)[-1].result["review"]
@@ -100,12 +107,11 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["pickup", "air"])
-def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monkeypatch, mode):
+def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monkeypatch, mode, sleeve_snapshot):
     from backend.core import store
     from backend.core.models import StockLot
 
     client = TestClient(app)
-    system.run_full()
     # Controlled variant: a recount makes sleeves the binding constraint.
     lot = store.find_rows(StockLot, batch="5000413060")[0]
     store.update_row(StockLot, lot.id, {"quantity": 40000}, source="site/recount", agent="ingest",
@@ -123,7 +129,8 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
                     if "rev blocked" in c["title"] and c["title"].endswith("CMP-GAM-004"))
     card = current()
     assert client.post(f"/api/decisions/{card['id']}/approve", json={"by": "Paul Winter"}).status_code == 200
-    msg = _decision_mails()[-1]
+    ask_id = card["id"]
+    msg, = _decision_mails(ask_id)
     reply = {"outbox_id": msg.id, "issue_id": msg.issue_id, "supplier_id": msg.supplier_id, "body": "[MOCK]"}
     fact = {"shipment_id": "SHP-2026-04313", "po_number": "4500318775", "po_line": 2, "revision": "C",
             "quantity": 20000, "arrival": arrival.isoformat()}
@@ -139,27 +146,54 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
     assert option["cost_eur"] == 500 and option["approval_value_eur"] > 50000
     signers = ["Sofia Marchetti", "Jonas Lindqvist"] if mode == "air" else ["Sofia Marchetti"]
     assert option["approvers"] == signers and option["needs_approval"]
-    assert card["status"] == "proposed" and len(_decision_mails()) == 1
+    assert card["status"] == "proposed" and len(_decision_mails(ask_id)) == 1 and not _decision_mails(card["id"])
     url = f"/api/decisions/{card['id']}/approve"
     assert client.post(url, json={"by": "Paul Winter"}).status_code == 403
     if mode == "air":
         assert client.post(url, json={"by": signers[0]}).status_code == 403
     client.post(url, json={"by": signers[0], "approvals": signers[1:]}).raise_for_status()
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before
-    spend = _decision_mails()[-1]
+    spend, = _decision_mails(card["id"])
     assert spend.decision_id == card["id"]
-    client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
+    if mode == "air":
+        client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
+    else:
+        # The supplier replies to Tim's actual message. Substitute only the mailbox transport and its gate.
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from backend.agents import chaser
+        from backend.app.main import _chaser
+
+        assert spend.message_id and spend.status == "sent"
+        assert "4500318775/2" in spend.body and fact["shipment_id"] in spend.body
+        assert any(log.action == "mock_send" and log.data.get("outbox_id") == spend.id
+                   for log in all_rows(AgentLog))
+        mail = chaser.mailbox.IncomingMail("1", "<supplier-reply@example.test>", spend.message_id, "",
+                "supplier-dispatch@example.test", "Re: " + spend.subject, f"Confirmed PO 4500318775/2, SHP-2026-04313, "
+                f"20000 units, rev C, arrival {arrival.isoformat()}.")
+        settings = replace(chaser.get_settings(), chaser_send=True)
+        with monkeypatch.context() as transport:
+            transport.setattr(chaser, "get_settings", lambda: settings)
+            transport.setattr(chaser, "llm", SimpleNamespace(is_mock=lambda: False))
+            transport.setattr(chaser.mailbox, "is_configured", lambda: True)
+            transport.setattr(chaser.mailbox, "fetch_unseen", lambda: [mail])
+            assert _chaser().poll_inbox()["matched"] == 1
+        system.bus().run_until_idle()
+        inbound, = [m for m in all_rows(InboxMessage) if m.outbox_id == spend.id]
+        assert inbound.processed and inbound.issue_id == spend.issue_id
+        assert inbound.result["confirmed_delivery"]["quantity"] == fact["quantity"]
+        assert _decision_mails(card["id"])[0].status == "replied"
+        assert not [log.detail for log in all_rows(AgentLog) if log.action == "error"]
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before + option["copies_gained"]
 
 
-def test_rejection_and_auto_threshold(tmp_path, monkeypatch):
+def test_rejection_and_auto_threshold(tmp_path, monkeypatch, sleeve_snapshot):
     import json
     from backend.core import config, policy
     client = TestClient(app)
-    system.run_full()
     card = next(c for c in all_rows(DecisionCard) if "rev blocked" in c.title and c.title.endswith("CMP-GAM-004") and c.status == "proposed")
     client.post(f"/api/decisions/{card.id}/reject", json={"by": "buyer"}).raise_for_status()
-    assert not _decision_mails()
+    assert not _decision_mails(card.id)
     policy_path = tmp_path / "auto.json"
     settings = {"customer": "Example", "autonomy": {"mode": "auto", "auto_execute_below_eur": 1},
                 "approval_matrix": [{"below_eur": None, "approvers": ["Buyer"]}]}
@@ -174,3 +208,78 @@ def test_rejection_and_auto_threshold(tmp_path, monkeypatch):
     assert return_cards[-1].status == "rejected"
     assert any(c.decided_by == "policy" for c in all_rows(DecisionCard) if c.title != card.title)
     assert policy.needs_approval(1) and not policy.needs_approval(0)
+
+
+def test_latest_replay_retires_received_sleeve_request():
+    """Exercise every available drop; a receipt retires the old request even if later cards change."""
+    historical_id = None
+    saw_receipt = False
+    for drop in list_drops():
+        system.replay_step()
+        cards = all_rows(DecisionCard)
+        for card in cards:
+            if card.status == "proposed" and card.options[0].get("remaining_shortfall", 0):
+                assert card.options[card.recommended]["description"] != "baseline"
+        if drop.commit == SLEEVE_SCENARIO_COMMIT:
+            historical_id, = [c.id for c in all_rows(DecisionCard) if c.status == "proposed"
+                               and "rev blocked" in c.title and c.title.endswith("CMP-GAM-004")]
+        if "soony/erp/goods_receipts_update.csv" in drop.added:
+            saw_receipt = True
+            plan = load_plan()
+            editions = {r.product_id: r for r in plan.editions}
+            assert plan.as_of.isoformat().startswith("2026-11-21T20:50")
+            assert editions["FG-GH6-STD"].still_to_pack == 38000
+            assert editions["FG-GH6-CE"].still_to_pack == 11700
+            assert plan.stock["CMP-GAM-003"] <= 6000
+            assert next(c.status for c in cards if c.id == historical_id) == "outdated"
+            for c in cards:
+                if c.status == "proposed" and c.recommended is not None:
+                    assert all(a.get("shipment_id") != "SHP-2026-04313" or a.get("po_number") != "4500318775"
+                               for a in c.options[c.recommended]["actions"])
+    assert saw_receipt
+    assert not [log.detail for log in all_rows(AgentLog) if log.action == "error"]
+    forecasts = simulate(load_plan())
+    assert forecasts
+    assert all(f.projected_packed is not None and f.shortfall >= 0 for f in forecasts.values())
+
+
+def test_received_sleeves_route_review_and_repair_persisted_cards():
+    for drop in list_drops():
+        system.replay_step()
+        if "soony/erp/goods_receipts_update.csv" in drop.added:
+            break
+    else:
+        pytest.fail("The sleeve receipt is missing from the replay history.")
+    cards = all_rows(DecisionCard)
+    sleeve, = [c for c in cards if c.status == "proposed" and c.title.startswith("Standard")
+               and "rev blocked" in c.title and c.title.endswith("CMP-GAM-004")]
+    assert sleeve.options[sleeve.recommended]["description"] == "human review"
+    # Restoring a database from before the recommendation fix also retires the stale card.
+    from backend.core.store import session
+    with session() as db:
+        persisted = db.get(DecisionCard, sleeve.id)
+        persisted.recommended = 0
+        db.add(persisted)
+        db.commit()
+    system._bus = None
+    system.bus().run_until_idle()
+    cards = all_rows(DecisionCard)
+    assert next(c.status for c in cards if c.id == sleeve.id) == "outdated"
+    sleeve, = [c for c in cards if c.title == sleeve.title and c.status == "proposed"]
+    review = sleeve.options[sleeve.recommended]
+    assert review["description"] == "human review" and review["available"] and review["needs_approval"]
+    assert review["actions"][0]["part"] == simulate(load_plan())["FG-GH6-STD"].limiting_part
+    assert review["remaining_shortfall"] == 34800
+    rush, = [o for o in sleeve.options if o["label"] == "Order a fresh rush print"]
+    assert rush["cost_eur"] == 1215 and rush["copies_gained"] == 0 and not rush["available"]
+    client = TestClient(app)
+    url = f"/api/decisions/{sleeve.id}/approve"
+    approval = {"by": review["approvers"][0], "approvals": review["approvers"][1:]}
+    response = client.post(url, json=approval)
+    response.raise_for_status()
+    assert response.json()["data"]["decision"]["status"] == "executed"
+    system.emit(events.DECISION_APPROVED, {"decision_id": sleeve.id})
+    followup, = [i for i in all_rows(Issue) if i.type == "recovery_review"]
+    assert followup.kind == "human_check" and followup.part_id == review["actions"][0]["part"]
+    assert followup.impact["copies_at_risk"] == 34800
+    assert not _decision_mails(sleeve.id)

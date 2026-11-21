@@ -37,6 +37,7 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 FEDERAL_REGISTER_URL = "https://www.federalregister.gov/api/v1/documents.json"
 EURLEX_RSS_URL = "https://eur-lex.europa.eu/EN/display-feed.rss"
+WTO_RSS_URL = "https://www.wto.org/library/rss/latest_news_e.xml"
 
 
 @dataclass
@@ -663,26 +664,50 @@ class TelemetryProvider:
 
 
 # ---------------------------------------------------------------------------
-# 5. Official Regulatory Change Provider (US Federal Register BIS/USTR + EUR-Lex)
+# 5. Global Regulatory Change Provider (US Federal Register + EUR-Lex + WTO + Per-Country Watch)
 # ---------------------------------------------------------------------------
+_COUNTRY_REGULATORS: dict[str, tuple[str, str]] = {
+    "CN": ("China", 'MOFCOM OR "Ministry of Commerce" OR "export control" OR "export licence" OR "customs"'),
+    "KR": ("South Korea", 'MOTIE OR "export control" OR "trade regulation" OR "customs tariff" OR "Section 301"'),
+    "IN": ("India", 'DGFT OR "Directorate General of Foreign Trade" OR "export restriction" OR "customs duty" OR "anti-dumping"'),
+    "PL": ("Poland", '"customs regulation" OR "border control" OR "export restriction" OR "EU tariff" OR "freight regulation"'),
+    "DE": ("Germany", 'BAFA OR "export control" OR "customs regulation" OR "USK" OR "packaging regulation"'),
+    "US": ("United States", 'BIS OR USTR OR "Section 301" OR "export control" OR "tariff rule"'),
+    "JP": ("Japan", 'METI OR "export control" OR "trade regulation" OR "customs tariff"'),
+    "TW": ("Taiwan", 'MOEA OR "export control" OR "semiconductor regulation" OR "customs"'),
+    "VN": ("Vietnam", '"export regulation" OR "customs tariff" OR "Section 301" OR "trade restriction"'),
+    "MX": ("Mexico", '"customs regulation" OR "USMCA tariff" OR "export control"'),
+    "GB": ("United Kingdom", '"export control" OR "UK tariff" OR "border customs regulation"'),
+}
+
 _REG_RULES: list[tuple[tuple[str, ...], list[str], list[str], float]] = [
     (("china", "chinese", "uyghur", "mofcom", "rare earth", "magnet"), ["CN"], ["export-control", "tariffs"], 78.0),
     (("maritime", "shipbuilding", "port", "shipping", "vessel"), ["CN", "KR", "IN"], ["maritime", "section-301"], 72.0),
     (("semiconductor", "chip", "memory", "end-user", "entity list"), ["CN", "KR", "US"], ["semiconductors", "bis"], 74.0),
-    (("section 301", "tariff", "customs", "anti-dumping", "duties"), ["CN", "US", "IN"], ["tariffs"], 65.0),
+    (("section 301", "tariff", "customs", "anti-dumping", "duties"), ["CN", "US", "IN", "KR"], ["tariffs"], 65.0),
     (("packaging", "labelling", "labeling", "age-rating", "usk", "rohs", "reach", "cbam"), ["DE", "PL", "CN"], ["eu-compliance"], 62.0),
 ]
 
+_REG_HIGH_WORDS = ("export control", "export-control", "export ban", "export licence", "export license",
+                   "sanction", "entity list", "section 301", "anti-dumping", "restriction", "prohibition")
 _REG_SKIP = ("information collection", "binational panels", "appointing a member", "appointing an alternate")
 
 _MOCK_REGULATIONS: list[dict[str, Any]] = [
     {
+        "title": "China MOFCOM: Export-Control Licensing & Interim Registration for Strategic Materials",
+        "countries": ["CN"],
+        "tags": ["mofcom", "export-control", "rare-earth"],
+        "score": 82.0,
+        "url": "https://english.mofcom.gov.cn/",
+        "quote": "MOFCOM export licensing regulation (offline global regulatory snapshot)",
+    },
+    {
         "title": "US BIS Rule: Export & End-User Controls on Advanced Semiconductors and Listed Affiliates",
-        "countries": ["CN", "KR", "US"],
+        "countries": ["US", "KR", "CN"],
         "tags": ["bis", "export-control", "semiconductors"],
         "score": 74.0,
         "url": "https://www.federalregister.gov/agencies/industry-and-security-bureau",
-        "quote": "Federal Register BIS Rule (offline regulatory snapshot)",
+        "quote": "Federal Register BIS Rule (offline global regulatory snapshot)",
     },
     {
         "title": "USTR Section 301 Modification: China Maritime, Logistics, and Shipbuilding Targeting",
@@ -690,7 +715,23 @@ _MOCK_REGULATIONS: list[dict[str, Any]] = [
         "tags": ["ustr", "section-301", "maritime"],
         "score": 76.0,
         "url": "https://www.federalregister.gov/agencies/trade-representative-office-of-united-states",
-        "quote": "Federal Register USTR Notice (offline regulatory snapshot)",
+        "quote": "Federal Register USTR Notice (offline global regulatory snapshot)",
+    },
+    {
+        "title": "India DGFT / EU Trade Notice: Customs Duties & Export Compliance on Metal/Die-Cast Components",
+        "countries": ["IN"],
+        "tags": ["dgft", "customs", "tariffs"],
+        "score": 64.0,
+        "url": "https://www.dgft.gov.in/",
+        "quote": "India DGFT / EU tariff regulatory watch (offline global regulatory snapshot)",
+    },
+    {
+        "title": "South Korea MOTIE / USTR Section 301: Semiconductor & Industrial Export Compliance Review",
+        "countries": ["KR"],
+        "tags": ["motie", "section-301", "semiconductors"],
+        "score": 62.0,
+        "url": "https://english.motie.go.kr/",
+        "quote": "Korea MOTIE / trade compliance watch (offline global regulatory snapshot)",
     },
     {
         "title": "EU Packaging, Product Safety & Age-Rating Labelling Update (EUR-Lex / USK 2026)",
@@ -698,16 +739,20 @@ _MOCK_REGULATIONS: list[dict[str, Any]] = [
         "tags": ["eu-compliance", "labeling"],
         "score": 60.0,
         "url": "https://eur-lex.europa.eu/EN/display-feed.rss?rssId=162",
-        "quote": "EUR-Lex legislative act (offline regulatory snapshot)",
+        "quote": "EUR-Lex legislative act (offline global regulatory snapshot)",
     },
 ]
 
 
 class RegulationChangeProvider:
-    """Tracks official regulatory changes from US Federal Register (BIS/USTR) and EUR-Lex RSS.
+    """Tracks official & country-level regulatory changes globally — never limited to US/EU.
 
-    Zero API keys required. Extensible to domain-specific regulatory packs (e.g. UNECE automotive, FDA)
-    without changing core Risk Rater code.
+    Combines:
+    - US Federal Register API (BIS export controls + USTR Section 301 tariffs)
+    - EUR-Lex official EU Parliament/Council adopted legislation RSS
+    - WTO official global trade notifications RSS
+    - Dynamic per-country regulatory watch for EVERY supplier country in the database
+      (CN MOFCOM, IN DGFT, KR MOTIE, PL/DE EU customs/BAFA, plus any unseen ISO-2 country)
     """
 
     name = "regulations"
@@ -767,7 +812,7 @@ class RegulationChangeProvider:
                         ))
                         break
 
-        # 5b. EUR-Lex official EU adopted legislation RSS (filter for trade/customs/safety/packaging)
+        # 5b. EUR-Lex official EU adopted legislation RSS
         xml_text = _cached_get_text(EURLEX_RSS_URL, {"rssId": "162"})
         if xml_text:
             try:
@@ -795,19 +840,100 @@ class RegulationChangeProvider:
                                 live=True,
                             ))
                             break
-                    if len(signals) >= 10:
+                    if len(signals) >= 12:
                         break
             except ET.ParseError:
                 pass
+
+        # 5c. WTO official global trade notifications RSS
+        wto_xml = _cached_get_text(WTO_RSS_URL)
+        if wto_xml:
+            try:
+                root = ET.fromstring(wto_xml)
+                any_ok = True
+                for item in root.findall(".//item")[:10]:
+                    title = (item.findtext("title") or "").strip()
+                    link = (item.findtext("link") or WTO_RSS_URL).strip()
+                    t_low = title.lower()
+                    if not title:
+                        continue
+                    # Match any supplier country mentioned in the WTO notice
+                    matched_codes = [
+                        c for c in (countries or set(_COUNTRY_REGULATORS))
+                        if _COUNTRY_REGULATORS.get(c, (c, ""))[0].lower() in t_low
+                    ]
+                    if matched_codes or any(k in t_low for k in ("tariff", "anti-dumping", "export", "trade barrier", "dispute")):
+                        signals.append(ExternalSignal(
+                            provider=self.name,
+                            category="regulatory_change",
+                            title=title[:140],
+                            score_0_100=62.0 if matched_codes else 48.0,
+                            summary=f"WTO Trade Notice: {title[:140]}",
+                            countries=matched_codes or sorted(countries)[:6],
+                            tags=["wto", "global-trade"],
+                            source_url=link,
+                            quote=f"{title[:160]} (live WTO RSS)",
+                            live=True,
+                        ))
+                        if len(signals) >= 15:
+                            break
+            except ET.ParseError:
+                pass
+
+        # 5d. Dynamic per-country regulatory watch for EVERY active supplier country (CN, KR, IN, PL, DE, US, or any new country)
+        for code in sorted(countries):
+            cname, reg_terms = _COUNTRY_REGULATORS.get(
+                code, (code, '"export control" OR "customs tariff" OR "trade regulation" OR "import restriction"')
+            )
+            query = f'"{cname}" ({reg_terms})'
+            rss_xml = _cached_get_text(
+                GOOGLE_NEWS_RSS_URL,
+                {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            )
+            if not rss_xml:
+                continue
+            try:
+                root = ET.fromstring(rss_xml)
+                any_ok = True
+                for item in root.findall(".//item")[:5]:
+                    title = (item.findtext("title") or "").strip()
+                    link = (item.findtext("link") or GOOGLE_NEWS_RSS_URL).strip()
+                    pub = (item.findtext("pubDate") or "").strip()
+                    t_low = title.lower()
+                    if not title or any(sk in t_low for sk in _REG_SKIP):
+                        continue
+                    # Keep only genuinely regulatory/trade headlines
+                    if not any(w in t_low for w in ("export", "import", "tariff", "customs", "regulation", "mofcom",
+                                                    "dgft", "motie", "bafa", "bis", "ustr", "sanction", "duty",
+                                                    "duties", "trade", "border", "licence", "license", "ban", "policy")):
+                        continue
+                    sev = 74.0 if any(w in t_low for w in _REG_HIGH_WORDS) else 56.0
+                    signals.append(ExternalSignal(
+                        provider=self.name,
+                        category="regulatory_change",
+                        title=title[:140],
+                        score_0_100=sev,
+                        summary=f"Regulatory watch ({code}): {title[:140]}",
+                        countries=[code],
+                        tags=["country-regulation", code.lower()],
+                        source_url=link,
+                        quote=f"{title[:140]} ({pub})" if pub else title[:160],
+                        live=True,
+                    ))
+                    break
+            except ET.ParseError:
+                continue
 
         return any_ok, signals
 
     def _mock_signals(self, countries: set[str]) -> list[ExternalSignal]:
         signals: list[ExternalSignal] = []
+        covered: set[str] = set()
         for reg in _MOCK_REGULATIONS:
             hit = [c for c in reg["countries"] if not countries or c in countries]
             if not hit:
                 continue
+            covered.update(hit)
             signals.append(ExternalSignal(
                 provider=self.name,
                 category="regulatory_change",
@@ -818,6 +944,21 @@ class RegulationChangeProvider:
                 tags=list(reg["tags"]),
                 source_url=reg["url"],
                 quote=reg["quote"],
+                live=False,
+            ))
+        # Ensure any future unseen country code (e.g. JP, TW, VN, MX) still gets baseline coverage
+        for code in sorted(countries - covered):
+            cname = _COUNTRY_REGULATORS.get(code, (code, ""))[0]
+            signals.append(ExternalSignal(
+                provider=self.name,
+                category="regulatory_change",
+                title=f"{cname} ({code}) Trade & Customs Regulatory Baseline",
+                score_0_100=30.0,
+                summary=f"Regulatory watch ({code}): monitoring {cname} customs & export rules",
+                countries=[code],
+                tags=["country-regulation", code.lower()],
+                source_url=WTO_RSS_URL,
+                quote=f"WTO / national customs baseline for {cname} (offline snapshot)",
                 live=False,
             ))
         return signals

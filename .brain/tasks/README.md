@@ -13,9 +13,9 @@
 | 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 10 | @daksh |
 | 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 10 | @aanjneya |
 | 4 | [Chaser](4-chaser.md) | Politely emails suppliers and carriers for missing answers, in their language, and reads the replies | 6 | @tim |
-| 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 9 | @jivi |
-| 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 5 | @aanjneya |
-| 7 | [Frontend (later)](7-frontend-later.md) | The one screen: what can stop a line, decision cards, risk table, AI trace drawer | 6 | phase 2 |
+| 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 10 | @jivi |
+| 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 6 | @aanjneya |
+| 7 | [Frontend (later)](7-frontend-later.md) | The one screen: what can stop a line, decision cards, risk table, AI trace drawer | 7 | phase 2 |
 
 ## Getting started (shared backend is done)
 Code lives in `backend/`; read `backend/README.md` (run, test, how to build your agent). Every agent already exists as a **stub** in `backend/agents/<agent>.py` that logs and passes the work on, so the whole loop runs today. Claim tasks here, replace the TODOs in your stub, add a test.

@@ -347,11 +347,15 @@ class DecisionCard(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     issue_ids: list = _json(list)
     title: str = ""
+    summary: str = ""  # one line for the exec: risk -> recommended action
     problem: str = ""
+    reasoning: str = ""  # full "why" shown on demand (office hours: exec summary + detail)
+    evidence: list = _json(list)  # list[Evidence dict]
     options: list = _json(list)  # list[DecisionOption dict]
     recommended: Optional[int] = None  # index into options
-    approver: str = ""
-    approver_reason: str = ""  # e.g. "PP-07: air freight above limit -> CPO"
+    approver: str = ""  # from core/policy.approver_for(cost) (customer approval matrix)
+    approver_reason: str = ""  # e.g. "€120k: Category lead (<€500k)"
+    needs_approval: bool = True  # False = executed automatically (autonomy switch "auto")
     decide_by: Optional[datetime] = None
     status: str = Field(default="proposed", index=True)  # proposed|approved|rejected|executed|outdated
     chosen_option: Optional[int] = None

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from .. import system
-from ..core import events, trace
+from ..core import events, policy, trace
 from ..core.config import get_settings
 from ..core.models import (
     Conflict, DecisionCard, DropRecord, Forecast, Issue, OutboxMessage, RiskScore, utcnow,
@@ -164,6 +164,16 @@ def risk() -> dict:
 @app.get("/api/outbox")
 def outbox() -> dict:
     return ok(_rows(OutboxMessage, order=OutboxMessage.id.desc()))
+
+
+@app.get("/api/setup")
+def customer_setup() -> dict:
+    s = policy.setup()
+    return ok({
+        "customer": s.customer,
+        "autonomy": {"mode": s.autonomy_mode, "auto_execute_below_eur": s.auto_execute_below_eur},
+        "approval_matrix": [{"below_eur": r.below_eur, "approvers": list(r.approvers)} for r in s.approval_matrix],
+    })
 
 
 @app.get("/api/part-journey")

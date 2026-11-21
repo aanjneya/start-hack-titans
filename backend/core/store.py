@@ -54,8 +54,19 @@ def get_engine() -> Engine:
 def init_db() -> None:
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
+    _add_missing_columns(engine)
     with engine.begin() as conn:
         conn.execute(text(PART_JOURNEY_VIEW))
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    """Tiny auto-migration: when a shared model gains a column, add it to existing local DBs."""
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            existing = {r[1] for r in conn.execute(text(f'PRAGMA table_info("{table.name}")'))}
+            for col in table.columns:
+                if col.name not in existing:
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}"'))
 
 
 def reset_db() -> None:

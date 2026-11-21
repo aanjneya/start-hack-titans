@@ -14,10 +14,11 @@ Judging "Taste": "Does it look and feel like a real product? … a clear recomme
 
 ## Tasks
 - [ ] **T7.1** Top bar: countdown to Sun 20:00, the 7-step pipeline status (Order → Confirm → Ship → Track → Receive → Pack → Launch), LIVE/DEMO switch.
-- [ ] **T7.2** Main page "What can stop a line": forecast per edition (packed / to pack / expected by 20:00) and a red/yellow/green list of blocking parts.
-- [ ] **T7.3** Decision cards: problem, options with € vs copies, recommended option, approver, **Approve** button; after approval the forecast updates live.
+- [ ] **T7.2** Main page = **action inbox** "What can stop a line": decision cards first (office hours: "actions, not dashboards"), then the forecast per edition (packed / to pack / expected by 20:00) as a small bar.
+- [ ] **T7.3** Decision cards: one-line summary, options with € vs copies, recommended option, approver (from the approval matrix), **Approve** button; "Why?" expands the reasoning and evidence; after approval the forecast updates live.
 - [ ] **T7.4** Risk table: parts and suppliers with grade and top 3 reasons.
-- [ ] **T7.5** ⚡ AI trace drawer: for any card, show source file → what the agent read → its reasoning → emails sent and received.
+- [ ] **T7.5** ⚡ AI trace drawer: for any card, show source file → what the agent read → its reasoning → emails sent and received; plus per-agent counts of overrides/errors ("which agent made the mistake").
+- [ ] **T7.7** Live agent lanes: small activity strip per agent showing they work **in parallel** (Lio: our flow looked "too sequential"). No role logins (vision only).
 - [ ] **T7.6** Second tab "Shipments & suppliers" (Tim's `part_journey` view), then deploy and record the 90-second backup video.
 
 ## When it's done

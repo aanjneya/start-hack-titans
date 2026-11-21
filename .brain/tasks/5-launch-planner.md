@@ -21,8 +21,9 @@ The CPO memo: "One page per day on what can stop a line. Not forty dashboards." 
 - [ ] **T5.3** Apply the priority rules from the CPO memo: Collector's first, nothing packed without a quality release.
 - [ ] **T5.4** Generate fix options: pick up at the port now, switch sea → air, the supplier's express offer, move shared parts between editions, use up old revisions where allowed.
 - [ ] **T5.5** Price each option: € cost (from contracts, offers, routes) vs copies saved.
-- [ ] **T5.6** Find the right approver from the approval policy (`approval_policy_PP-07.pdf`) and the org chart (`org_chart_v2.pdf`; the new approver only starts 23 Nov, so it goes to Maren/Jonas).
-- [ ] **T5.7** Build the decision card: problem, options, recommendation, approver, decide-by time.
+- [ ] **T5.6** Find the right approver with the customer's **approval matrix** in `backend/setup/<customer>.json` (Soony, from office hours: Buyer <€50k · Category lead <€500k · Head of procurement <€2M · CPO <€5M · CPO+CFO ≥€5M; helper `core/policy.py: approver_for(amount)`). Cross-check people's names with `org_chart_v2.pdf`.
+- [ ] **T5.7** Build the decision card as **risk → reason → recommended action**: one-line `summary` (for the exec), options, recommendation, approver, decide-by time, and full `reasoning` + evidence for anyone who wants detail.
+- [ ] **T5.10** Autonomy switch: if the setup says `auto` and the option's cost is below `auto_execute_below_eur`, execute directly and log it; otherwise (`control`, default) wait for approval (`core/policy.py: needs_approval(amount)`).
 - [ ] **T5.8** After approval: trigger the action (email via Chaser, record the change), recalculate the forecast, and later mark the issue solved or reopen it.
 - [ ] **T5.9** Live data: recalculate the forecast and cards after each drop (e.g. a new `launch_status` file), and mark cards outdated if their numbers changed.
 

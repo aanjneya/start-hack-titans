@@ -99,3 +99,30 @@ def test_replay_finds_real_drops_in_git_history(tmp_path):
     assert len(first.added) > 100  # the baseline
     root = materialize(first, tmp_path / "snap")
     assert (root / "soony").exists() and (root / "suppliers").exists()
+
+
+def test_approval_matrix_and_autonomy_from_setup(tmp_path, monkeypatch):
+    from backend.core import config, policy
+
+    policy.reset_cache()
+    assert policy.approver_for(10_000) == "Buyer"
+    assert policy.approver_for(120_000) == "Category lead"
+    assert policy.approver_for(1_500_000) == "Head of procurement"
+    assert policy.approver_for(4_000_000) == "CPO"
+    assert policy.approver_for(9_000_000) == "CPO + CFO"
+    assert policy.needs_approval(10) is True  # Soony default: control
+
+    custom = tmp_path / "acme.json"
+    custom.write_text('{"customer": "Acme", "autonomy": {"mode": "auto", "auto_execute_below_eur": 1000},'
+                      ' "approval_matrix": [{"below_eur": null, "approvers": ["Boss"]}]}')
+    monkeypatch.setenv("CUSTOMER_SETUP", str(custom))
+    config.reset_settings()
+    policy.reset_cache()
+    assert policy.approver_for(5) == "Boss"
+    assert policy.needs_approval(500) is False and policy.needs_approval(5000) is True
+    monkeypatch.delenv("CUSTOMER_SETUP")
+    config.reset_settings()
+    policy.reset_cache()
+
+    body = TestClient(app).get("/api/setup").json()
+    assert body["data"]["customer"] == "Soony Interactive" and len(body["data"]["approval_matrix"]) == 5

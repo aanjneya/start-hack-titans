@@ -29,6 +29,15 @@ Soony has a system of record for only 2 of 7 steps. We close the other five.
 **Next 10 customers:** anyone with a hard date + many suppliers (console/phone launches, fashion drops, toys before Christmas, plant start-ups).
 **Judging caveat:** Taste and Technical Depth score a working product and real agent actions, so pitch the process and prove it live on Soony's data.
 
+## 1c. Learned at office hours Sat 18:00 (vision, not every detail; notes in `minutes/`)
+- **Actions, not dashboards.** Every risk is shown as **risk → reason → recommended action**: a one-line summary first, full reasoning + evidence on demand.
+- **Approval matrix is customer setup, not code.** Soony: Buyer <€50k · Category lead <€500k · Head of procurement <€2M · CPO <€5M · CPO+CFO ≥€5M (`backend/setup/soony.json`).
+- **Autonomy switch:** per customer, agents either act on their own below a limit ("auto") or always wait for the approver ("control", default).
+- **Agents run in parallel, not as a pipeline.** Show live per-agent activity, not a step-by-step flow.
+- **Trust via traceability:** the trace shows which agent did what, and which agent got overridden or made mistakes.
+- **Standout candidate:** magnet export ban → agent spots single-source risk → proposes 2nd source + safety stock → routed to the right approver by amount → one click → fully traced.
+- Roles/views per user: vision only, not built (GOAL non-goal stays).
+
 ## 2. Agents (5 + coordinator; one verb each, so not "one big prompt")
 | # | Agent | Job | Key inputs | Hands off to | Human gate |
 |---|---|---|---|---|---|
@@ -44,7 +53,7 @@ Merge decisions: kept Risk separate from Line-Stop/Policy (daksh) so each agent 
 
 ## 3. One screen (aanjneya) + trace drawer
 - **Top bar:** countdown to Sun 20:00, 7-step pipeline status, `LIVE / MOCK` toggle.
-- **Main:** "What can stop a line" brief (CPO memo: one page, not 40 dashboards) → decision cards (problem, A/B/C, **€ vs copies**, approver, decide-by time, Approve). **Approving updates the pack forecast live.**
+- **Main:** an **action inbox** first ("What can stop a line", CPO memo: one page, not 40 dashboards): decision cards with one-line summary, A/B/C, **€ vs copies**, approver from the approval matrix, decide-by time, Approve; reasoning expands on click. **Approving updates the pack forecast live.** Small live activity lanes show the agents working in parallel.
 - **Risk table** with reasons. **⚡ AI Traceability drawer** on any card: source file → normalization diff → reasoning → email out/in (for Nils and the judges).
 - **Second tab "Shipments & suppliers" (tim):** reads the `part_journey` view (§3b). One row per launch-relevant shipment as a pipeline, e.g. `CMP-GAM-010 · Ordered ✓ → Confirmed ✓ → Shipped ✓ (sea) → Hamburg ✗ ETA 3 Dec, needed Sun 06:00`; one card per supplier (open / on track / late / unclear, last update, pending agent question). Sorted by risk, red first, green collapsed, every red row has an action. Answers the team's end-to-end worry at almost no cost.
 

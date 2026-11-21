@@ -21,6 +21,7 @@ Our "Moody's" idea from the 16:00 discussion, and a differentiator for the judge
 - [ ] **T6.3** Write the top 3 reasons in plain words, each linked to its source file.
 - [ ] **T6.4** Recalculate when new data or news arrives, and log grade changes (e.g. "PackRight: 3 → 5 after export notice").
 - [ ] **T6.5** List single-source parts as candidates for a second source (CPO memo, post-launch).
+- [ ] **T6.6** Never show a risk alone: every high grade comes with a suggested action (second source, safety stock, expedite, split order) and hands it to the Planner as a decision card (office hours: "I need the risk, but I want the solution").
 
 ## When it's done
 - After the 17:23 drop, CMP-MAG-005 and Guangzhou PackRight jump to high risk with the right reasons.

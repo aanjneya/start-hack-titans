@@ -37,6 +37,8 @@ backend/
   core/llm.py          complete() / extract() with Claude; MOCK mode via register_mock()
   core/parsing.py      CSV sniffing (, ; tab |), xlsx/docx/pdf text, safe paths
   core/replay.py       rebuild each real drop from git history and replay it (T0.8)
+  core/policy.py       customer setup: approver_for(amount), needs_approval(amount) from setup/<customer>.json
+  setup/soony.json     Soony's approval matrix + autonomy switch (office hours Sat 18:00)
   agents/base.py       Agent base class: subscriptions, log(), emit(), raise_issue() (dedup + reopen)
   agents/*.py          one STUB per agent: replace the TODOs (see .brain/tasks/<n>-<agent>.md)
   tests/               pytest; each test gets its own temp DB

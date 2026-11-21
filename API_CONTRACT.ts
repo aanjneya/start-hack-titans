@@ -73,11 +73,15 @@ export interface DecisionCard {
   id: number;
   issue_ids: number[];
   title: string;
+  summary: string; // one line for the exec: risk -> recommended action
   problem: string;
+  reasoning: string; // full "why", shown on demand
+  evidence: Evidence[];
   options: DecisionOption[];
   recommended: number | null; // index into options
-  approver: string;
+  approver: string; // from the customer's approval matrix
   approver_reason: string;
+  needs_approval: boolean; // false = executed automatically (autonomy switch "auto")
   decide_by: string | null;
   status: DecisionStatus;
   chosen_option: number | null;
@@ -136,6 +140,12 @@ export interface OutboxMessage {
   sent_at: string | null;
 }
 
+export interface CustomerSetup {
+  customer: string;
+  autonomy: { mode: 'control' | 'auto'; auto_execute_below_eur: number };
+  approval_matrix: { below_eur: number | null; approvers: string[] }[];
+}
+
 export interface RunResult {
   run_id: string;
   drop_id: number;
@@ -179,4 +189,5 @@ export const API_ROUTES = {
   RISK: '/api/risk', // GET -> RiskScore[]
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
+  SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)
 } as const;

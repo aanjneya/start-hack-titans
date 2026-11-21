@@ -1,0 +1,17 @@
+{
+  "customer": "Soony Interactive",
+  "source": "Office hours Sat 21 Nov 18:00, head of procurement (see .brain/minutes/)",
+  "currency": "EUR",
+  "autonomy": {
+    "mode": "control",
+    "auto_execute_below_eur": 0,
+    "note": "control = every action waits for the approver; auto = agents execute on their own below auto_execute_below_eur"
+  },
+  "approval_matrix": [
+    {"below_eur": 50000, "approvers": ["Buyer"]},
+    {"below_eur": 500000, "approvers": ["Category lead"]},
+    {"below_eur": 2000000, "approvers": ["Head of procurement"]},
+    {"below_eur": 5000000, "approvers": ["CPO"]},
+    {"below_eur": null, "approvers": ["CPO", "CFO"]}
+  ]
+}

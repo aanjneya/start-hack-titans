@@ -1,6 +1,6 @@
 # 2 · Ingest & Normalizer
 
-**Owner:** @daksh · ✅ **built Sat ~20:30** (`backend/agents/ingest.py`, `ingest_mapping.py`, `ingest_docs.py`; tests `backend/tests/test_ingest_watcher.py`). All 318 files in ~1.5 s, no errors.
+**Owner:** @daksh · ✅ **built Sat ~19:35** (`backend/agents/ingest.py`, `ingest_mapping.py`, `ingest_docs.py`; tests `backend/tests/test_ingest_watcher.py`). All 318 files in ~1.5 s, no errors.
 
 **Still open:** reading the 63 scans (delivery-note photos, 3 image-only PDFs) needs Claude vision (live); notices/contracts get an English summary + grounded facts only with `MOCK_MODE=false` (offline they get regex facts); when a supplier part can't be matched there's no Claude fallback yet (it becomes a human-check issue).
 

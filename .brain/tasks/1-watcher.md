@@ -1,6 +1,6 @@
 # 1 · Watcher
 
-**Owner:** @daksh (moved from jivi Sat 19:20) · ✅ **built Sat ~20:30** in `backend/agents/watcher.py`: live portal diff (SHA-256 manifest `portal_files`, downloads only changed files to `backend/data/portal/`), timer `WATCH_INTERVAL_MIN`, `POST /api/watch/check`; demo/offline: `POST /api/replay/step` replays the real drops one by one.
+**Owner:** @daksh (moved from jivi Sat 19:20) · ✅ **built Sat ~19:35** in `backend/agents/watcher.py`: live portal diff (SHA-256 manifest `portal_files`, downloads only changed files to `backend/data/portal/`), timer `WATCH_INTERVAL_MIN`, `POST /api/watch/check`; demo/offline: `POST /api/replay/step` replays the real drops one by one.
 
 ## What this agent does
 It checks the Soony portal every 15 minutes and notices when files are added, changed or removed. It downloads only those files and tells the next agent "these files are new". It never interprets anything; it only notices.

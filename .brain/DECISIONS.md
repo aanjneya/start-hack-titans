@@ -64,7 +64,7 @@
 - **Decision**: Rows are the current truth and can be updated only via `store.update_row` (every change → `field_changes`: old, new, source, agent, reason, issue). Only Ingest writes supply-chain data. Loop: Reconciler raises missing-info issue → Chaser emails → reply stored in `inbox` (`reply.received`) → Ingest fills the field (or records a conflict if a different value exists) → `truth.updated` with exact changed rows → Reconciler re-checks and resolves/reopens. `emit_truth_updated` skips empty changes, so no loops. Replaces Tim's "never overwrite" rule in PLAN §3b.
 - **Trade-offs**: Conflicting values are not overwritten by default (`on_conflict="record"`); a confirmed correction must say `on_conflict="overwrite"`.
 
-### [20:30] Watcher + Ingest built (by daksh)
+### [19:35] Watcher + Ingest built (by daksh)
 - **Context**: Agents 1 and 2 feed everyone else.
 - **Decision**: Order confirmations are parsed by rules (one template across KO/ZH/PL/EN suppliers; 202/202 text PDFs), Claude only for the rest (live mode). Column mappings are learned once per header fingerprint (`column_mappings`). Supplier names, vendor numbers and supplier part numbers are mapped through `aliases` (PackRight's PR-CC-0312 → CMP-GAM-003 etc.). Survivorship: same file replaced → overwrite; other source → newest wins + conflict kept; a source that already lost can't flip a value back on reprocessing. Shipment statuses mapped to one list (`in transit` → `in_transit`).
 - **Trade-offs**: Scans and free-text documents need live Claude for full reading; offline they carry regex facts (POs, parts, dates, quantities, IBANs, revisions, risk signals).

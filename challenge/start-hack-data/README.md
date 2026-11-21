@@ -11,70 +11,15 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T17-23 (Europe/Berlin)
+### Drop check 2026-11-21T17-48 (Europe/Berlin)
 Portal now: 318 files, 47.4 MB
-**5 added · 0 changed · 0 removed**
-Where: `soony/news` (1), `suppliers/SUP-0018_Pune_Diecast_Works` (1), `suppliers/SUP-0029_Guangzhou_PackRight` (3)
-
-## Watch-list hits (Lio brief signals)
-- 🔥 `soony/news/2026-11-21_export_controls.json`: export
-- 🔥 `suppliers/SUP-0018_Pune_Diecast_Works/profile.json`: export
-- 🔥 `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv`: export
-- 🔥 `suppliers/SUP-0029_Guangzhou_PackRight/notices/Supply_notice_export_licence_2026-11-21.pdf`: notices
-- 🔥 `suppliers/SUP-0029_Guangzhou_PackRight/profile.json`: export
-
-### ➕ `soony/news/2026-11-21_export_controls.json` (1,143 B)
-```
-{
-  "generated_at": "2026-11-20T18:00:00+01:00",
-  "items": [
-    {
-      "id": "NEWS-2026-1121-04",
-      "published_at": "2026-11-21T16:00:00+01:00",
-      "source": "Asia Commodities Wire",
-      "headline": "China tightens export licensing for rare-earth magnets",
-```
-
-### ➕ `suppliers/SUP-0018_Pune_Diecast_Works/profile.json` (1,054 B)
-```
-{
-  "exportedAt": "2026-11-21T17:12:00+01:00",
-  "source": "Soony vendor master (SAP XK03 extract v2)",
-  "supplier": {
-    "vendorNo": 18,
-    "supplierId": "SUP-0018",
-    "name": "Pune Diecast Works",
-    "legalName": "Pune Diecast Works Pvt. Ltd.",
-```
-
-### ➕ `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv` (276 B)
-```
-component_id,supplier_id,action,lead_time_days_old,lead_time_days_new,share,primary,note
-CMP-GAM-007,SUP-0029,flag,63,105,1.0,Y,"+42 d for deliveries from December, see supply notice"
-CMP-MAG-005,SUP-0029,flag,63,,1.0,Y,sub-supplier cannot export; no second source on file
-```
-
-### ➕ `suppliers/SUP-0029_Guangzhou_PackRight/notices/Supply_notice_export_licence_2026-11-21.pdf` (73,532 B)
-
-### ➕ `suppliers/SUP-0029_Guangzhou_PackRight/profile.json` (1,006 B)
-```
-{
-  "exportedAt": "2026-11-21T17:12:00+01:00",
-  "source": "Soony vendor master (SAP XK03 extract v2)",
-  "supplier": {
-    "vendorNo": 29,
-    "supplierId": "SUP-0029",
-    "name": "Guangzhou PackRight",
-    "legalName": "Guangzhou PackRight Packaging Co., Ltd.",
-```
-
-## Agent feedback
-Export-control drop: news says China now needs end-use licences for NdFeB magnets (4-8 weeks), and Guangzhou PackRight (SUP-0029) says its magnet sub-supplier cannot export. CMP-MAG-005 (4 lid magnets per Collector's box) is single-source with stock 0, no PO, no receipts; that answers the onboarding question 'why does the stock list show no lid magnets?' only if the magnets ship inside the boxes. Collector's box CMP-GAM-007 stock is 27,500 vs ~18,900 still to pack, but its lead time jumps from 63 to 105 days for December deliveries. Pune Diecast (statue second source) now shows status 'watch' with its conditional release expired on 30 Oct and not extended; profiles now also come as SAP JSON (new format next to the old CSV).
+No changes since last check.
 
 ## All checks (newest first, Europe/Berlin)
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 17-48 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T17-48.md) |
 | 2026-11-21 17-23 | 318 · 47.4 MB | 5 | 0 | 0 | **5 added · 0 changed · 0 removed** — `soony/news/2026-11-21_export_controls.json`, `suppliers/SUP-0018_Pune_Diecast_Works/profile.json`, `suppliers/SUP-0029_Guangzhou_PackRight/components_delta.csv` … Export-control drop: news says China now needs end-use licences for NdFeB magnets (4-8 weeks), and Guangzhou PackRight (SUP-0029) says its magnet sub-supplier cannot export. CMP-MAG-005 (4 lid magnets per Collector's box) is single-source with stock 0, no PO, no receipts; that answers the onboarding question 'why does the stock list show no lid magnets?' only if the magnets ship inside the boxes. Collector's box CMP-GAM-007 stock is 27,500 vs ~18,900 still to pack, but its lead time jumps from 63 to 105 days for December deliveries. Pune Diecast (statue second source) now shows status 'watch' with its conditional release expired on 30 Oct and not extended; profiles now also come as SAP JSON (new format next to the old CSV). | [report](reports/2026-11-21T17-23.md) |
 | 2026-11-21 17-08 | 313 · 47.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T17-08.md) |
 | 2026-11-21 16-53 | 313 · 47.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T16-53.md) |

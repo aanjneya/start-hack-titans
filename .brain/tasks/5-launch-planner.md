@@ -1,6 +1,6 @@
 # 5 · Launch Planner & Decision Copilot
 
-**Owner:** unclaimed
+**Owner:** @jivi
 
 ## What this agent does
 It answers the one question that matters: **"Will we pack every copy by Sunday 20:00, and if not, what do we do?"** It forecasts packing hour by hour, finds which missing part stops which line, and proposes 2–3 fixes with their **cost in € vs copies saved**. It sends each proposal to the right person to approve, and after approval it carries the fix out and checks it worked.

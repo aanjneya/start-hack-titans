@@ -1,6 +1,6 @@
 # 4 · Chaser
 
-**Owner:** unclaimed
+**Owner:** @tim
 
 ## What this agent does
 When information is missing or unclear, it writes a short, polite email to the right supplier or carrier, **in their language**, naming the exact order or shipment. It reads the reply and feeds the answer back into the database. It never spams: one open question per supplier at a time.

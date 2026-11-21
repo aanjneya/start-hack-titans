@@ -1,6 +1,6 @@
 # 1 · Watcher
 
-**Owner:** unclaimed
+**Owner:** @jivi
 
 ## What this agent does
 It checks the Soony portal every 15 minutes and notices when files are added, changed or removed. It downloads only those files and tells the next agent "these files are new". It never interprets anything; it only notices.

@@ -1,6 +1,6 @@
 # 3 · Reconciler & Gate
 
-**Owner:** unclaimed
+**Owner:** @aanjneya
 
 ## What this agent does
 It looks across the clean database and finds what doesn't add up: two sources that disagree, data that stopped updating, a confirmation that doesn't match the order, a part that may no longer be used, suspicious bank details. Every problem becomes an **issue** with proof, and the agent decides who handles it: the Chaser (we need information), the Planner (copies are at risk) or a human (too risky for AI).

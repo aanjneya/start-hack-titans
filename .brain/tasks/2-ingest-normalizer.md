@@ -1,6 +1,6 @@
 # 2 · Ingest & Normalizer
 
-**Owner:** unclaimed
+**Owner:** @daksh
 
 ## What this agent does
 It reads every file Soony and the suppliers send (spreadsheets, Excel, PDFs, files in Polish, Chinese or Korean) and turns them into **one clean database with the same IDs everywhere**. Every value remembers which file it came from. It never deletes old values; it adds new facts next to them.

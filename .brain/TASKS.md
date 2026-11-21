@@ -6,6 +6,15 @@
 
 ## Now (Active Sprint)
 
+- [~] @jivi 1 Watcher (`backend/agents/watcher.py`, `.brain/tasks/1-watcher.md`)
+- [~] @daksh 2 Ingest & Normalizer (`backend/agents/ingest.py`, `.brain/tasks/2-ingest-normalizer.md`)
+- [~] @aanjneya 3 Reconciler & Gate (`backend/agents/reconciler.py`, `.brain/tasks/3-reconciler-gate.md`)
+- [~] @tim 4 Chaser (`backend/agents/chaser.py`, `.brain/tasks/4-chaser.md`)
+- [~] @jivi 5 Launch Planner & Decision Copilot (`backend/agents/planner.py`, `.brain/tasks/5-launch-planner.md`)
+- [~] @aanjneya 6 Risk Rater (`backend/agents/risk.py`, `.brain/tasks/6-risk-rater.md`)
+- [ ] 7 Frontend: owner later (`web/`, `.brain/tasks/7-frontend-later.md`)
+- Shared hubs (change with care, tiny commit straight to main): `backend/core/models.py`, `backend/core/events.py`, `API_CONTRACT.ts`
+
 - [ ] Register team on Lio Customer Portal (`start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net`), grab API token, download `/api/v1/archive.zip`, and register sender emails
 - [ ] Book Office Hours (Sat 14:00 / Sat 17:00 / Sun 09:00) with Dr. Maren Vogt, Felix Brunner, Nils Berger
 - [ ] Inspect `archive.zip` (`soony/context/onboarding_notes.md`, BOMs, POs, stock, shipments, contracts) to find hidden traps

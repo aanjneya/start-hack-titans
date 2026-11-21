@@ -1,6 +1,6 @@
 # 6 · Risk Rater ("Moody's for parts")
 
-**Owner:** unclaimed
+**Owner:** @aanjneya
 
 ## What this agent does
 It gives every part and every supplier a risk grade from **1 (safe) to 6 (critical)**, also shown as AAA–CCC, and always explains the **top 3 reasons**. It updates whenever new data or news arrives. It doesn't fix anything itself; it tells the Reconciler and the Planner where to look first.

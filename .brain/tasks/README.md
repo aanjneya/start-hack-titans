@@ -8,12 +8,12 @@
 
 | # | Agent | What it does in one line | Tasks | Owner |
 |---|---|---|---|---|
-| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 7 | unclaimed |
-| 1 | [Watcher](1-watcher.md) | Notices every new or changed file on the Soony portal (already running every 15 min) | 4 | unclaimed |
-| 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 9 | unclaimed |
-| 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 9 | unclaimed |
+| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 8 | unclaimed |
+| 1 | [Watcher](1-watcher.md) | Notices every new or changed file on the Soony portal (already running every 15 min) | 5 | unclaimed |
+| 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 10 | unclaimed |
+| 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 10 | unclaimed |
 | 4 | [Chaser](4-chaser.md) | Politely emails suppliers and carriers for missing answers, in their language, and reads the replies | 6 | unclaimed |
-| 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 8 | unclaimed |
+| 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 9 | unclaimed |
 | 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 5 | unclaimed |
 | 7 | [Frontend (later)](7-frontend-later.md) | The one screen: what can stop a line, decision cards, risk table, AI trace drawer | 6 | phase 2 |
 
@@ -35,6 +35,14 @@ Risk Rater feeds Reconciler + Planner.  Every step is written to the agent log (
 3. **M1 Sat 19:30:** shared backend + database tables on `main`; each agent runs on the real files.
 4. **M2 Sat 22:30:** the hero case works end to end through the API (rev B sleeve problem → decision card → approve → forecast improves → log shows every step).
 5. **M3 Sun 09:30:** the frontend shows it. **11:00** tag `demo-safe` + record backup video. **12:00** submit.
+
+## ⚠️ The data keeps changing: build for that
+The portal data changes all weekend (new files, replaced files, renamed columns, new formats like supplier `profile.json`). We are **not training a model on today's data**: the agents read whatever data is there *each time they run*. So:
+- A new drop must flow through the whole loop **automatically** (Watcher → Ingest → Reconciler → Planner) with **no code change**.
+- New or replaced files are added as new facts with a timestamp; old values stay (history), and "current truth" is always recomputed.
+- Unknown files, folders or columns are still stored and flagged for a human, never crash the run.
+- Every agent is tested by replaying the real drops in order (14:15 → 16:08 → 17:23 → whatever comes next). `.brain/DATA_CHANGES.md` lists each drop.
+Tasks for this: **T0.8, T1.5, T2.10, T3.10, T5.9** below in the agent files.
 
 ## Rules for everyone (from AGENTS.md / PLAN.md)
 - Never type numbers from the data into the code: read them from the files (judges check "is anything hardcoded?").

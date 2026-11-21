@@ -26,6 +26,7 @@ It looks across the clean database and finds what doesn't add up: two sources th
 - [ ] **T3.7** Bank details changed vs the contract → always to a human (possible invoice fraud, a known trap in the brief).
 - [ ] **T3.8** Quantity jumps vs history (e.g. 690 → 790) → human check, never accepted automatically.
 - [ ] **T3.9** Use the `part_journey` view to find empty steps (ordered but never confirmed or shipped) and route each issue to the right agent.
+- [ ] **T3.10** Live data: rerun every check after each drop; close issues the new data solves, reopen ones that come back.
 
 ## When it's done
 - On the real drops it raises: the 04276 conflict, the CMP-GAM-004 rev B block, the CMP-GAM-010 / SUP-0018 problem and the CMP-MAG-005 magnet risk, **with no code change between drops**.

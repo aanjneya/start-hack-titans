@@ -24,6 +24,7 @@ The CPO memo: "One page per day on what can stop a line. Not forty dashboards." 
 - [ ] **T5.6** Find the right approver from the approval policy (`approval_policy_PP-07.pdf`) and the org chart (`org_chart_v2.pdf`; the new approver only starts 23 Nov, so it goes to Maren/Jonas).
 - [ ] **T5.7** Build the decision card: problem, options, recommendation, approver, decide-by time.
 - [ ] **T5.8** After approval: trigger the action (email via Chaser, record the change), recalculate the forecast, and later mark the issue solved or reopen it.
+- [ ] **T5.9** Live data: recalculate the forecast and cards after each drop (e.g. a new `launch_status` file), and mark cards outdated if their numbers changed.
 
 ## When it's done
 - Hero case works through the API: rev B issue → card "express rev C, € X, +Y copies, approver Maren" → approve → forecast improves → log shows the whole chain.

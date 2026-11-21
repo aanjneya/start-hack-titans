@@ -20,6 +20,7 @@ At 16:08 it saw 5 new files (launch status, CPO memo, part revision changes) and
 - [ ] **T1.2** Instead of only writing a report, hand the list of changed files to the Ingest agent.
 - [ ] **T1.3** Demo mode: replay the real drops from `challenge/start-hack-data/versions/` and `data/` so we can show "a new drop arrives" on stage without Wi-Fi.
 - [ ] **T1.4** Write each check to the agent log ("16:08 · 5 added · 1 changed").
+- [ ] **T1.5** Live data: run on a timer inside the backend so new drops are picked up without anyone pressing a button; removed files are reported too.
 
 ## When it's done
 - Replaying 14:15 → 16:08 → 17:23 produces exactly the file changes listed in `.brain/DATA_CHANGES.md`.

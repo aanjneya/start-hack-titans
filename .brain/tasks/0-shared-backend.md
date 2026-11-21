@@ -23,6 +23,7 @@ The Reconciler finds a problem and hands it to the Planner. The base delivers it
 - [ ] **T0.5** Make every agent action write a row to `agent_log` automatically.
 - [ ] **T0.6** Write one shared Claude helper with a demo-mode switch (`MOCK_MODE=true` gives fixed answers and works with no internet).
 - [ ] **T0.7** Expose the API the frontend will use later, and write the same routes into `API_CONTRACT.ts`.
+- [ ] **T0.8** Live data: when the Watcher reports a new drop, rerun the whole loop automatically, and add a "replay all drops in order" test command that every agent uses.
 
 ## When it's done
 - `GET /api/health` answers and shows whether demo mode is on.

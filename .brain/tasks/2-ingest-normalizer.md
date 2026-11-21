@@ -25,6 +25,7 @@ There are two order files: the new one uses commas and English column names; the
 - [ ] **T2.7** Map supplier part and order numbers to our `CMP-…` / `4500…` numbers, with a confidence score.
 - [ ] **T2.8** Let AI match column names by meaning, so renamed or new columns still work.
 - [ ] **T2.9** Store a source and timestamp on every row; never overwrite.
+- [ ] **T2.10** Live data: replaced files add new facts (old ones kept as history); unknown new files, folders or formats are still stored and flagged, never crash the run.
 
 ## When it's done
 - One run on the real data fills every table, and every row shows its source file.

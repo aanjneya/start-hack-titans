@@ -11,79 +11,15 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-21T21-38 (Europe/Berlin)
+### Drop check 2026-11-21T21-54 (Europe/Berlin)
 Portal now: 332 files, 53.2 MB
-**14 added · 0 changed · 0 removed**
-Where: `soony/erp` (2), `soony/receiving` (12)
-
-## Watch-list hits (Lio brief signals)
-- 🔥 `soony/erp/goods_receipts_update.csv`: goods_receipt, partial
-- 🔥 `soony/erp/stock_update_2026-11-21.xlsx`: stock
-- 🔥 `soony/receiving/DC-HAM/20260903_DN-260831-382.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20260904_SN-260730-216.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20260914_SN-260810-719.png`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261009_WZ-261007-399.png`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261106_DN-261102-986.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261110_SN-261007-130.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261111_DN-261106-613.png`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261113_WZ-261110-805.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261121_DN-261119-197.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261121_DN-261120-726.jpg`: receiving
-- 🔥 `soony/receiving/DC-HAM/20261121_WZ-261120-732.jpg`: receiving
-
-### ➕ `soony/erp/goods_receipts_update.csv` (664 B)
-```
-gr_number,gr_date,po_number,po_line,supplier_id,material_id,plant,qty_ordered,qty_received,delivery_note,inspector,remark
-5000413067,2026-11-21,4500318766,2,SUP-0011,CMP-GAM-002,DC-HAM,5000,5000,DN-261119-197,Schulz P.,
-5000413068,2026-11-21,4500318769,1,SUP-0011,CMP-GAM-002,DC-HAM,5500,5500,DN-261119-197,Schulz P.,
-5000413070,2026-11-21,4500318735,2,SUP-0010,CMP-GAM-001,DC-HAM,48000,28000,DN-261120-726,Meyer K.,"partial delivery, balance per shipping advice"
-5000413071,2026-11-21,4500318775,2,SUP-0028,CMP-GAM-004,DC-HAM,20000,20000,WZ-261120-732,Yilmaz D.,"1 pallet labelled CMP-GAM-004 holds CMP-GAM-005 sleeves (4,000 pcs); booked per delivery note"
-```
-
-### ➕ `soony/erp/stock_update_2026-11-21.xlsx` (6,652 B)
-```
-## sheet1.xml
-Stock DC-HAM after receipts 2026-11-21, late shift (book stock, not counted)
-Site | Material | Description | Qty | UoM | Receipts today | Used today | Last count
-DC-HAM | CMP-GAM-001 | Game Card 128 GB &#8211; Grand Heist 6 | 42.900 | PC | 28000 | 103500 | 2026-11-21
-DC-HAM | CMP-GAM-002 | Game Card 64 GB &#8211; Grand Heist 5 | 73.500 | PC | 10500 | 0 | 2026-11-21
-DC-HAM | CMP-GAM-003 | Game Card Case (clear) | 6.000 | PC | 0 | 90000 | 2026-11-21
-DC-HAM | CMP-GAM-004 | Cover Sleeve Grand Heist 6 (USK/PEGI) | 116.000 | PC | 20000 | 90000 | 2026-11-21
-DC-HAM | CMP-GAM-005 | Cover Sleeve Grand Heist 5 (USK/PEGI) | 55.000 | PC | 0 | 0 | 2026-11-08
-```
-
-### ➕ `soony/receiving/DC-HAM/20260903_DN-260831-382.jpg` (152,378 B)
-
-### ➕ `soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg` (192,437 B)
-
-### ➕ `soony/receiving/DC-HAM/20260904_SN-260730-216.jpg` (222,354 B)
-
-### ➕ `soony/receiving/DC-HAM/20260914_SN-260810-719.png` (854,563 B)
-
-### ➕ `soony/receiving/DC-HAM/20261009_WZ-261007-399.png` (1,930,349 B)
-
-### ➕ `soony/receiving/DC-HAM/20261106_DN-261102-986.jpg` (157,417 B)
-
-### ➕ `soony/receiving/DC-HAM/20261110_SN-261007-130.jpg` (157,461 B)
-
-### ➕ `soony/receiving/DC-HAM/20261111_DN-261106-613.png` (1,331,682 B)
-
-### ➕ `soony/receiving/DC-HAM/20261113_WZ-261110-805.jpg` (144,671 B)
-
-### ➕ `soony/receiving/DC-HAM/20261121_DN-261119-197.jpg` (355,766 B)
-
-### ➕ `soony/receiving/DC-HAM/20261121_DN-261120-726.jpg` (136,861 B)
-
-### ➕ `soony/receiving/DC-HAM/20261121_WZ-261120-732.jpg` (177,508 B)
-
-## Agent feedback
-Evening drop: 12 new delivery-note scans, a goods-receipt update and book stock after the late shift. Packed at 20:50: Standard 602,000 (38,000 left), Collector's 60,300 (11,700 left). Book stock shows clear cases CMP-GAM-003 at only 6,000 vs ~38,000 Standard still to pack, while 350,000 cases sit at CTA Hamburg (SHP-2026-04276, ready for pick-up); game cards CMP-GAM-001 at 42,900 vs ~49,700 needed (Hwaseong delivered 28,000 of 48,000, rest after launch). New traps: one pallet booked as GH6 sleeves CMP-GAM-004 holds 4,000 GH5 sleeves; and Art Book book stock 77,800 still includes the 72,000 phantom books from WZ-261116-473, so real stock is ~5,800 vs 11,700 Collector's copies left.
+No changes since last check.
 
 ## All checks (newest first, Europe/Berlin)
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-21 21-54 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T21-54.md) |
 | 2026-11-21 21-38 | 332 · 53.2 MB | 14 | 0 | 0 | **14 added · 0 changed · 0 removed** — `soony/erp/goods_receipts_update.csv`, `soony/erp/stock_update_2026-11-21.xlsx`, `soony/receiving/DC-HAM/20260903_DN-260831-382.jpg` … Evening drop: 12 new delivery-note scans, a goods-receipt update and book stock after the late shift. Packed at 20:50: Standard 602,000 (38,000 left), Collector's 60,300 (11,700 left). Book stock shows clear cases CMP-GAM-003 at only 6,000 vs ~38,000 Standard still to pack, while 350,000 cases sit at CTA Hamburg (SHP-2026-04276, ready for pick-up); game cards CMP-GAM-001 at 42,900 vs ~49,700 needed (Hwaseong delivered 28,000 of 48,000, rest after launch). New traps: one pallet booked as GH6 sleeves CMP-GAM-004 holds 4,000 GH5 sleeves; and Art Book book stock 77,800 still includes the 72,000 phantom books from WZ-261116-473, so real stock is ~5,800 vs 11,700 Collector's copies left. | [report](reports/2026-11-21T21-38.md) |
 | 2026-11-21 21-23 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T21-23.md) |
 | 2026-11-21 21-08 | 318 · 47.4 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-21T21-08.md) |

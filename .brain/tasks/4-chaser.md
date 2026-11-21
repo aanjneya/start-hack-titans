@@ -16,20 +16,23 @@ Standard sleeve CMP-GAM-004 must now be rev C. Karton Nowak (Poland) has a machi
 - **Gives:** outgoing emails (outbox) → suppliers; replies → **Ingest** (as new facts) and the agent log.
 
 ## Tasks
-- [ ] **T4.0** Work from `missing_info` Findings (`.brain/DATA_FORMAT.md`): use their ids, summary and `suggested_actions` (type `email`); set the finding's status to `asked` when the email is out.
-- [ ] **T4.1** Write the email from an issue: the supplier's contact and language come from their profile; include order, shipment and part numbers.
-- [ ] **T4.2** Anti-spam rule: max one open question per supplier, and a minimum gap between emails.
-- [ ] **T4.3** Preview mode: a human can see and approve the first email to each supplier (in the demo it can auto-send).
-- [ ] **T4.4** Demo supplier simulator: fake replies for offline demos (e.g. Karton Nowak: "yes, rev C, 15,000 pcs by Sun 08:00").
-- [ ] **T4.5** When a reply arrives (real mailbox or mock simulator), store it with `system.store_reply(...)` and emit `reply.received`. Don't write data yourself: Ingest applies it, then the Reconciler re-checks.
-- [ ] **T4.6** Escalate to a buyer if there's no reply within X hours.
+- [~] **T4.0** (@tim) Work from `missing_info` Findings (`.brain/DATA_FORMAT.md`): use their ids, summary and `suggested_actions` (type `email`); set the finding's status to `asked` when the email is out.
+- [~] **T4.1** (@tim) Write the email from an issue: the supplier's contact and language come from their profile; include order, shipment and part numbers.
+- [~] **T4.2** (@tim) Anti-spam rule: max one open question per supplier, and a minimum gap between emails.
+- [~] **T4.3** (@tim) Preview mode: a human can see and approve the first email to each supplier (in the demo it can auto-send).
+- [~] **T4.4** (@tim) Fallback only (`MOCK_MODE=true`): replay a recorded **real** mail exchange (fixture in repo), no invented supplier replies.
+- [~] **T4.5** (@tim) When a reply arrives (real mailbox or mock simulator), store it with `system.store_reply(...)` and emit `reply.received`. Don't write data yourself: Ingest applies it, then the Reconciler re-checks.
+- [~] **T4.6** (@tim) Escalate to a buyer if there's no reply within X hours.
 
 ## When it's done
 - A "missing info" issue produces a correct Polish email in the outbox, gets a (simulated) reply, and the reply shows up in the database and the log.
 - It refuses to send a second email to the same supplier too soon.
 
-## Open question for the team
-Which email address do we send from? Suppliers only answer **sender addresses registered in the portal Settings**. We need one shared mailbox + a way to send (SMTP or an email API).
+## Mailbox (resolved Sat ~20:00, @tim)
+- Shared team mailbox on **GMX**, registered in the portal under Settings -> Mail Senders. SMTP + IMAP login tested OK.
+- Credentials only in `.env` (`MAIL_ADDRESS`, `MAIL_PASSWORD`, SMTP/IMAP hosts, see `.env.example`); ask tim for the values, never commit them.
+- **Only ONE instance sends and polls the mailbox** (tim's during dev, the deployed server for the demo), otherwise replies get split across DBs.
+- Design: Chaser = real tool-use agent (Claude decides what to ask, when to follow up/escalate); rate limit enforced in code inside the tools.
 
 ---
 ### Technical notes (for Claude Code, refine later)

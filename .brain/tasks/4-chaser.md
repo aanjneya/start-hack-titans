@@ -40,6 +40,7 @@ Standard sleeve CMP-GAM-004 must now be rev C. Karton Nowak (Poland) has a machi
 - Tables: `outbox(id, supplier_id, issue_id, lang, subject, body_original, body_en, status draft|approved|sent|replied, sent_at)`, `inbox(...)`.
 - Draft with `claude-sonnet-5-5`; store an English copy for the trace drawer. Emit `reply.received{supplier_id, text, attachments}`.
 
-## Status (Sat 20:55, branch `tim`, not on main)
-- Built + 8 tests green (`backend/tests/test_chaser.py`); live dry run with Claude OK (draft only).
-- Open: first REAL mail to Karton Nowak (`CHASER_SEND=true` on one instance), then `python -m backend.agents.chaser export <outbox_id>` to store the real exchange as demo fallback.
+## Status (Sat 22:05, on `main` since 21:45, `5480c9e`)
+- Live: real tool-use agent + GMX mailbox; Planner contract done (one mail per `decision_id`, approved decisions skip the open-question limit, MOCK marks mails `sent`).
+- Tests: `test_chaser.py` 10 green; with Jivi's planner fix `d6e40fe` planner + contract + chaser = 19 green.
+- Open: first REAL mail to Karton Nowak (`CHASER_SEND=true` on ONE instance), then `python -m backend.agents.chaser export <outbox_id>` to store the real exchange as demo fallback.

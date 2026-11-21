@@ -12,6 +12,7 @@ from backend.agents.risk import RiskRater
 from backend.agents.risk_signals import (
     ExternalSignal,
     OpenMeteoWeatherProvider,
+    PoliticalNewsProvider,
     PolymarketProvider,
     clear_cache,
 )
@@ -131,25 +132,41 @@ def test_replay_real_drops_updates_grades_and_logs_changes():
 # ---------------------------------------------------------------------------
 # 2. Live HTTP parsing for Polymarket Gamma API & Open-Meteo (mocked HTTP)
 # ---------------------------------------------------------------------------
-def test_live_polymarket_and_open_meteo_providers_parse_real_shapes(monkeypatch):
+def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
     clear_cache()
     monkeypatch.setenv("MOCK_MODE", "false")
     config.reset_settings()
 
     def fake_get_json(url: str, params: dict[str, Any] | None = None):
         if "polymarket" in url:
-            return [
-                {
-                    "slug": "us-china-rare-earth-tariff-escalation",
-                    "question": "Will China restrict rare earth exports to EU/US in 2026?",
-                    "outcomePrices": '["0.81", "0.19"]',
-                },
-                {
-                    "slug": "irrelevant-sports-market",
-                    "question": "Who will win the Champions League?",
-                    "outcomePrices": '["0.50", "0.50"]',
-                },
-            ]
+            if (params or {}).get("tag_slug") == "geopolitics":
+                return [
+                    {
+                        "slug": "strait-of-hormuz-traffic-returns-to-normal",
+                        "markets": [{
+                            "question": "Strait of Hormuz traffic returns to normal by December 31?",
+                            "outcomePrices": '["0.03", "0.97"]',
+                            "closed": False,
+                        }],
+                    },
+                    {
+                        "slug": "will-china-invade-taiwan-before-2027",
+                        "markets": [{
+                            "question": "Will China invade Taiwan by end of 2026?",
+                            "outcomePrices": '["0.02", "0.98"]',
+                            "closed": False,
+                        }],
+                    },
+                    {
+                        "slug": "us-china-rare-earth-tariff-escalation",
+                        "markets": [{
+                            "question": "Will China restrict rare earth exports to EU/US in 2026?",
+                            "outcomePrices": '["0.81", "0.19"]',
+                            "closed": False,
+                        }],
+                    },
+                ]
+            return []
         if "open-meteo" in url:
             return {
                 "current": {
@@ -161,24 +178,40 @@ def test_live_polymarket_and_open_meteo_providers_parse_real_shapes(monkeypatch)
             }
         return None
 
+    def fake_get_text(url: str, params: dict[str, Any] | None = None):
+        if "news.google.com" in url:
+            return (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<rss version="2.0"><channel><item>'
+                '<title>China tightens export controls on rare earth magnets - Reuters</title>'
+                '<link>https://news.google.com/rss/articles/test123</link>'
+                '<pubDate>Sat, 21 Nov 2026 18:00:00 GMT</pubDate>'
+                '</item></channel></rss>'
+            )
+        return None
+
     monkeypatch.setattr(risk_signals, "_cached_get_json", fake_get_json)
+    monkeypatch.setattr(risk_signals, "_cached_get_text", fake_get_text)
 
     now = datetime(2026, 11, 21, 13, 0, tzinfo=timezone.utc)
     ports = {"DEHAM": {"locode": "DEHAM", "name": "Hamburg", "country": "DE", "lat": 53.54, "lon": 9.98, "mode": "sea"}}
     ships = [Shipment(shipment_id="SHP-1", origin="CNYTN", destination="DEHAM", mode="sea", source="erp.csv")]
 
     poly_sigs = PolymarketProvider().fetch(countries={"CN"}, ports=ports, shipments=ships, documents=[], reference_now=now)
-    assert len(poly_sigs) == 1
-    assert poly_sigs[0].live is True
-    assert poly_sigs[0].score_0_100 == 81.0
-    assert "CN" in poly_sigs[0].countries
-    assert "polymarket.com/event/us-china-rare-earth-tariff-escalation" in poly_sigs[0].source_url
+    by_title = {s.title: s for s in poly_sigs}
+    # Relief question inverted: 3% Yes -> 97% disruption score
+    assert by_title["Strait of Hormuz traffic returns to normal by December 31?"].score_0_100 == 97.0
+    # Disruption question NOT inverted: 81% Yes -> 81% risk score; 2% invasion filtered out (<10%)
+    assert by_title["Will China restrict rare earth exports to EU/US in 2026?"].score_0_100 == 81.0
+    assert "Will China invade Taiwan by end of 2026?" not in by_title
+    assert all(s.live for s in poly_sigs)
 
     wx_sigs = OpenMeteoWeatherProvider().fetch(countries={"DE"}, ports=ports, shipments=ships, documents=[], reference_now=now)
-    assert len(wx_sigs) == 1
-    assert wx_sigs[0].live is True
-    assert wx_sigs[0].score_0_100 >= 80.0
-    assert "DEHAM" in wx_sigs[0].ports
+    assert len(wx_sigs) == 1 and wx_sigs[0].live is True and wx_sigs[0].score_0_100 >= 80.0
+
+    news_sigs = PoliticalNewsProvider().fetch(countries={"CN"}, ports=ports, shipments=ships, documents=[], reference_now=now)
+    assert len(news_sigs) == 1 and news_sigs[0].provider == "gnews" and news_sigs[0].live is True
+    assert news_sigs[0].score_0_100 == 65.0
 
     monkeypatch.setenv("MOCK_MODE", "true")
     config.reset_settings()

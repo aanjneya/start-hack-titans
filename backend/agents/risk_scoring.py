@@ -288,10 +288,10 @@ def rate_suppliers(
         else:
             breakdown["trade_news"] = 0.0
 
-        # B2. Polymarket + GDELT External Politics (0..13 pts)
+        # B2. Polymarket + Live Google News External Politics (0..13 pts)
         poly_sigs = [
             sg for sg in signals
-            if sg.provider in {"polymarket", "gdelt"} and country in sg.countries
+            if sg.provider in {"polymarket", "gnews", "gdelt"} and country in sg.countries
         ]
         ext_pol_pts = 0.0
         if poly_sigs:

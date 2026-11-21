@@ -2,12 +2,13 @@
 
 Feeds supported (all zero-API-key public endpoints with strict timeouts, in-memory TTL caching,
 and deterministic MOCK_MODE=true snapshots for offline/stage demo reliability):
-1. PolymarketProvider       — Live prediction-market odds (Gamma API) on tariffs, China/US/EU trade,
-                              Taiwan/Red Sea shipping, and rare-earth/export controls.
+1. PolymarketProvider       — Live prediction-market odds (Gamma `/events` API, tags `geopolitics`
+                              and `economy`) mapped to supplier countries & sea/border chokepoints,
+                              with automatic polarity inversion for relief questions (e.g. "returns to normal").
 2. OpenMeteoWeatherProvider — Live weather & wind/storm conditions at exact port & shipment lat/lon
                               read from `soony/master/ports.csv` and `open_shipments.csv`.
-3. PoliticalNewsProvider    — Portal news drops (`soony/news/*.json` in `documents`) + live GDELT
-                              country-level geopolitical/trade news API.
+3. PoliticalNewsProvider    — Portal news drops (`soony/news/*.json` in `documents`) + live Google
+                              News RSS country-level political/trade headlines.
 4. TelemetryProvider        — Pluggable satellite/AIS telemetry interface grounded in live shipment
                               GPS coordinates (`last_lat`, `last_lon`), port dwell, and feed silence.
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 import csv
 import json
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,19 +29,19 @@ from ..core import llm
 from ..core.config import get_settings
 from ..core.models import Document, Evidence, Shipment
 
-HTTP_TIMEOUT_SEC = 3.0
+HTTP_TIMEOUT_SEC = 5.0
 CACHE_TTL_SEC = 300.0  # 5-minute in-memory cache so reruns stay fast & polite
 
-POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com/markets"
+POLYMARKET_EVENTS_URL = "https://gamma-api.polymarket.com/events"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 
 
 @dataclass
 class ExternalSignal:
     """One verifiable external risk observation linked to a country, port, shipment, or tag."""
 
-    provider: str  # polymarket | weather | news | gdelt | telemetry
+    provider: str  # polymarket | weather | portal_news | gnews | telemetry
     category: str  # external_politics | weather | maritime_telemetry | trade_news
     title: str
     score_0_100: float  # normalized severity 0..100 for this single signal
@@ -50,7 +52,7 @@ class ExternalSignal:
     tags: list[str] = field(default_factory=list)
     source_url: str = ""
     quote: str = ""
-    live: bool = False  # True if fetched live over HTTP, False if portal/mock fallback
+    live: bool = False  # True if fetched live over HTTP (or real portal drop), False if offline snapshot
 
     def as_evidence(self) -> Evidence:
         return Evidence(
@@ -79,7 +81,7 @@ def clear_cache() -> None:
 
 
 def _cached_get_json(url: str, params: dict[str, Any] | None = None) -> Optional[Any]:
-    key = url + "?" + json.dumps(params or {}, sort_keys=True)
+    key = "json:" + url + "?" + json.dumps(params or {}, sort_keys=True)
     now = time.monotonic()
     hit = _CACHE.get(key)
     if hit and (now - hit[0]) < CACHE_TTL_SEC:
@@ -90,6 +92,22 @@ def _cached_get_json(url: str, params: dict[str, Any] | None = None) -> Optional
         data = resp.json()
         _CACHE[key] = (now, data)
         return data
+    except Exception:
+        return None
+
+
+def _cached_get_text(url: str, params: dict[str, Any] | None = None) -> Optional[str]:
+    key = "text:" + url + "?" + json.dumps(params or {}, sort_keys=True)
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit and (now - hit[0]) < CACHE_TTL_SEC:
+        return hit[1]
+    try:
+        resp = httpx.get(url, params=params, timeout=HTTP_TIMEOUT_SEC, follow_redirects=True)
+        resp.raise_for_status()
+        text = resp.text
+        _CACHE[key] = (now, text)
+        return text
     except Exception:
         return None
 
@@ -128,27 +146,36 @@ def load_ports_from_root(data_root: Optional[Path] = None) -> dict[str, dict[str
 
 
 # ---------------------------------------------------------------------------
-# 1. Polymarket Provider (External Politics & Geopolitical Odds)
+# 1. Polymarket Provider (Live Geopolitics & Economy Events via Gamma API)
 # ---------------------------------------------------------------------------
-# Keyword-to-country mapping for matching live Polymarket questions to supplier countries/routes
-_POLYMARKET_RULES: list[tuple[tuple[str, ...], list[str], list[str], str]] = [
-    (("china", "tariff", "trade", "export", "rare earth", "semiconductor", "chip"), ["CN"], ["tariffs", "export-control"],
-     "US/EU-China trade & export-control market odds"),
-    (("taiwan", "south china sea", "strait"), ["CN", "KR"], ["geopolitics", "maritime"],
-     "East Asia maritime / Taiwan Strait disruption odds"),
-    (("red sea", "houthi", "suez", "shipping"), ["CN", "KR", "IN"], ["red-sea", "maritime"],
-     "Red Sea / Suez sea-freight disruption odds"),
-    (("korea", "north korea"), ["KR"], ["geopolitics"],
-     "Korean Peninsula geopolitical risk odds"),
-    (("india", "tariff", "export"), ["IN"], ["tariffs", "geopolitics"],
-     "India trade / tariff risk odds"),
-    (("poland", "nato", "ukraine", "border", "eu tariff"), ["PL", "DE"], ["geopolitics", "eu-border"],
-     "Central/Eastern Europe border & freight corridor odds"),
-    (("us tariff", "united states", "port strike", "recession"), ["US"], ["tariffs", "us-logistics"],
-     "US tariff / port disruption odds"),
+_POLYMARKET_RULES: list[tuple[tuple[str, ...], list[str], list[str]]] = [
+    (("strait of hormuz", "hormuz", "red sea", "houthi", "suez", "blockade", "shipping"),
+     ["CN", "KR", "IN"], ["maritime", "chokepoint"]),
+    (("china", "taiwan", "rare earth", "export control", "south china sea"),
+     ["CN", "KR"], ["geopolitics", "export-control"]),
+    (("tariff", "section 232", "trade war", "trade deal", "us-china", "us x china"),
+     ["CN", "US"], ["tariffs", "trade"]),
+    (("nato", "russia", "ukraine", "poland", "eu border"),
+     ["PL", "DE"], ["geopolitics", "eu-corridor"]),
+    (("korea", "north korea"),
+     ["KR"], ["geopolitics"]),
+    (("india",),
+     ["IN"], ["geopolitics", "trade"]),
+    (("iran", "ceasefire"),
+     ["CN", "KR", "IN"], ["maritime", "middle-east"]),
 ]
 
-# Deterministic offline fallback snapshots (used when MOCK_MODE=true or offline)
+# Relief-phrased markets: a LOW "Yes" probability means HIGH ongoing risk (risk_prob = 1 - yes_prob)
+_RELIEF_PHRASES = (
+    "returns to normal", "return to normal", "end of iranian blockade", "end of blockade",
+    "end of the blockade", "end of war", "end of sanctions", "ceasefire", "resume shipping",
+    "be 0%", "tariff agreement", "trade agreement", "lift tariff", "lift sanctions",
+)
+
+# Skip domestic election/candidate markets that aren't supply-chain disruptions
+_SKIP_PHRASES = ("election", "prime minister", "president", "win the most", "governor", "mayor", "parliament")
+
+# Deterministic offline fallback snapshots (used when MOCK_MODE=true or when offline)
 _MOCK_POLYMARKET_MARKETS: list[dict[str, Any]] = [
     {
         "slug": "china-tightens-rare-earth-or-tech-export-controls-q4",
@@ -226,46 +253,74 @@ class PolymarketProvider:
         return self._mock_signals(countries)
 
     def _fetch_live(self, countries: set[str]) -> list[ExternalSignal]:
-        data = _cached_get_json(
-            POLYMARKET_GAMMA_URL,
-            {"active": "true", "closed": "false", "limit": 80, "order": "volume24hr", "ascending": "false"},
-        )
-        if not isinstance(data, list):
-            return []
         signals: list[ExternalSignal] = []
         seen_slugs: set[str] = set()
-        for m in data:
-            if not isinstance(m, dict):
+        for tag in ("geopolitics", "economy"):
+            events_data = _cached_get_json(
+                POLYMARKET_EVENTS_URL,
+                {
+                    "active": "true",
+                    "closed": "false",
+                    "tag_slug": tag,
+                    "limit": 20,
+                    "order": "volume24hr",
+                    "ascending": "false",
+                },
+            )
+            if not isinstance(events_data, list):
                 continue
-            question = str(m.get("question") or "").strip()
-            slug = str(m.get("slug") or m.get("id") or "")
-            if not question or slug in seen_slugs:
-                continue
-            q_low = question.lower()
-            prob = _extract_yes_prob(m)
-            if prob is None or prob < 0.15:
-                continue
-            for keywords, rule_countries, tags, _desc in _POLYMARKET_RULES:
-                hit_countries = [c for c in rule_countries if not countries or c in countries]
-                if not hit_countries:
+            for ev in events_data:
+                if not isinstance(ev, dict):
                     continue
-                if any(kw in q_low for kw in keywords):
-                    seen_slugs.add(slug)
-                    signals.append(ExternalSignal(
-                        provider=self.name,
-                        category="external_politics",
-                        title=question,
-                        score_0_100=round(prob * 100.0, 1),
-                        summary=f"Polymarket odds {prob * 100:.0f}%: {question}",
-                        countries=hit_countries,
-                        tags=list(tags),
-                        source_url=f"https://polymarket.com/event/{slug}" if slug else POLYMARKET_GAMMA_URL,
-                        quote=f"Yes={prob * 100:.0f}% (live Polymarket Gamma API)",
-                        live=True,
-                    ))
+                slug = str(ev.get("slug") or ev.get("id") or "")
+                if not slug or slug in seen_slugs:
+                    continue
+                markets = [m for m in (ev.get("markets") or []) if isinstance(m, dict) and not m.get("closed")]
+                if not markets:
+                    # Support flat market objects as well (e.g. unit tests)
+                    if ev.get("question"):
+                        markets = [ev]
+                    else:
+                        continue
+                mkt = markets[0]
+                question = str(mkt.get("question") or ev.get("title") or "").strip()
+                if not question:
+                    continue
+                yes_prob = _extract_yes_prob(mkt)
+                if yes_prob is None:
+                    continue
+                q_low = question.lower()
+                if any(sk in q_low for sk in _SKIP_PHRASES):
+                    continue
+                is_relief = any(ph in q_low for ph in _RELIEF_PHRASES)
+                risk_prob = (1.0 - yes_prob) if is_relief else yes_prob
+                if risk_prob < 0.10:
+                    continue
+                for keywords, rule_countries, tags in _POLYMARKET_RULES:
+                    hit_countries = [c for c in rule_countries if not countries or c in countries]
+                    if not hit_countries:
+                        continue
+                    if any(kw in q_low for kw in keywords):
+                        seen_slugs.add(slug)
+                        if is_relief:
+                            summary = f"Polymarket {risk_prob * 100:.0f}% disruption odds (Yes={yes_prob * 100:.0f}%): {question}"
+                        else:
+                            summary = f"Polymarket odds {risk_prob * 100:.0f}%: {question}"
+                        signals.append(ExternalSignal(
+                            provider=self.name,
+                            category="external_politics",
+                            title=question,
+                            score_0_100=round(risk_prob * 100.0, 1),
+                            summary=summary,
+                            countries=hit_countries,
+                            tags=list(tags),
+                            source_url=f"https://polymarket.com/event/{slug}",
+                            quote=f"Yes={yes_prob * 100:.1f}%, risk_implied={risk_prob * 100:.1f}% (live Polymarket Gamma API)",
+                            live=True,
+                        ))
+                        break
+                if len(signals) >= 12:
                     break
-            if len(signals) >= 12:
-                break
         return signals
 
     def _mock_signals(self, countries: set[str]) -> list[ExternalSignal]:
@@ -293,11 +348,9 @@ class PolymarketProvider:
 # ---------------------------------------------------------------------------
 # 2. Open-Meteo Weather Provider (Exact Port & Shipment Coordinates)
 # ---------------------------------------------------------------------------
-# Severe WMO weather codes: 65 heavy rain, 75 heavy snow, 82 violent showers, 95-99 thunderstorm/hail
 _SEVERE_WMO = {65, 67, 75, 82, 86, 95, 96, 99}
 _MODERATE_WMO = {55, 63, 73, 81, 85}
 
-# Deterministic offline fallback weather for key ports (used when MOCK_MODE=true or offline)
 _MOCK_PORT_WEATHER: dict[str, dict[str, Any]] = {
     "DEHAM": {"wind_kmh": 48.0, "gust_kmh": 66.0, "precip_mm": 6.4, "wmo": 63,
               "desc": "North Sea autumn squalls & 66 km/h gusts near Hamburg container terminals"},
@@ -322,10 +375,14 @@ def _weather_severity(wind_kmh: float, gust_kmh: float, precip_mm: float, wmo: i
         score += 32.0
     elif gust_kmh >= 40 or wind_kmh >= 28:
         score += 15.0
+    elif gust_kmh >= 20 or wind_kmh >= 15:
+        score += 6.0
     if precip_mm >= 15:
         score += 25.0
     elif precip_mm >= 5:
         score += 12.0
+    elif precip_mm >= 1:
+        score += 5.0
     if wmo in _SEVERE_WMO:
         score += 30.0
     elif wmo in _MODERATE_WMO:
@@ -339,7 +396,6 @@ class OpenMeteoWeatherProvider:
     def fetch(self, *, countries: set[str], ports: dict[str, dict[str, Any]],
               shipments: list[Shipment], documents: list[Document],
               reference_now: datetime) -> list[ExternalSignal]:
-        # Target only ports actually referenced by active shipments or supplier countries
         active_ports: dict[str, dict[str, Any]] = {}
         for sh in shipments:
             for code in (sh.origin, sh.destination):
@@ -350,13 +406,14 @@ class OpenMeteoWeatherProvider:
             active_ports = {k: v for k, v in ports.items() if not countries or v["country"] in countries}
 
         if not llm.is_mock() and active_ports:
-            live_signals = self._fetch_live(active_ports)
-            if live_signals:
+            live_ok, live_signals = self._fetch_live(active_ports)
+            if live_ok:
                 return live_signals
         return self._mock_signals(active_ports, countries)
 
-    def _fetch_live(self, active_ports: dict[str, dict[str, Any]]) -> list[ExternalSignal]:
+    def _fetch_live(self, active_ports: dict[str, dict[str, Any]]) -> tuple[bool, list[ExternalSignal]]:
         signals: list[ExternalSignal] = []
+        any_http_ok = False
         for code, info in list(active_ports.items())[:8]:
             params = {
                 "latitude": info["lat"],
@@ -367,17 +424,17 @@ class OpenMeteoWeatherProvider:
             cur = (data or {}).get("current") if isinstance(data, dict) else None
             if not isinstance(cur, dict):
                 continue
+            any_http_ok = True
             wind = float(cur.get("wind_speed_10m") or 0)
             gust = float(cur.get("wind_gusts_10m") or 0)
             precip = float(cur.get("precipitation") or 0)
             wmo = int(cur.get("weather_code") or 0)
             sev = _weather_severity(wind, gust, precip, wmo)
-            if sev < 20.0:
-                continue  # Ignore calm/clear weather so reasons stay high-signal
+            status = "Adverse weather" if sev >= 25.0 else "Live conditions"
             signals.append(ExternalSignal(
                 provider=self.name,
                 category="weather",
-                title=f"Adverse weather at {info['name']} ({code})",
+                title=f"{status} at {info['name']} ({code})",
                 score_0_100=sev,
                 summary=f"{info['name']} ({code}): wind {wind:.0f} km/h (gusts {gust:.0f} km/h), precip {precip:.1f} mm",
                 countries=[info["country"]] if info.get("country") else [],
@@ -387,7 +444,7 @@ class OpenMeteoWeatherProvider:
                 quote=f"wind={wind}km/h, gusts={gust}km/h, precip={precip}mm, WMO={wmo} (live Open-Meteo)",
                 live=True,
             ))
-        return signals
+        return any_http_ok, signals
 
     def _mock_signals(self, active_ports: dict[str, dict[str, Any]], countries: set[str]) -> list[ExternalSignal]:
         signals: list[ExternalSignal] = []
@@ -419,7 +476,7 @@ class OpenMeteoWeatherProvider:
 
 
 # ---------------------------------------------------------------------------
-# 3. Political & Trade News Provider (Portal news/*.json + Live GDELT API)
+# 3. Political & Trade News Provider (Portal news/*.json + Live Google News RSS)
 # ---------------------------------------------------------------------------
 _COUNTRY_NAMES = {
     "CN": "China",
@@ -442,7 +499,7 @@ class PoliticalNewsProvider:
               reference_now: datetime) -> list[ExternalSignal]:
         signals: list[ExternalSignal] = []
 
-        # 3a. Portal news drops (always processed first — authoritative for the challenge!)
+        # 3a. Portal news drops (authoritative challenge data)
         for doc in documents:
             if doc.kind != "news":
                 continue
@@ -467,46 +524,53 @@ class PoliticalNewsProvider:
                 tags=tags,
                 source_url=doc.source or doc.path,
                 quote=summary[:180],
-                live=True,  # real data from portal drop
+                live=True,
             ))
 
-        # 3b. Live GDELT geopolitical/trade headlines (only when live mode is active)
+        # 3b. Live Google News RSS geopolitical/trade headlines (zero API key, fast XML)
         if not llm.is_mock() and countries:
-            signals.extend(self._fetch_gdelt(countries))
+            signals.extend(self._fetch_google_news(countries))
 
         return signals
 
-    def _fetch_gdelt(self, countries: set[str]) -> list[ExternalSignal]:
+    def _fetch_google_news(self, countries: set[str]) -> list[ExternalSignal]:
         signals: list[ExternalSignal] = []
         for code in sorted(countries):
             cname = _COUNTRY_NAMES.get(code)
             if not cname:
                 continue
-            query = f'"{cname}" (tariff OR "export control" OR "port strike" OR sanctions OR "supply chain")'
-            data = _cached_get_json(
-                GDELT_DOC_URL,
-                {"query": query, "mode": "ArtList", "maxrecords": 3, "format": "json", "timespan": "3d"},
+            query = f'"{cname}" (tariffs OR "export controls" OR "port strike" OR sanctions OR "supply chain")'
+            xml_text = _cached_get_text(
+                GOOGLE_NEWS_RSS_URL,
+                {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
             )
-            articles = (data or {}).get("articles") if isinstance(data, dict) else None
-            if not isinstance(articles, list) or not articles:
+            if not xml_text:
                 continue
-            art = articles[0]
-            title = str(art.get("title") or "").strip()
-            url = str(art.get("url") or GDELT_DOC_URL)
+            try:
+                root = ET.fromstring(xml_text)
+            except ET.ParseError:
+                continue
+            items = root.findall(".//item")
+            if not items:
+                continue
+            first = items[0]
+            title = (first.findtext("title") or "").strip()
+            link = (first.findtext("link") or GOOGLE_NEWS_RSS_URL).strip()
+            pub = (first.findtext("pubDate") or "").strip()
             if not title:
                 continue
             t_low = title.lower()
-            sev = 65.0 if any(w in t_low for w in _HIGH_SEVERITY_NEWS_WORDS) else 40.0
+            sev = 65.0 if any(w in t_low for w in _HIGH_SEVERITY_NEWS_WORDS) else 42.0
             signals.append(ExternalSignal(
-                provider="gdelt",
+                provider="gnews",
                 category="external_politics",
                 title=title,
                 score_0_100=sev,
-                summary=f"GDELT political/trade news ({code}): {title}",
+                summary=f"Live news ({code}): {title}",
                 countries=[code],
-                tags=["gdelt", "politics"],
-                source_url=url,
-                quote=f"{art.get('domain', 'GDELT')}: {title[:160]}",
+                tags=["gnews", "politics"],
+                source_url=link,
+                quote=f"{title[:140]} ({pub})" if pub else title[:160],
                 live=True,
             ))
         return signals
@@ -522,11 +586,7 @@ def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 class TelemetryProvider:
-    """Grounded maritime/road telemetry provider using real shipment GPS fixes (`last_lat`, `last_lon`).
-
-    Acts as the pluggable satellite/AIS telemetry interface: analyzes vessel/truck transponder
-    freshness, port discharge dwell (`arrived_port`), and sea-route chokepoint transit (`via=SGSIN`).
-    """
+    """Grounded maritime/road telemetry provider using real shipment GPS fixes (`last_lat`, `last_lon`)."""
 
     name = "telemetry"
 

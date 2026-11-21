@@ -1,0 +1,15 @@
+# Line endings: store text files with LF so Mac and Windows teammates don't produce whole-file diffs.
+* text=auto eol=lf
+
+# Portal data mirror must stay byte-identical to what the Soony portal serves (SHA-256 checks, replays).
+challenge/start-hack-data/** -text
+
+# Binary files: never touch.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.xlsx binary
+*.docx binary
+*.zip binary
+*.db binary

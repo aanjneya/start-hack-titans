@@ -211,7 +211,9 @@ def options_for(issue, plan, forecast, row):
                 if choices[recommended]["description"] == "information request" or better:
                     recommended = len(choices) - 1
                     decide_by = min(expiry, useful_until(plan, row, gain))
-    suppliers = {c["supplier_id"] for c in inbound}
+    # An offer is tied to a supplier and material, independently of any in-transit shipment.
+    suppliers = {p.supplier_id for p in all_rows(m.SupplierPartMap) if p.component_id == part}
+    suppliers.update(c["supplier_id"] for c in inbound)
     if issue.supplier_id:
         suppliers.add(issue.supplier_id)
     for offer in docs:
@@ -272,5 +274,16 @@ def options_for(issue, plan, forecast, row):
             add(a["label"], kind, a.get("cost_eur"), None, "Awaiting evidence for quantity, arrival, and release.",
                 actions=[action] if action else [], value=0 if action else a.get("cost_eur"),
                 available=bool(action), air="air" in a["label"].lower() and not action)
+    if recommended == 0 and forecast.shortfall is not None and forecast.shortfall > 0:
+        blocker = forecast.limiting_part
+        target = blocker or f"{row.edition} packing capacity"
+        review = {"type": "human_review", "part": blocker, "product_id": pid,
+                  "copies_at_risk": forecast.shortfall}
+        add(f"Review recovery options for {target}", "human review", 0, 0,
+            f"Ask the buyer to verify {target} and obtain a feasible recovery plan before the deadline. "
+            "The forecast stays unchanged until supporting evidence arrives.",
+            actions=[review], value=0, proof=forecast.details["evidence"])
+        recommended = len(choices) - 1
+        choices[recommended]["needs_approval"] = True
     due = parse_datetime((issue.impact or {}).get("due_by"))
     return choices, recommended, min(decide_by, due) if due else decide_by

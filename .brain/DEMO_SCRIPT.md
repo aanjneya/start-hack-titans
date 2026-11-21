@@ -7,9 +7,11 @@
 - **Opening visual**: _TBD_
 
 ## 2. Live Demo Flow (0:30 – 2:15)
-1. Replay the revision drop. Open the Standard sleeve Finding and show the blocked PackRight lot alongside the two Karton rev C lots.
+1. Start the offline sleeve demo from the repository root on `main` with `backend/.venv/bin/python -m backend.planner_demo`. It replays through the 17:23 drop in an isolated database. Open the Standard sleeve Finding and show the blocked PackRight lot alongside the two Karton rev C lots.
 2. Compare the €1,215 fresh print (zero extra copies by Sunday) with confirming the existing delivery. Approve the information request and open the simulated Chaser outbox.
-3. Replay the labeled site release and supplier reply. Show the accepted 20,000 sleeves, unchanged Standard total, and game-card constraint. The decision avoids a rush charge with no on-time benefit. Offline command on `jivi`: `backend/.venv/bin/python -m backend.planner_demo`.
+3. Replay the labeled site release and supplier reply. Show the accepted 20,000 sleeves, unchanged Standard total, and game-card constraint. The decision avoids a rush charge with no on-time benefit.
+
+**If a judge asks what changed by evening**, show the 21:38 receipt for SHP-2026-04313. The old sleeve request is outdated. The forecast projects 34,800 Standard copies short by Sunday. The card recommends reviewing game-card availability (CMP-GAM-001). Approving it opens one internal buyer review.
 
 ## 3. Backup Plan
 - **Layer 1 (Primary)**: Live deployed cloud URL from `main` (no single-laptop/HDMI failure point).

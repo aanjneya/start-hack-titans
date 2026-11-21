@@ -33,6 +33,11 @@ def already_requested(s, actions):
     """A newer version of a card may still describe an already-authorized physical action."""
     if not actions:
         return False
+    if actions[0].get("type") == "human_review":
+        review = actions[0]
+        return s.exec(select(Issue.id).where(Issue.type == "recovery_review", Issue.raised_by == "planner",
+                      Issue.product_id == review["product_id"], Issue.part_id == review["part"],
+                      Issue.status != "resolved")).first() is not None
     cards = s.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
                    DecisionCard.status.in_(["approved", "executed"]))).all()
     return any(c.chosen_option is not None and c.options[c.chosen_option].get("actions") == actions for c in cards)

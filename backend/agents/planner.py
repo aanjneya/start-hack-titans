@@ -28,9 +28,22 @@ class LaunchPlanner(Agent):
         super().__init__(bus)
         self._refreshed = {}
         # Restore approvals committed immediately before a process interruption.
+        outdated_baseline = False
         for card in all_rows(DecisionCard):
-            if card.created_by == self.name and card.status == "approved":
+            if card.created_by != self.name:
+                continue
+            if card.status == "proposed" and card.recommended == 0 and card.options:
+                baseline = card.options[0]
+                if baseline.get("description") == "baseline" and (baseline.get("remaining_shortfall") or 0) > 0:
+                    outdated_baseline = True
+            if card.status == "approved":
                 self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": card.chosen_option})
+
+        # Existing installations may already have a stale recommendation without another data drop.
+        if outdated_baseline:
+            plan = load_plan()
+            if plan:
+                self._refresh(plan, simulate(plan))
 
     def on_truth_updated(self, event: Event) -> None:
         plan = load_plan()
@@ -91,6 +104,10 @@ class LaunchPlanner(Agent):
                                          evidence=proof + inbound.get("evidence", []) or plan.evidence)
                 active.add(issue.id)
         for issue in current:
+            if issue.raised_by == self.name and issue.type == "recovery_review" and issue.status != "resolved":
+                current_forecast = forecasts.get(issue.product_id)
+                if current_forecast and current_forecast.shortfall == 0:
+                    self.resolve_issue(issue.id, "Current evidence covers the edition's outstanding demand.")
             if issue.raised_by == self.name and issue.type == "forecast_exposure" and issue.id not in active:
                 self.resolve_issue(issue.id, "The current projection supersedes this exposure.")
 
@@ -199,6 +216,22 @@ class LaunchPlanner(Agent):
                 s.commit()
                 return
             exists = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).first()
+        review = next((a for a in selected["actions"] if a["type"] == "human_review"), None)
+        if review:
+            self.raise_issue(type="recovery_review", key=f"{review['product_id']}/{review['part']}",
+                             kind=IssueKind.HUMAN_CHECK, severity=4, summary=selected["label"][:160],
+                             product_id=review["product_id"], part_id=review["part"],
+                             reason=f"{card.approver}: {selected['risk_note']}",
+                             impact={"product_id": review["product_id"], "copies_at_risk": review["copies_at_risk"],
+                                     "due_by": card.decide_by.isoformat() if card.decide_by else None},
+                             evidence=[{"path": f"decisions/{card.id}", "locator": f"approved option {card.chosen_option}"},
+                                       *selected["evidence"]])
+            with session() as s:
+                dispatched = s.get(DecisionCard, card.id)
+                dispatched.status = "executed"
+                s.add(dispatched)
+                s.commit()
+            return
         if not exists:
             for action in selected["actions"]:
                 if action["type"] == "email":

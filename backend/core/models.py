@@ -1,9 +1,11 @@
 """Truth-store tables (PLAN.md §3b, Tim's schema) and shared result types.
 
-Rules every agent follows:
-- Never overwrite: every row is a fact with `source` (file path) and `ingested_at`.
-  New data = new rows. "Current truth" is derived (latest/precedence), see store.py.
-- Extracted values (from PDFs, LLM) also carry `confidence` (0..1).
+Rules every agent follows (updated Sat 19:30, team-approved):
+- Rows are the CURRENT truth and can be updated, but ONLY via `store.update_row(...)`, which writes
+  every change (old -> new, source, agent, reason) to the `field_changes` log. Nothing is lost silently.
+- One writer for supply-chain data: the Ingest agent (incl. supplier replies). Other agents write
+  issues, conflicts, decisions, forecasts, risk scores, outbox/inbox.
+- Every row keeps `source` (where it first came from), `ingested_at`, `updated_at`; extracted values carry `confidence`.
 - Owners may ADD columns/tables for their agent; announce changes in .brain/DECISIONS.md.
 """
 from __future__ import annotations
@@ -52,6 +54,7 @@ class IssueKind:
 class Provenance(SQLModel):
     source: str = Field(default="", index=True)  # file path relative to data root, or agent name
     ingested_at: datetime = Field(default_factory=utcnow)
+    updated_at: Optional[datetime] = None  # set by store.update_row
     confidence: Optional[float] = None
 
 
@@ -388,6 +391,45 @@ class RiskScore(SQLModel, table=True):
     rating: str = ""  # AAA..CCC
     reasons: list = _json(list)  # [{"text": ..., "evidence": [...]}]
     computed_at: datetime = Field(default_factory=utcnow)
+
+
+class FieldChange(SQLModel, table=True):
+    """Change log: every update of a truth-store value (filled missing field, correction, supplier reply)."""
+
+    __tablename__ = "field_changes"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utcnow, index=True)
+    run_id: str = Field(default="", index=True)
+    table_name: str = Field(index=True)
+    row_id: int = Field(index=True)
+    entity_key: str = Field(default="", index=True)  # e.g. "PO 4500318745/1", "SHP-2026-04276"
+    field: str = ""
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    change_type: str = "fill"  # fill (was empty) | overwrite (correction)
+    source: str = ""  # file/email the new value came from
+    agent: str = ""
+    reason: str = ""
+    confidence: Optional[float] = None
+    issue_id: Optional[int] = None  # issue this change answers, if any
+
+
+class InboxMessage(SQLModel, table=True):
+    """Supplier/carrier replies received by the Chaser. Ingest turns them into data updates."""
+
+    __tablename__ = "inbox"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    supplier_id: str = Field(default="", index=True)
+    outbox_id: Optional[int] = None
+    issue_id: Optional[int] = None
+    from_email: str = ""
+    subject: str = ""
+    body: str = ""
+    body_en: str = ""
+    language: str = ""
+    received_at: datetime = Field(default_factory=utcnow)
+    processed: bool = Field(default=False, index=True)  # set by Ingest once applied
+    result: dict = _json(dict)  # what Ingest did: {"changes": n, "conflicts": n, "note": ...}
 
 
 class OutboxMessage(SQLModel, table=True):

@@ -17,7 +17,12 @@ class ReconcilerGate(Agent):
     subscriptions = {events.TRUTH_UPDATED: "on_truth_updated", events.RISK_UPDATED: "on_risk_updated"}
 
     def on_truth_updated(self, event: Event) -> None:
-        """TODO T3.1-T3.10: run all checks; use self.raise_issue(type=..., kind=IssueKind..., key=...)."""
+        """TODO T3.1-T3.11: run all checks; use self.raise_issue(type=..., kind=IssueKind..., key=...).
+
+        You never write supply-chain data yourself (Ingest does). After a supplier reply,
+        event.payload["changes"] / ["issue_ids"] say exactly which rows/fields changed: re-check those
+        and self.resolve_issue(...) when the answer fixed it (raise_issue again reopens it if not).
+        """
         self.log("todo", "stub: checks not implemented yet")
 
     def on_risk_updated(self, event: Event) -> None:

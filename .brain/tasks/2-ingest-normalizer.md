@@ -24,8 +24,10 @@ There are two order files: the new one uses commas and English column names; the
 - [ ] **T2.6** Read the news file (`soony/news/…json`) and memos (`soony/context/*.docx`).
 - [ ] **T2.7** Map supplier part and order numbers to our `CMP-…` / `4500…` numbers, with a confidence score.
 - [ ] **T2.8** Let AI match column names by meaning, so renamed or new columns still work.
-- [ ] **T2.9** Store a source and timestamp on every row; never overwrite.
+- [ ] **T2.9** Store a source and timestamp on every row; change existing values only via `self.update_row(...)` (logged in `field_changes`).
 - [ ] **T2.10** Live data: replaced files add new facts (old ones kept as history); unknown new files, folders or formats are still stored and flagged, never crash the run.
+
+- [ ] **T2.19** You are the **only writer** of supply-chain data: apply supplier replies from the `inbox` (`on_reply`): extract the answer (quote + confidence), `update_row` the right row (fills empty fields, records a conflict if a different value exists), mark the message processed, then `emit_truth_updated` so the Reconciler re-checks.
 
 ## Techniques from research (how Rossum, Tamr, Informatica, project44 do it: `.brain/Suggestions/ingest-research-data-unification.md`)
 - [ ] **T2.11** Learn each file format once: save the column mapping under a fingerprint of the file's headers; Claude only maps new header sets (headers + 5 sample rows + our tables + SAP glossary), known ones are read by plain code.

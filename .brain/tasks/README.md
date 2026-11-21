@@ -8,10 +8,10 @@
 
 | # | Agent | What it does in one line | Tasks | Owner |
 |---|---|---|---|---|
-| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 8 | ✅ @daksh (done) |
+| 0 | [Shared backend](0-shared-backend.md) | The common base: database, message passing between agents, the action log, the AI connection | 9 | ✅ @daksh (done) |
 | 1 | [Watcher](1-watcher.md) | Notices every new or changed file on the Soony portal (already running every 15 min) | 5 | @daksh |
-| 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 18 | @daksh |
-| 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 10 | @aanjneya |
+| 2 | [Ingest & Normalizer](2-ingest-normalizer.md) | Reads every messy file (CSV, Excel, PDF, Polish/Chinese) and turns it into one clean database | 19 | @daksh |
+| 3 | [Reconciler & Gate](3-reconciler-gate.md) | Spots contradictions, missing data and traps, then decides who must handle each problem | 11 | @aanjneya |
 | 4 | [Chaser](4-chaser.md) | Politely emails suppliers and carriers for missing answers, in their language, and reads the replies | 6 | @tim |
 | 5 | [Launch Planner & Decision Copilot](5-launch-planner.md) | Works out whether we pack everything by Sun 20:00 and proposes fixes with cost vs copies saved | 10 | @jivi |
 | 6 | [Risk Rater](6-risk-rater.md) | Gives every part and supplier a risk grade (like Moody's) with the top 3 reasons | 6 | @aanjneya |
@@ -42,7 +42,7 @@ Risk Rater feeds Reconciler + Planner.  Every step is written to the agent log (
 ## ⚠️ The data keeps changing: build for that
 The portal data changes all weekend (new files, replaced files, renamed columns, new formats like supplier `profile.json`). We are **not training a model on today's data**: the agents read whatever data is there *each time they run*. So:
 - A new drop must flow through the whole loop **automatically** (Watcher → Ingest → Reconciler → Planner) with **no code change**.
-- New or replaced files are added as new facts with a timestamp; old values stay (history), and "current truth" is always recomputed.
+- New data adds rows; existing values can be **updated** (filled or corrected) only through `update_row`, which keeps every old value in the change log (`field_changes`). Only Ingest writes data; after any change the Reconciler re-checks automatically.
 - Unknown files, folders or columns are still stored and flagged for a human, never crash the run.
 - Every agent is tested by replaying the real drops in order (14:15 → 16:08 → 17:23 → whatever comes next). `.brain/DATA_CHANGES.md` lists each drop.
 Tasks for this: **T0.8, T1.5, T2.10, T3.10, T5.9** below in the agent files.

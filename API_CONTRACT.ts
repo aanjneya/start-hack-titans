@@ -146,6 +146,49 @@ export interface CustomerSetup {
   approval_matrix: { below_eur: number | null; approvers: string[] }[];
 }
 
+export interface FieldChange {
+  id: number;
+  ts: string;
+  run_id: string;
+  table_name: string;
+  row_id: number;
+  entity_key: string;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  change_type: 'fill' | 'overwrite';
+  source: string; // file or email the new value came from
+  agent: string;
+  reason: string;
+  confidence: number | null;
+  issue_id: number | null;
+}
+
+export interface InboxMessage {
+  id: number;
+  supplier_id: string;
+  outbox_id: number | null;
+  issue_id: number | null;
+  from_email: string;
+  subject: string;
+  body: string;
+  body_en: string;
+  language: string;
+  received_at: string;
+  processed: boolean;
+  result: Record<string, unknown>;
+}
+
+export interface ReplyRequest {
+  supplier_id: string;
+  body: string;
+  issue_id?: number;
+  outbox_id?: number;
+  from_email?: string;
+  subject?: string;
+  language?: string;
+}
+
 export interface RunResult {
   run_id: string;
   drop_id: number;
@@ -190,4 +233,6 @@ export const API_ROUTES = {
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)
+  CHANGES: '/api/changes', // GET ?table= -> FieldChange[] (change log of the source of truth)
+  INBOX: '/api/inbox', // GET -> InboxMessage[]; POST ReplyRequest -> feeds a supplier reply into the loop
 } as const;

@@ -26,5 +26,13 @@ class IngestNormalizer(Agent):
         self.emit(events.TRUTH_UPDATED, {"files": files, "data_root": p.get("data_root"), "tables": []})
 
     def on_reply(self, event: Event) -> None:
-        """TODO T2.x: store a supplier reply (from the Chaser) as a Document + extracted facts."""
-        self.log("todo", "stub: supplier reply not ingested yet")
+        """TODO T2.19: apply a supplier reply (you are the ONLY writer of supply-chain data).
+
+        1. Load InboxMessage(event.payload["inbox_id"]) (+ the issue it answers, if any).
+        2. Extract the answer with llm.extract(...) (quote + confidence), find the row(s) it is about.
+        3. self.update_row(Model, row_id, {field: value}, source=f"inbox/{msg.id}", issue_id=..., reason=...)
+           -> fills empty fields, records a conflict if a different value is already there.
+        4. Mark the inbox message processed, then self.emit_truth_updated([results], issue_ids=[...])
+           (it only emits if something changed, so the Reconciler re-checks exactly once).
+        """
+        self.log("todo", f"stub: reply {event.payload.get('inbox_id')} not applied yet")

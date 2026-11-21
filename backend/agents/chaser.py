@@ -22,5 +22,10 @@ class Chaser(Agent):
         # TODO T4.1-T4.6: draft a rate-limited email in the supplier's language into the outbox.
         self.log("todo", f"stub: would chase for issue {event.payload.get('issue_id')}")
 
+    # When a reply arrives (real mailbox or the mock supplier simulator), do NOT write data yourself:
+    #   msg = system.store_reply(supplier_id=..., body=..., issue_id=..., outbox_id=...)
+    #   self.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": ..., "issue_id": ...})
+    # Ingest applies it to the source of truth and the Reconciler re-checks. (T4.5)
+
     def on_email_requested(self, event: Event) -> None:
         self.log("todo", "stub: email requested by planner not sent yet")

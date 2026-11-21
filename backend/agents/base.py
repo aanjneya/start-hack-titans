@@ -9,7 +9,8 @@ from sqlmodel import select
 from ..core import events, trace
 from ..core.coordinator import Coordinator, Event
 from ..core.models import Evidence, Issue, utcnow
-from ..core.store import session
+from ..core import store
+from ..core.store import UpdateResult, session
 
 
 class Agent:
@@ -78,6 +79,38 @@ class Agent:
             s.add(issue)
             s.commit()
         self.log("resolve_issue", reason, data={"issue_id": issue_id})
+
+
+    # -- updating the truth (only the Ingest agent writes supply-chain data) --------------
+    def update_row(self, model, row_id: int, values: dict, *, source: str, reason: str = "",
+                   confidence: float | None = None, on_conflict: str = "record",
+                   issue_id: int | None = None, entity_key: str = "") -> UpdateResult:
+        """Fill/correct fields of an existing row; every change goes to the change log + agent log."""
+        result = store.update_row(model, row_id, values, source=source, agent=self.name, reason=reason,
+                                  confidence=confidence, on_conflict=on_conflict, issue_id=issue_id,
+                                  entity_key=entity_key)
+        if result.changes or result.conflicts:
+            detail = ", ".join(f"{c.field}: {c.old_value!r} -> {c.new_value!r}" for c in result.changes)
+            if result.conflicts:
+                detail += f" | {len(result.conflicts)} conflict(s) recorded"
+            self.log("update_row", f"{result.table}#{row_id} {detail}", [{"path": source, "locator": reason}],
+                     data={"table": result.table, "row_id": row_id, "issue_id": issue_id,
+                           "changed": [c.field for c in result.changes],
+                           "conflicts": [c.id for c in result.conflicts]})
+        return result
+
+    def emit_truth_updated(self, results: Iterable[UpdateResult] = (), *, files: Iterable[str] = (),
+                           tables: Iterable[str] = (), data_root: str | None = None,
+                           issue_ids: Iterable[int] = ()) -> bool:
+        """Announce new/changed data. Does nothing if nothing changed (prevents endless loops)."""
+        changes = [r.as_payload() for r in results if r.changes or r.conflicts]
+        files, tables = list(files), list(tables)
+        if not (changes or files or tables):
+            self.log("no_change", "nothing new to announce")
+            return False
+        self.emit(events.TRUTH_UPDATED, {"changes": changes, "files": files, "tables": tables,
+                                         "data_root": data_root, "issue_ids": list(issue_ids)})
+        return True
 
 
 #: registry filled by @register; system.py builds one instance of each

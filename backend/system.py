@@ -92,3 +92,31 @@ def emit(event_name: str, payload: dict, source: str = "api") -> dict:
     b = bus()
     b.emit(event_name, payload, source=source)
     return {"run_id": run_id, "steps": b.run_until_idle()}
+
+
+def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, outbox_id: int | None = None,
+                from_email: str = "", subject: str = "", language: str = "", source: str = "chaser"):
+    """Save a supplier/carrier reply in the inbox (no event). Inside an agent, follow with
+    self.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": ..., "issue_id": ...})."""
+    from .core.models import InboxMessage
+
+    with session() as s:
+        msg = InboxMessage(supplier_id=supplier_id, body=body, issue_id=issue_id, outbox_id=outbox_id,
+                           from_email=from_email, subject=subject, language=language)
+        s.add(msg)
+        s.commit()
+        s.refresh(msg)
+    trace.log(source, "reply_received", f"{supplier_id}: {subject or body[:80]}",
+              data={"inbox_id": msg.id, "issue_id": issue_id})
+    return msg
+
+
+def receive_reply(*, source: str = "api", **fields) -> dict:
+    """Outside the agents (API, demo, tests): store the reply and run the loop
+    (inbox -> Ingest applies it -> truth.updated -> Reconciler re-checks)."""
+    run_id = trace.new_run_id()
+    msg = store_reply(source=source, **fields)
+    b = bus()
+    b.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": msg.supplier_id, "issue_id": msg.issue_id},
+           source=source)
+    return {"inbox_id": msg.id, "run_id": run_id, "steps": b.run_until_idle()}

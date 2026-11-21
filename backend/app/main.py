@@ -17,7 +17,8 @@ from .. import system
 from ..core import events, policy, trace
 from ..core.config import get_settings
 from ..core.models import (
-    Conflict, DecisionCard, DropRecord, Forecast, Issue, OutboxMessage, RiskScore, utcnow,
+    Conflict, DecisionCard, DropRecord, FieldChange, Forecast, InboxMessage, Issue, OutboxMessage, RiskScore,
+    utcnow,
 )
 from ..core.store import query, session
 
@@ -164,6 +165,34 @@ def risk() -> dict:
 @app.get("/api/outbox")
 def outbox() -> dict:
     return ok(_rows(OutboxMessage, order=OutboxMessage.id.desc()))
+
+
+@app.get("/api/changes")
+def changes(table: Optional[str] = None, limit: int = 500) -> dict:
+    """Change log: every filled/corrected value (old -> new, source, agent, reason)."""
+    where = FieldChange.table_name == table if table else None
+    return ok(_rows(FieldChange, order=FieldChange.id.desc(), where=where, limit=limit))
+
+
+@app.get("/api/inbox")
+def inbox() -> dict:
+    return ok(_rows(InboxMessage, order=InboxMessage.id.desc()))
+
+
+class ReplyRequest(BaseModel):
+    supplier_id: str
+    body: str
+    issue_id: Optional[int] = None
+    outbox_id: Optional[int] = None
+    from_email: str = ""
+    subject: str = ""
+    language: str = ""
+
+
+@app.post("/api/inbox")
+def post_reply(req: ReplyRequest) -> dict:
+    """Feed a supplier reply into the loop (demo / manual test): inbox -> Ingest -> Reconciler."""
+    return ok(system.receive_reply(**req.model_dump(), source="api"))
 
 
 @app.get("/api/setup")

@@ -1,7 +1,12 @@
-"""SQLite truth store: engine, sessions, views and small helpers shared by all agents."""
+"""SQLite truth store: engine, sessions, views and small helpers shared by all agents.
+
+New facts: add_all(). Changing existing values: update_row() (logs every change). Current values per key
+across several sources: latest_by().
+"""
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Iterable, Iterator, Sequence, TypeVar
 
 from sqlalchemy import text
@@ -93,7 +98,7 @@ def session() -> Iterator[Session]:
 
 
 def add_all(rows: Iterable[SQLModel]) -> list[SQLModel]:
-    """Append facts (never overwrite). Returns the stored rows with ids."""
+    """Insert new rows (new facts). To change existing rows use update_row(). Returns rows with ids."""
     rows = list(rows)
     with session() as s:
         s.add_all(rows)
@@ -128,3 +133,121 @@ def query(sql: str, **params) -> list[dict]:
     with get_engine().connect() as conn:
         result = conn.execute(text(sql), params)
         return [dict(r._mapping) for r in result]
+
+
+# ---------------------------------------------------------------------------
+# Updating the truth (team decision Sat 19:30): rows can change, every change is logged.
+# ---------------------------------------------------------------------------
+_EMPTY = (None, "")
+
+
+@dataclass
+class UpdateResult:
+    table: str
+    row_id: int
+    changes: list = field(default_factory=list)  # list[FieldChange]
+    conflicts: list = field(default_factory=list)  # list[Conflict]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changes)
+
+    def as_payload(self) -> dict:
+        """Shape used in truth.updated events: which row and which fields changed."""
+        return {"table": self.table, "row_id": self.row_id, "fields": [c.field for c in self.changes],
+                "conflicts": [c.id for c in self.conflicts]}
+
+
+def _as_text(value) -> str | None:
+    return None if value is None else str(value)
+
+
+def _coerce(model: type[SQLModel], field_name: str, value):
+    """'2026-11-22' -> date, '15000' -> int etc., using the model's type hints."""
+    from pydantic import TypeAdapter
+
+    info = model.model_fields.get(field_name)
+    if info is None:
+        raise ValueError(f"{model.__name__} has no field {field_name!r}")
+    if value in _EMPTY:
+        return value
+    return TypeAdapter(info.annotation).validate_python(value)
+
+
+def update_row(
+    model: type[T],
+    row_id: int,
+    values: dict,
+    *,
+    source: str,
+    agent: str,
+    reason: str = "",
+    confidence: float | None = None,
+    on_conflict: str = "record",
+    issue_id: int | None = None,
+    entity_key: str = "",
+) -> UpdateResult:
+    """Change fields of one truth-store row and log every change in `field_changes`.
+
+    - Empty field -> filled (change_type "fill").
+    - Field already has a different value:
+        on_conflict="record"    (default) keep the old value, add a `conflicts` row for the Reconciler
+        on_conflict="overwrite" replace it (change_type "overwrite"), e.g. a confirmed correction
+        on_conflict="skip"      leave it, log nothing
+    - Same value -> nothing happens (so re-processing the same reply never loops).
+    Returns UpdateResult; emit truth.updated only if result.changed (see Agent.update_row).
+    """
+    from .models import Conflict, FieldChange, utcnow
+    from .trace import current_run_id
+
+    if on_conflict not in {"record", "overwrite", "skip"}:
+        raise ValueError(f"on_conflict must be record|overwrite|skip, not {on_conflict!r}")
+    table = model.__tablename__
+    result = UpdateResult(table=table, row_id=row_id)
+    with session() as s:
+        row = s.get(model, row_id)
+        if row is None:
+            raise KeyError(f"{table} row {row_id} not found")
+        key = entity_key or str(row_id)
+        for field_name, raw in values.items():
+            new = _coerce(model, field_name, raw)
+            old = getattr(row, field_name)
+            if _as_text(old) == _as_text(new):
+                continue
+            if old in _EMPTY:
+                change_type = "fill"
+            elif on_conflict == "overwrite":
+                change_type = "overwrite"
+            elif on_conflict == "record":
+                result.conflicts.append(Conflict(
+                    entity=table, entity_id=key, field=field_name,
+                    value_a=_as_text(old) or "", source_a=getattr(row, "source", ""),
+                    value_b=_as_text(new) or "", source_b=source,
+                ))
+                continue
+            else:
+                continue
+            setattr(row, field_name, new)
+            result.changes.append(FieldChange(
+                run_id=current_run_id(), table_name=table, row_id=row_id, entity_key=key,
+                field=field_name, old_value=_as_text(old), new_value=_as_text(new),
+                change_type=change_type, source=source, agent=agent, reason=reason,
+                confidence=confidence, issue_id=issue_id,
+            ))
+        if result.changes and hasattr(row, "updated_at"):
+            row.updated_at = utcnow()
+        s.add(row)
+        s.add_all(result.changes + result.conflicts)
+        s.commit()
+        for obj in result.changes + result.conflicts:
+            s.refresh(obj)
+    return result
+
+
+def find_rows(model: type[T], **filters) -> Sequence[T]:
+    """Simple equality lookup, e.g. find_rows(OrderConfirmation, po_number="4500318745")."""
+    with session() as s:
+        stmt = select(model)
+        for name, value in filters.items():
+            stmt = stmt.where(getattr(model, name) == value)
+        return s.exec(stmt).all()

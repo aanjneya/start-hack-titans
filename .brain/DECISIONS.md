@@ -58,3 +58,8 @@
 - **Context**: Question whether to merge Watcher (1) and Ingest (2).
 - **Decision**: Keep them separate in code (Watcher has no AI and only detects changed files; Ingest reads/understands them; the replay feeds Ingest directly). Move Watcher ownership from jivi to daksh (he wrote the 15-min checker), so jivi focuses on the Launch Planner.
 - **Trade-offs**: daksh now owns 1 + 2 (the whole intake path); jivi owns 5.
+
+### [19:40] Source of truth is updatable; Ingest is the only data writer (by daksh, team OK)
+- **Context**: Append-only made "fill the missing field" awkward; unclear who writes a supplier's answer.
+- **Decision**: Rows are the current truth and can be updated only via `store.update_row` (every change → `field_changes`: old, new, source, agent, reason, issue). Only Ingest writes supply-chain data. Loop: Reconciler raises missing-info issue → Chaser emails → reply stored in `inbox` (`reply.received`) → Ingest fills the field (or records a conflict if a different value exists) → `truth.updated` with exact changed rows → Reconciler re-checks and resolves/reopens. `emit_truth_updated` skips empty changes, so no loops. Replaces Tim's "never overwrite" rule in PLAN §3b.
+- **Trade-offs**: Conflicting values are not overwritten by default (`on_conflict="record"`); a confirmed correction must say `on_conflict="overwrite"`.

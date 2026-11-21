@@ -20,7 +20,7 @@ Standard sleeve CMP-GAM-004 must now be rev C. Karton Nowak (Poland) has a machi
 - [ ] **T4.2** Anti-spam rule: max one open question per supplier, and a minimum gap between emails.
 - [ ] **T4.3** Preview mode: a human can see and approve the first email to each supplier (in the demo it can auto-send).
 - [ ] **T4.4** Demo supplier simulator: fake replies for offline demos (e.g. Karton Nowak: "yes, rev C, 15,000 pcs by Sun 08:00").
-- [ ] **T4.5** Read real replies and turn them into facts for the Ingest agent.
+- [ ] **T4.5** When a reply arrives (real mailbox or mock simulator), store it with `system.store_reply(...)` and emit `reply.received`. Don't write data yourself: Ingest applies it, then the Reconciler re-checks.
 - [ ] **T4.6** Escalate to a buyer if there's no reply within X hours.
 
 ## When it's done

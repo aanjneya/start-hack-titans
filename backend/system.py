@@ -54,7 +54,8 @@ def reset() -> None:
 
 
 def list_data_files(root: Path) -> list[str]:
-    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and not p.name.startswith("."))
+    # always forward slashes (also on Windows): every agent and the DB use portal-style paths "soony/erp/…"
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and not p.name.startswith("."))
 
 
 def process_drop(

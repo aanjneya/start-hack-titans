@@ -27,6 +27,16 @@ There are two order files: the new one uses commas and English column names; the
 - [ ] **T2.9** Store a source and timestamp on every row; never overwrite.
 - [ ] **T2.10** Live data: replaced files add new facts (old ones kept as history); unknown new files, folders or formats are still stored and flagged, never crash the run.
 
+## Techniques from research (how Rossum, Tamr, Informatica, project44 do it: `.brain/Suggestions/ingest-research-data-unification.md`)
+- [ ] **T2.11** Learn each file format once: save the column mapping under a fingerprint of the file's headers; Claude only maps new header sets (headers + 5 sample rows + our tables + SAP glossary), known ones are read by plain code.
+- [ ] **T2.12** Plain-code parsing after mapping: the saved mapping decides delimiter, decimal comma and date format; values that don't parse are rejected and flagged, never guessed.
+- [ ] **T2.13** Sort PDFs by type first (order confirmation / notice / contract / other), then extract a fixed set of fields per type.
+- [ ] **T2.14** Grounding: every value Claude pulls from a PDF comes with the exact quote and page; code checks the quote really is in the PDF, otherwise the value is dropped.
+- [ ] **T2.15** Confidence from checks: order exists, quantity × price ≈ total, dates make sense, quote found. Below the threshold → a "needs human check" issue instead of a silent value.
+- [ ] **T2.16** Match suppliers and parts: saved name list first; else strip legal suffixes ("Sp. z o.o.", "Co., Ltd."), take the 5 closest names, let Claude pick one or "none" with a reason; save confirmed matches so it learns.
+- [ ] **T2.17** When sources disagree, pick the current value by source trust → confidence → newest, and keep the disagreement visible (`conflicts` table).
+- [ ] **T2.18** One standard shipment status list: translate ERP, tracker and carrier wording (e.g. `arrived_port`, "in transit") into the same events (also helps the Reconciler).
+
 ## When it's done
 - One run on the real data fills every table, and every row shows its source file.
 - The old and new `products.csv` both load correctly.
@@ -34,7 +44,8 @@ There are two order files: the new one uses commas and English column names; the
 
 ---
 ### Technical notes (for Claude Code, refine later)
-- Tables: PLAN.md §3b. Data root: `challenge/start-hack-data/data/` (`soony/…`, `suppliers/…`). Reuse `office_text()` (xlsx/docx) from `monitor/drop_watch.py`; PDFs: `pypdf` text → `claude-sonnet-5-5` structured extraction (tool schema per document type); keep the original text for evidence.
+- Tables: PLAN.md §3b. Data root: `challenge/start-hack-data/data/` (`soony/…`, `suppliers/…`). Reuse `office_text()` (xlsx/docx) from `monitor/drop_watch.py`; PDFs: `pypdf` text (`core/parsing.pdf_text`) → `llm.extract(...)` with a Pydantic schema per document type, each field with `quote` + `page`; keep the original text in `documents`.
+- New small tables for T2.11/T2.16 (add to `core/models.py` in one tiny commit): `column_mappings(header_fingerprint, file_pattern, mapping JSON, created_by, confirmed)` and `aliases(kind supplier|part|po, alias, canonical_id, confidence, source, confirmed)`.
 - Legacy PO: `EBELN=po_number, EBELP=po_line, LIFNR=vendor no. (map via profile vendorNo), MATNR=material_id, WERKS=plant, MENGE=quantity, NETPR=unit_price (decimal comma), BEDAT=order_date, EINDT=requested_date, ZZCONF=promised_date, WEDAT=actual_delivery, ZZSTAT=status code`. Dates `MM/DD/YYYY`.
 - Shipments: split `po_numbers` and `material_ids` on `|` into link tables. Tracker xlsx uses supplier *names* and `", "`-separated POs.
 - Emit `truth.updated{tables, row_ids}`; unmappable → `issue.raised{kind: human_check}`.

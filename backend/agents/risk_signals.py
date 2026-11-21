@@ -140,7 +140,7 @@ def load_ports_from_root(data_root: Optional[Path] = None) -> dict[str, dict[str
                         "lat": lat,
                         "lon": lon,
                         "mode": (row.get("mode") or "").strip().lower(),
-                        "source": str(candidate.relative_to(root)),
+                        "source": candidate.relative_to(root).as_posix(),
                     }
             break
         except Exception:

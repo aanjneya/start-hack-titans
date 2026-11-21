@@ -82,3 +82,8 @@
 - **Context**: The live Chaser needs a mailbox, reply matching and an inbox poll; Jivi's planner hands off via `email.requested`.
 - **Decision** (additive only): `config.py` + `.env.example`: `MAIL_*`, `SMTP_*`, `IMAP_*`, `CHASER_SEND` (true on ONE instance only), `CHASER_MIN_GAP_MIN`, `CHASER_ESCALATE_H`, `CHASER_POLL_MIN`, `CHASER_MAX_STEPS`. `OutboxMessage` + `message_id`, `run_id`, status `escalated` (mirrored in `API_CONTRACT.ts`). `main.py`: `POST /api/chaser/poll` + optional poll timer. `requirements.txt`: `tzdata` (Windows). One mail per `decision_id`; approved decisions skip the open-question limit; in MOCK the Chaser marks mails `sent`, so it takes precedence over the planner's offline adapter.
 - **Trade-offs**: `test_planner.py` now counts decision mails only (`_decision_mails()`), because the live Chaser also mails `missing_info` questions. The Chaser's agent loop needs an Anthropic key; with OpenAI-only it uses the deterministic fallback.
+
+### [22:10] Claude stays the main AI provider; OpenAI only as fallback (team, recorded by daksh)
+- **Context**: The Anthropic org has no API credits yet; Daksh added an OpenAI provider and live-tested Ingest/OCR with it.
+- **Decision**: Keep the Anthropic API as the main provider (Tim's Chaser tool-use agent depends on it). `backend/core/llm.py` keeps both: `LLM_PROVIDER=auto` uses Claude when `ANTHROPIC_API_KEY` is set, otherwise OpenAI; one provider per backend instance.
+- **Trade-offs**: Until Claude credits exist, a live demo on OpenAI has OCR + document reading, but the Chaser falls back to its non-AI mode.

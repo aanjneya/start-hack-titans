@@ -207,7 +207,9 @@ class IngestNormalizer(Agent):
         if {"field", "new"} <= normed:
             self._apply_changeset(rel, headers, rows)
             return
-        mapping = map_columns(headers, rows, path=rel, agent=self.name, delimiter=delim)
+        title_match = re.search(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?", title or "")
+        mapping = map_columns(headers, rows, path=rel, agent=self.name, delimiter=delim,
+                              has_title_date=bool(title_match))
         if not mapping.target:
             self._store_document(rel, "", kind="table", extra={"headers": headers, "rows": rows[:500], "title": title})
             self._unmapped.append(rel)
@@ -228,12 +230,13 @@ class IngestNormalizer(Agent):
                     values["supplier_id"] = file_supplier
                 elif sup:
                     values["supplier_id"] = self.resolve_supplier(str(sup), rel) or str(sup)
-            if target.model is LaunchStatus and as_of:
-                values["as_of"] = as_of
+            if as_of and target.title_date_field and not values.get(target.title_date_field):
+                field_type = _base_type(target.model.model_fields[target.title_date_field].annotation)
+                values[target.title_date_field] = as_of.date() if field_type is date else as_of
             if target.model is Shipment and values.get("status"):
                 values["status"] = STATUS_MAP.get(str(values["status"]).lower().strip(), values["status"])
             key = tuple(values.get(k) for k in target.key)
-            if any(k in (None, "") for k in key):
+            if any(v in (None, "") for k, v in zip(target.key, key) if k in target.required):
                 continue
             lookup = key + ((rel,) if target.key_includes_source else ())
             row_id = existing.get(lookup)

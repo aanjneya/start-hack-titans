@@ -11,8 +11,7 @@
 ## Shared hubs I touched (please review before merge)
 | File | Change |
 |---|---|
-| `backend/core/llm.py` | **bug fix**: `.env` key was never passed to the SDK → every live Claude call failed. Now `Anthropic(api_key=settings.anthropic_api_key)` |
-| `backend/core/config.py` | new settings: `anthropic_api_key`, `MAIL_*`, `SMTP_*`, `IMAP_*`, `CHASER_SEND/MIN_GAP_MIN/ESCALATE_H/POLL_MIN/MAX_STEPS` (all with defaults) |
+| `backend/core/config.py` | new settings: `MAIL_*`, `SMTP_*`, `IMAP_*`, `CHASER_SEND/MIN_GAP_MIN/ESCALATE_H/POLL_MIN/MAX_STEPS` (all with defaults) |
 | `backend/core/models.py` | `OutboxMessage.message_id`, `.run_id`, status `escalated` (additive; `_add_missing_columns` handles old DBs) |
 | `backend/app/main.py` | `_chaser()` helper, poll route, poll timer in `lifespan` |
 | `API_CONTRACT.ts` | `OutboxMessage` +`message_id`, `run_id`, `'escalated'` |
@@ -25,3 +24,9 @@
 ## For you
 - 4 tests in `test_ingest_watcher.py` fail on Windows (path separators), not caused by the chaser.
 - Tell tim when `tim` may go to main; tim runs the merge + `verify.sh`.
+
+## Update 21:40
+- Merged latest main into `tim` (34d37d8): took your `llm.py` (your explicit-key fix supersedes mine); Chaser now uses `llm._anthropic_client()` and falls back when `llm.provider() != "anthropic"`.
+- Jivi's planner contract done: one mail per `decision_id`, approved decisions bypass the open-question limit. `test_planner.py` counts decision mails only (tell Jivi).
+- Tests on Windows: 54 passed, 6 failed, all path-separator issues in `test_ingest_watcher.py` (5) + `test_reconciler.py` replay (1, also red on clean main).
+- `tim` is 0 behind / ahead of main: the merge is a fast-forward.

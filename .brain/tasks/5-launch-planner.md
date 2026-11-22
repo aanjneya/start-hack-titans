@@ -62,3 +62,5 @@ Branch verification: 79 backend tests passed, including the historical pickup an
 - [x] **T5.15 (jivi branch)** Compare competing freight quotes on one line. Each mode can be priced independently. Only one paid service can be authorized. The supplier thread links back to the priced option; a duplicate reply preserves the accepted forecast.
 
 - [x] **T5.16 (jivi branch)** The buyer can compare sample timing against dated open orders, inspect the market question, and follow one decision through its finding, signer, review or supplier thread to the forecast. A market-only warning points to open POs to verify and assigns zero confirmed order impact.
+
+- [x] **T5.17 (jivi branch)** An approved qualification review can independently authorize one sample-terms inquiry through Chaser. A matched reply becomes review evidence for Engineering and Quality. Repeated or mismatched replies do not affect the projection. A paid offer is checked against the live clock again before dispatch.

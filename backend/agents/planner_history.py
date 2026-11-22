@@ -53,10 +53,20 @@ def _event(stamp, actor, title, detail, record_type, record_id, log=None):
 def decision_history(db, card, index):
     option = card.options[index] if index is not None else {}
     quote, inquiry = _quote_thread(db, option)
-    own_mail = db.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).all()
+    cards = {card.id: card}
+    if option.get("followup_for"):
+        parent = db.get(DecisionCard, option["followup_for"])
+        if parent:
+            cards[parent.id] = parent
+    elif option.get("exposure"):
+        # Draft follow-ups are shown on the review. History includes the selected correspondence.
+        children = db.exec(select(DecisionCard).where(
+            DecisionCard.options[0]["followup_for"].as_integer() == card.id,
+            DecisionCard.decided_at.is_not(None))).all()
+        cards.update({child.id: child for child in children})
+    own_mail = db.exec(select(OutboxMessage).where(OutboxMessage.decision_id.in_(cards))).all()
     mails = {m.id: m for m in own_mail}
     replies = {m.id: m for m in db.exec(select(InboxMessage).where(InboxMessage.outbox_id.in_(mails)))}
-    cards = {card.id: card}
     if quote and inquiry:
         mails[inquiry.id], replies[quote.id] = inquiry, quote
         prior = db.get(DecisionCard, inquiry.decision_id) if inquiry.decision_id else None
@@ -105,6 +115,9 @@ def decision_history(db, card, index):
             chosen = c.options[c.chosen_option] if c.chosen_option is not None else {}
             history.append(_event(c.decided_at, c.decided_by, "Decision declined" if declined else "Action authorized",
                                   chosen.get("label") or c.title, "decision", c.id, decision))
+        expired = traces.get(("decision_id", c.id, "authorization_expired"))
+        if expired:
+            history.append(_event(expired.ts, "Planner", "Quote expired before dispatch", expired.detail, "decision", c.id, expired))
     for review in reviews:
         history.append(_event(review.created_at, "Planner", "Internal review opened",
                               f"{card.approver} · {review.impact.get('note') or review.summary}", "issue", review.id,
@@ -125,6 +138,9 @@ def decision_history(db, card, index):
             detail = f"PO {fact['po_number']}/{fact['po_line']} · {fact['shipment_id']} · {fact['quantity']:,} units."
             if quoted:
                 detail += f" Offered fee EUR {fact['incremental_cost_eur']:,.2f}. Approval is a separate step."
+        elif result.get("qualification_correspondence"):
+            key, title = "qualification_correspondence", "Supplier response attached to review"
+            detail = f"Review #{result[key]['review_id']} · Engineering and Quality assessment pending."
         elif result.get("review"):
             key, detail = "delivery_review", result["review"]
             title = "Duplicate reply retained" if detail.startswith("Duplicate") else "Reply held for review"

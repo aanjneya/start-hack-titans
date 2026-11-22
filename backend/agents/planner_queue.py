@@ -11,6 +11,7 @@ from sqlmodel import select
 from ..core import policy
 from ..core.models import DecisionCard, Issue
 from ..core.parsing import parse_datetime
+from .planner_options import paid_window_open
 
 
 def digest(value):
@@ -26,6 +27,8 @@ def physical_key(option, card=None):
     kind = option.get("description", "")
     part = action.get("part")
     reference = action.get("reference")
+    if option.get("followup_for") and action.get("purpose") == "verify_sample_terms":
+        return ("verify_sample_terms", option["followup_for"], action.get("supplier_id"), action.get("component"), part)
     if option.get("horizon") == "future" and reference:
         # Old reviews named only the ordered assembly. The evidence still identifies the embedded component.
         scope = option.get("exposure") or {}
@@ -151,7 +154,8 @@ def buyer_queue(db):
             continue
         for index, option in enumerate(card.options):
             physical = physical_key(option, card)
-            if not physical or authorization_key(option, card) in claimed or option.get("available") is False:
+            if (not physical or authorization_key(option, card) in claimed
+                    or option.get("available") is False or not paid_window_open(option)):
                 continue
             key = digest([physical, sorted(option.get("approvers", [])), sorted(option.get("approval_roles", []))])
             step, requirements = _instructions(option)
@@ -209,6 +213,9 @@ def current_option(db, card, index):
     if not issue or issue.status == "resolved":
         return None
     plan = load_plan()
+    if old.get("followup_for"):
+        from .planner_sample import sample_inquiry
+        return old if sample_inquiry(db, issue, plan) == old else None
     if old.get("horizon") == "future":
         from .planner_regulatory import regulatory_option
         return old if regulatory_option(issue, plan) == old else None

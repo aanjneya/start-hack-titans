@@ -13,8 +13,9 @@ from .base import Agent, register
 from .planner_delivery import already_requested, review_key
 from .planner_forecast import simulate
 from .planner_inputs import load_plan
-from .planner_options import options_for
+from .planner_options import options_for, paid_window_open
 from .planner_regulatory import regulatory_option, relevant
+from .planner_sample import sample_inquiry
 
 llm.register_mock("planner.wording", lambda prompt, **_: prompt.splitlines()[0])
 DISPATCH_CHECK = "planner.dispatch.checked"
@@ -49,6 +50,15 @@ class LaunchPlanner(Agent):
             plan = load_plan()
             if plan:
                 self._refresh(plan, simulate(plan))
+        else:
+            # Existing deployments may already have authorized reviews when this follow-up becomes available.
+            with session() as s:
+                reviews = s.exec(select(Issue).where(Issue.type == "recovery_review", Issue.status != "resolved")).all()
+            pending = [i for i in reviews if i.impact.get("horizon") == "future"]
+            if pending:
+                plan = load_plan()
+                for issue in pending:
+                    self._sample_followup(issue, plan)
 
     def on_truth_updated(self, event: Event) -> None:
         plan = load_plan()
@@ -124,12 +134,15 @@ class LaunchPlanner(Agent):
     def _refresh(self, plan, forecasts):
         issues = list(all_rows(Issue))
         self._refreshed = {}
+        followups = set()
         for issue in issues:
+            if issue.type == "recovery_review" and self._sample_followup(issue, plan):
+                followups.add(issue.id)
             if issue.status != "resolved" and (relevant(issue) or (plan and issue.kind == IssueKind.COPIES_AT_RISK)):
                 self._card(issue, plan, forecasts)
                 self._refreshed[issue.id] = (trace.current_run_id(), issue.updated_at)
         closed = {i.id for i in issues if i.status == "resolved"}
-        future_issues = {i.id for i in issues if relevant(i)}
+        future_issues = {i.id for i in issues if relevant(i)} | followups
         with session() as s:
             for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed")).all():
                 obsolete_review = (any(o.get("horizon") == "future" for o in card.options)
@@ -147,8 +160,20 @@ class LaunchPlanner(Agent):
         if issue and self._refreshed.get(issue.id) == (trace.current_run_id(), issue.updated_at):
             return
         plan = load_plan()
+        if issue and issue.type == "recovery_review":
+            self._sample_followup(issue, plan)
+            return
         if issue and issue.status != "resolved" and (relevant(issue) or (plan and issue.kind == IssueKind.COPIES_AT_RISK)):
             self._card(issue, plan, simulate(plan) if plan else {})
+
+    def _sample_followup(self, issue, plan):
+        with session() as db:
+            option = sample_inquiry(db, issue, plan)
+        if not option:
+            return False
+        self._save_card(issue, "Sample inquiry · " + issue.fingerprint, [option], 0, None, option["risk_note"],
+                        option["evidence"], option["label"], option["label"])
+        return True
 
     def _card(self, issue, plan, forecasts):
         if relevant(issue):
@@ -237,6 +262,15 @@ class LaunchPlanner(Agent):
                 s.commit()
                 return
             exists = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).first()
+            expired = not exists and not paid_window_open(selected)
+            if expired:
+                card.status = "outdated"
+                s.add(card)
+                s.commit()
+        if expired:
+            self.log("authorization_expired", "The quoted service expired before dispatch. Request current terms.",
+                     data={"decision_id": card.id})
+            return
         review = next((a for a in selected["actions"] if a["type"] == "human_review"), None)
         if review:
             self.raise_issue(type="recovery_review", key=review_key(review),

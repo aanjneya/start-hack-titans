@@ -151,3 +151,35 @@ def test_competing_freight_quotes_can_be_compared_but_only_one_can_be_ordered(tm
     assert approve("air").status_code == 409
     assert len(all_rows(OutboxMessage)) == count + 1
     assert not any(e["option"]["actions"][0].get("quote_inbox_id") for e in queue(client))
+
+
+def test_live_clock_expires_an_offer_between_snapshot_and_dispatch(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from backend.agents import planner_options
+    from backend.core import events
+    client = TestClient(app)
+    for _ in range(sleeve_scenario_steps()):
+        system.replay_step()
+    _, reply, fact = prepare_quote_request(client, tmp_path)
+    quote = dict(fact, mode="pickup", incremental_cost_eur=500, valid_until=fact["arrival"])
+    client.post("/api/inbox", json=dict(reply, quote=quote)).raise_for_status()
+    entry, = [e for e in queue(client) if e["option"]["description"] == "pickup"]
+    # Swap only the authorization clock. The test database, mailbox and LLM remain isolated.
+    live = replace(planner_options.get_settings(), mock_mode=False)
+    monkeypatch.setattr(planner_options, "get_settings", lambda: live)
+    now = datetime.fromisoformat(quote["valid_until"]) + timedelta(seconds=1)
+    monkeypatch.setattr(planner_options.m, "utcnow", lambda: now)
+    assert not any(e["option"]["description"] == "pickup" for e in queue(client))
+    before = len(all_rows(OutboxMessage))
+    url = f"/api/decisions/{entry['decision_id']}/approve"
+    assert client.post(url, json={"option": entry["option_index"], "by": "Sofia Marchetti"}).status_code == 409
+    # Restore a prior durable approval as if the process stopped immediately before its handoff.
+    with session() as db:
+        card = db.get(DecisionCard, entry["decision_id"])
+        card.status, card.chosen_option, card.decided_by = "approved", entry["option_index"], "Sofia Marchetti"
+        db.add(card)
+        db.commit()
+    system.emit(events.DECISION_APPROVED, {"decision_id": entry["decision_id"]})
+    assert len(all_rows(OutboxMessage)) == before
+    history = client.get(f"/api/decisions/{entry['decision_id']}/history").json()["data"]["events"]
+    assert any(e["title"] == "Quote expired before dispatch" for e in history)

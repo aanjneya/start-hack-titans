@@ -120,6 +120,9 @@ def ingest_reply(msg, delivery, agent, *, quote=None):
         if card and card.created_by == "planner" and card.chosen_option is not None:
             actions = card.options[card.chosen_option].get("actions", [])
             line = next((a for a in actions if a.get("type") == "email"), None)
+        if line and line.get("purpose") == "verify_sample_terms":
+            from .planner_sample import ingest_sample_correspondence
+            return ingest_sample_correspondence(s, msg, out, card, structured=delivery is not None or quote is not None)
         if delivery is None and quote is None and not line and not (issue and issue.raised_by == "planner"):
             # The generic extractor can fill every matching confirmation. Quarantine ambiguous replies.
             if not issue or not (issue.part_id or issue.po_number):

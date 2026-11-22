@@ -163,7 +163,7 @@ export default function ControlRoom() {
   }, [snap.forecast]);
 
   const recovery = snap.queue.filter(entry => entry.on_time_recovery);
-  const future = snap.queue.filter(entry => entry.option.horizon === "future");
+  const future = snap.queue.filter(entry => entry.option.horizon === "future" && !entry.option.followup_for);
   const other = snap.queue.filter(entry => !entry.on_time_recovery && entry.option.horizon !== "future");
   const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
     {entries.map(entry => <li id={`action-${entry.key}`} tabIndex={-1} key={entry.key}>
@@ -221,12 +221,13 @@ export default function ControlRoom() {
               Decide now
             </h2>
             <span className="text-sm text-muted tabular">
-              {snap.queue.length} {snap.queue.length === 1 ? "action" : "actions"}
+              {recovery.length + future.length + other.length} {recovery.length + future.length + other.length === 1 ? "action" : "actions"}
             </span>
           </div>
-          {snap.queue.length === 0 ? (
+          {!recovery.length && !future.length && !other.length ? (
             <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">
-              {missing.includes("queue") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
+              {missing.includes("queue") || online !== true ? "Waiting for current decisions." :
+                snap.queue.length ? "The next action is on an assigned review in Decision follow-up." : "No decisions are waiting for approval."}
             </p>
           ) : (
             <>
@@ -255,7 +256,7 @@ export default function ControlRoom() {
           )}
         </section>
 
-        <CaseUpdates snap={snap} openMail={id => { setActiveMail(id); setTab("emails"); }} />
+        <CaseUpdates snap={snap} refresh={refresh} current={online === true && !dropBusy && !missing.length} openMail={id => { setActiveMail(id); setTab("emails"); }} />
         <aside aria-labelledby="agents" className="grid items-start gap-6 lg:grid-cols-2">
           <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
           <LiveLog trace={snap.trace} />
@@ -312,9 +313,11 @@ function forecastAfterReply(reply: InboxMessage, forecasts: Forecast[], edition:
   return "";
 }
 
-function CaseUpdates({ snap, openMail }: { snap: Snapshot; openMail: (id: number) => void }) {
+function CaseUpdates({ snap, openMail, refresh, current }: {
+  snap: Snapshot; openMail: (id: number) => void; refresh: () => Promise<void>; current: boolean;
+}) {
   const [all, setAll] = useState(false);
-  const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed"].includes(d.status)))
+  const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed", "outdated"].includes(d.status)))
     .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id);
   if (!decided.length) return null;
   return <section aria-label="Decision follow-up" className="mt-6 rounded-lg border border-rule bg-surface p-5">
@@ -324,7 +327,7 @@ function CaseUpdates({ snap, openMail }: { snap: Snapshot; openMail: (id: number
       const sent = snap.outbox.find(o => o.decision_id === d.id);
       const reply = sent && snap.inbox.filter(i => i.outbox_id === sent.id).sort((a,b) => b.id - a.id)[0];
       const review = snap.issues.find(i => i.type === "recovery_review" && i.evidence.some(e => e.path === `decisions/${d.id}`));
-      const state = d.status === "rejected" ? "Rejected" : reply ? replyOutcome(reply)
+      const state = d.status === "rejected" ? "Rejected" : d.status === "outdated" ? "Authorization expired before dispatch. Request current supplier terms." : reply ? replyOutcome(reply)
         : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
         : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
         : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
@@ -332,9 +335,13 @@ function CaseUpdates({ snap, openMail }: { snap: Snapshot; openMail: (id: number
         : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
         : review ? `Assigned to ${d.approver || "the buyer"} for internal review.`
         : "Approved. Waiting for the handoff.";
-      const edition = snap.forecast.find(f => d.title.startsWith(f.edition + " ·"))?.edition;
+      const edition = snap.forecast.find(f => f.product_id === option?.product_id)?.edition;
       const accepted = sent && snap.inbox.find(i => i.outbox_id === sent.id && i.result?.confirmed_delivery);
       const outcome = accepted && edition ? forecastAfterReply(accepted, snap.forecast, edition) : "";
+      const pendingInquiry = snap.queue.find(e => e.option.followup_for === d.id);
+      const child = snap.decisions.find(c => c.chosen_option != null && c.options[c.chosen_option].followup_for === d.id);
+      const inquiryMail = child && snap.outbox.find(o => o.decision_id === child.id);
+      const correspondence = inquiryMail && snap.inbox.find(i => i.outbox_id === inquiryMail.id && i.result.qualification_correspondence);
       const priced = reply && reply.result?.supplier_quote ? snap.queue.find(e => e.option.actions.some(a => a.quote_inbox_id === reply.id)) : undefined;
       return <li key={d.id}><strong>{option?.label ?? d.title}</strong>
         <span className="ml-2 text-sm text-muted">#{d.id} · {d.decided_by}</span>
@@ -342,6 +349,11 @@ function CaseUpdates({ snap, openMail }: { snap: Snapshot; openMail: (id: number
         <History decision={d.id} activity={snap.health?.activity_version} />
         {review && <details className="text-sm"><summary className="cursor-pointer text-act">Open assigned review #{review.id}</summary>
           <p className="mt-1 font-semibold">{review.impact.note}</p><p>{review.reason}</p><p>Review status · {review.status}</p>
+          {pendingInquiry && <SampleInquiry entry={pendingInquiry} buyer={snap.setup?.demo_buyer} current={current} refresh={refresh} />}
+          {inquiryMail && <p className="my-2">{correspondence ? "Supplier response recorded for Engineering and Quality." :
+            inquiryMail.status === "failed" ? "The sample inquiry failed to send." : inquiryMail.status === "draft" ? "Sample inquiry drafted." :
+            "Sample inquiry recorded in the supplier thread."}
+            {" "}<a className="text-act underline" href={`#mail-${inquiryMail.id}`} onClick={() => openMail(inquiryMail.id)}>Open sample correspondence</a></p>}
           <a className="text-act underline" href={API_URL + "/api/issues/" + review.id}>View review record</a></details>}
         {priced && <button className="mr-4 text-sm font-semibold text-act underline" onClick={() => {
           const target = document.getElementById("action-" + priced.key);
@@ -354,6 +366,38 @@ function CaseUpdates({ snap, openMail }: { snap: Snapshot; openMail: (id: number
     })}</ul>
     {decided.length > 3 && <button className="mt-2 text-sm font-semibold text-act" onClick={() => setAll(!all)}>
       {all ? "Show latest three" : `Show all ${decided.length} decisions`}</button>}
+  </section>;
+}
+
+function SampleInquiry({ entry, buyer, current, refresh }: {
+  entry: BuyerQueueEntry; buyer?: string; current: boolean; refresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const owners = entry.option.approvers || [];
+  const send = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await postData(`/api/decisions/${entry.decision_id}/approve`, {
+        by: buyer, option: entry.option_index, version: entry.version,
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      await refresh();
+      setBusy(false);
+    }
+  };
+  return <section className="my-3 max-w-2xl rounded border border-rule p-3">
+    <h3 className="font-semibold">{entry.option.label}</h3>
+    <p>{entry.next_step}</p>
+    <details className="my-2"><summary className="cursor-pointer text-act">Preview the request</summary>
+      <p className="mt-2">{String(entry.option.actions[0].ask)}</p></details>
+    {owners.length === 1 && owners[0] === buyer
+      ? <button className="rounded bg-act px-3 py-1.5 font-semibold text-white disabled:opacity-50" disabled={!current || busy} onClick={send}>
+        {busy ? "Sending…" : "Send sample inquiry"}</button> : <p>Awaiting {owners.join(" + ") || "assignment"}</p>}
+    {error && <p role="alert" className="text-stop">{error}</p>}
   </section>;
 }
 
@@ -854,6 +898,7 @@ function replyOutcome(r: InboxMessage): string {
   if (typeof res.review === "string" && res.review.startsWith("Duplicate of inbox/"))
     return "Duplicate reply. The original evidence and forecast still apply.";
   if (typeof res.review === "string") return `Held for review: ${res.review}`;
+  if (res.qualification_correspondence) return `Ingest attached this response to review #${res.qualification_correspondence.review_id}. Engineering and Quality assessment is pending.`;
   const advice = (res.confirmed_delivery ?? res.supplier_quote) as Record<string, unknown> | undefined;
   if (advice) {
     const when = parseTs(String(advice.arrival))?.toLocaleString("en-GB", {

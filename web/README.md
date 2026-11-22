@@ -51,3 +51,5 @@ Pickup quote. PO 4500318775/2, SHP-2026-04313, 20,000 units, rev C, arrival 2026
 
 
 On a future-supply card, expand the Polymarket line to see the actual market question and its source mode. Under **Why?**, **Compare sample timing** compares the scoped supplier offer with the earliest matching PO delivery. **Decision history** follows the exact finding, signer, review or supplier conversation. In the pickup simulation it includes the original inquiry and the forecast supported by the matched delivery reply.
+
+After opening a qualification review, expand **Open assigned review** in **Decision follow-up**. The separate **Send sample inquiry** action authorizes one Chaser message asking for specifications and terms. Its supplier thread accepts a clearly labeled test reply on the demo backend. Ingest links the reply to the review for evaluation.

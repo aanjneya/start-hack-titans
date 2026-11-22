@@ -132,7 +132,10 @@ export interface SupplyExposure {
 }
 
 export interface DecisionOption {
+  /** Optional, separately authorized correspondence on an assigned internal review. */
+  followup_for?: number;
   exposure?: SupplyExposure;
+  product_id?: string;
   horizon?: 'future';
   review_brief?: string;
   button_label?: string;
@@ -302,7 +305,9 @@ export interface InboxMessage {
   language: string;
   received_at: string;
   processed: boolean;
-  result: Record<string, unknown>;
+  result: Record<string, unknown> & {
+    qualification_correspondence?: {review_id: number; decision_id: number};
+  };
 }
 
 /** Structured supplier advice on the approved PO line. A supplier cannot release the receiving dock. */

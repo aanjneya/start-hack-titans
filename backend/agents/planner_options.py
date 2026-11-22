@@ -6,10 +6,24 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from ..core import models as m, policy
+from ..core.config import get_settings
 from ..core.parsing import parse_datetime
 from ..core.store import all_rows
 from .planner_forecast import simulate
 from .planner_inputs import evidence
+
+
+def approval_clock(snapshot):
+    """Replay evaluates the decision at the recorded instant; live buyers act at the current time."""
+    return snapshot if get_settings().mock_mode else max(snapshot, m.utcnow())
+
+
+def paid_window_open(option):
+    if not any(a.get("quote_inbox_id") for a in option.get("actions", [])):
+        return True
+    snapshot = parse_datetime(option.get("as_of"))
+    latest = parse_datetime(option.get("latest_useful"))
+    return bool(snapshot and latest and approval_clock(snapshot) <= latest)
 
 
 def air_freight_limit(documents):
@@ -210,7 +224,8 @@ def options_for(issue, plan, forecast, row):
             if orders and all(o.currency == "EUR" and o.quantity is not None and o.unit_price is not None for o in orders):
                 gross = float(sum(Decimal(str(o.quantity)) * Decimal(str(o.unit_price)) for o in orders) + Decimal(str(extra)))
             expiry = parse_datetime(quote["valid_until"])
-            execute = bool(gain and gain > 0 and gross is not None and dock and expiry >= plan.as_of)
+            purchase_by = min(expiry, arrival, useful_until(plan, row, gain), due)
+            execute = bool(gain and gain > 0 and gross is not None and dock and approval_clock(plan.as_of) <= purchase_by)
             order = dict(action, purpose="accept_" + quote["mode"], ask=f"Accept quoted {quote['mode']} service for PO {quote['po_number']}/{quote['po_line']}, "
                                      f"{qty:g} units, extra EUR {extra:.2f}. Confirm site arrival.",
                          quote_inbox_id=msg.id)
@@ -218,7 +233,7 @@ def options_for(issue, plan, forecast, row):
                 "Conditional on supplier confirmation. Requires a valid quote, released dock and priced PO.",
                 actions=[order], value=gross, available=execute, air=quote["mode"] == "air",
                 proof=candidate["evidence"] + [evidence(f"inbox/{msg.id}", "supplier quote")])
-            choices[-1]["latest_useful"] = min(expiry, useful_until(plan, row, gain), due).isoformat()
+            choices[-1]["latest_useful"] = purchase_by.isoformat()
             if execute:
                 selected_gain = choices[recommended]["copies_gained"]
                 if selected_gain:
@@ -227,7 +242,7 @@ def options_for(issue, plan, forecast, row):
                     better = True
                 if choices[recommended]["description"] == "information request" or better:
                     recommended = len(choices) - 1
-                    decide_by = min(expiry, useful_until(plan, row, gain))
+                    decide_by = purchase_by
     # An offer is tied to a supplier and material, independently of any in-transit shipment.
     suppliers = {p.supplier_id for p in all_rows(m.SupplierPartMap) if p.component_id == part}
     suppliers.update(c["supplier_id"] for c in inbound)

@@ -9,6 +9,7 @@ from sqlmodel import select
 
 from backend import system
 from backend.agents import chaser as chaser_mod
+from backend.agents.base import issue_fingerprint
 from backend.core import mail as mailbox
 from backend.core.models import InboxMessage, Issue, IssueKind, OutboxMessage, utcnow
 from backend.core.store import session
@@ -72,7 +73,8 @@ def test_min_gap_after_reply():
 def test_recorded_real_reply_is_replayed_in_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(chaser_mod, "FIXTURE_DIR", tmp_path)
     (tmp_path / "SUP-0028_outbox1.json").write_text(json.dumps(
-        {"reply_subject": "Re: test", "reply_body": "ETA 22.11. 08:00", "reply_from": "x@example.com"}))
+        {"request_scope": {"finding": issue_fingerprint("test_missing_eta", "SHP-TEST/1")},
+         "reply_subject": "Re: test", "reply_body": "ETA 22.11. 08:00", "reply_from": "x@example.com"}))
     ch = _chaser()
     _raise(ch)
     assert _outbox()[0].status == "replied"
@@ -137,3 +139,28 @@ def test_approved_decision_is_not_blocked_by_open_question():
     _request(42)
     assert any(r.decision_id == 42 for r in _outbox())
     assert "still open" in ch.blocked_reason("SUP-0028")  # questions stay limited
+
+
+def test_site_and_customer_from_setup_without_cross_thread_fixture(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from backend.core import config, policy
+
+    custom = tmp_path / "acme.json"
+    custom.write_text(json.dumps({"customer": "Kobe Tools", "timezone": "Asia/Tokyo"}))
+    monkeypatch.setenv("CUSTOMER_SETUP", str(custom))
+    config.reset_settings()
+    policy.reset_cache()
+    monkeypatch.setattr(chaser_mod, "FIXTURE_DIR", tmp_path)
+    legacy = {"supplier_id": "SUP-0028", "reply_subject": "Re: Another order", "reply_body": "Unrelated response"}
+    (tmp_path / "SUP-0028_outbox2.json").write_text(json.dumps(legacy))
+    ch = _chaser()
+    _raise(ch)
+    mail, = _outbox()
+    assert mail.subject.startswith("Kobe Tools") and "Kobe Tools procurement" in mail.body and "Soony" not in mail.body
+    with session() as db:
+        assert not db.exec(select(InboxMessage)).all()
+    legacy.update(sent_subject=mail.subject, sent_body=mail.body)
+    (tmp_path / "SUP-0028_outbox2.json").write_text(json.dumps(legacy))
+    assert chaser_mod._fixture_for("SUP-0028", None, mail.subject, mail.body)
+    monkeypatch.setattr(chaser_mod, "get_settings", lambda: replace(config.get_settings(), mock_mode=False))
+    assert chaser_mod._fixture_for("SUP-0028", None, mail.subject, mail.body) is None

@@ -134,6 +134,33 @@ def test_real_magnets_open_one_future_review():
     assert client.get("/api/trace", params={"trace_id": opened["trace_id"]}).json()["data"][0]["data"]["issue_id"] == review.id
     assert client.get("/api/forecast").json()["data"] == forecasts and len(store.all_rows(m.OutboxMessage)) == mails
 
+    # Opening the review did no external work. Only a second, explicit choice starts a supplier conversation.
+    inquiry, = [q for q in future(client) if q["option"].get("followup_for") == chosen]
+    query_id = inquiry["decision_id"]
+    choice = dict(by="Paul Winter", version=inquiry["version"], option=inquiry["option_index"])
+    url = f"/api/decisions/{query_id}/approve"
+    assert client.post(url, json=dict(choice, by="Other buyer")).status_code == 403
+    client.post(url, json=choice).raise_for_status()
+    assert client.post(url, json=choice).status_code == 409
+    mail, = [row for row in store.all_rows(m.OutboxMessage) if row.decision_id == query_id]
+    assert mail.issue_id == review.id and mail.supplier_id == review.supplier_id
+    assert "RM-" in mail.body or "CMP-MAG-005" in mail.body
+    assert "4500318765/2" in mail.body and "information only" in mail.body
+    answer = dict(outbox_id=mail.id, supplier_id=mail.supplier_id, body="Please see the available sample specifications.")
+    response_id = client.post("/api/inbox", json=answer).json()["data"]["inbox_id"]
+    receipt = next(r for r in store.all_rows(m.InboxMessage) if r.id == response_id)
+    assert receipt.result == {"qualification_correspondence": {"decision_id":query_id, "review_id":review.id}}
+    client.post("/api/inbox", json=answer).raise_for_status()
+    assert store.all_rows(m.InboxMessage)[-1].result == {"review": f"Duplicate of inbox/{response_id}"}
+    client.post("/api/inbox", json=dict(answer, supplier_id="OTHER")).raise_for_status()
+    assert "review" in store.all_rows(m.InboxMessage)[-1].result
+    linked = client.get(f"/api/issues/{review.id}").json()["data"]["evidence"]
+    assert sum(e["path"] == f"inbox/{response_id}" for e in linked) == 1
+    events = client.get(f"/api/decisions/{chosen}/history").json()["data"]["events"]
+    assert sum(e["title"] == "Supplier response attached to review" for e in events) == 1
+    assert sum(e["title"] == "Supplier request sent in simulation" for e in events) == 1
+    assert client.get("/api/forecast").json()["data"] == forecasts and len(store.all_rows(m.OutboxMessage)) == mails + 1
+
 
 def test_second_customer_regulation_without_launch_calendar(tmp_path, monkeypatch):
     setup = tmp_path / "client.json"

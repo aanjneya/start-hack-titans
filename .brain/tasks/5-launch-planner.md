@@ -60,3 +60,5 @@ Branch verification: 79 backend tests passed, including the historical pickup an
 
 - [x] **T5.14 (jivi branch)** Bring supplier grade changes, retained external evidence, order-line dates and contract values into one review with a named owner. Corporate order records establish exposure; a market snapshot supplies context. Conflicting article terms route to applicability verification.
 - [x] **T5.15 (jivi branch)** Compare competing freight quotes on one line. Each mode can be priced independently. Only one paid service can be authorized. The supplier thread links back to the priced option; a duplicate reply preserves the accepted forecast.
+
+- [x] **T5.16 (jivi branch)** The buyer can compare sample timing against dated open orders, inspect the market question, and follow one decision through its finding, signer, review or supplier thread to the forecast. A market-only warning points to open POs to verify and assigns zero confirmed order impact.

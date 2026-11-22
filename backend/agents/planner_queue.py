@@ -26,6 +26,10 @@ def physical_key(option, card=None):
     kind = option.get("description", "")
     part = action.get("part")
     reference = action.get("reference")
+    if option.get("horizon") == "future" and reference:
+        # Old reviews named only the ordered assembly. The evidence still identifies the embedded component.
+        scope = option.get("exposure") or {}
+        return (kind, reference.split("/")[0], action.get("supplier_id"), part, scope.get("component") or "")
     if action["type"] == "human_review" and kind != "port pickup":
         if kind == "supplier stock offer":
             supplier = action.get("supplier_id")
@@ -96,8 +100,13 @@ def _rank(item):
     latest = parse_datetime(item["decide_by"])
     as_of = parse_datetime(option.get("as_of"))
     actionable_gain = gain > 0 and (not latest or not as_of or latest >= as_of)
-    return (not actionable_gain, option.get("priority", 999), latest.timestamp() if latest else float("inf"),
-            -gain, item["key"])
+    order_time = latest.timestamp() if latest else float("inf")
+    if option.get("horizon") == "future":
+        action = option["actions"][0]
+        qualified = (action.get("reference") or "").startswith("qualification/")
+        scheduled = (o["promised"] for o in (option.get("exposure") or {}).get("orders", []) if o.get("promised"))
+        return (True, 0 if qualified else 1, option.get("priority", 999), min(scheduled, default="9999-12-31"), -gain, item["key"])
+    return (not actionable_gain, 2, option.get("priority", 999), order_time, -gain, item["key"])
 
 
 def compare_freight(entries):

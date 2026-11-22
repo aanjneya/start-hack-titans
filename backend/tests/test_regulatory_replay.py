@@ -90,6 +90,9 @@ def test_real_magnets_open_one_future_review():
     exposure = entry["option"]["exposure"]
     assert exposure["order_value"] == {"amount": 1870260, "currency": "CNY"}
     assert exposure["effective_after"] == "2026-12-01"
+    window = exposure["sample_window"]
+    assert (window["as_of"], window["sample_by"], window["first_delivery"], window["days_between"]) == (
+        "2026-11-21", "2026-12-01", "2026-12-14", 13)
     assert any("sampled within 10 days" in o["text"] for o in exposure["sample_offers"])
     assert exposure["previous_lead_days"] == 63 and exposure["lead_days"] == 105
     assert [(o["po"], o["line"], o["promised"], o["quantity"]) for o in exposure["orders"]] == [
@@ -102,6 +105,7 @@ def test_real_magnets_open_one_future_review():
     assert signals["external_politics"]["sources"][0]["origin"] == "Offline example"
     assert {"weather", "telemetry", "regulatory_change"} == {d["factor"] for d in exposure["other_drivers"]}
     assert signals["trade_news"]["sources"][0]["published"] == "2026-11-21"
+    assert signals["trade_news"]["sources"][0]["evidence"]["source_kind"] == "News coverage"
     assert any(e["source_kind"] == "Product BOM" for e in entry["evidence"])
     assert len(entry["sources"]) >= 2
     forecasts = client.get("/api/forecast").json()["data"]
@@ -114,6 +118,20 @@ def test_real_magnets_open_one_future_review():
     review, = [i for i in store.all_rows(m.Issue) if i.impact.get("horizon") == "future"]
     assert review.impact["note"] == entry["option"]["review_brief"] and "sample terms" in review.impact["note"]
     assert review.impact["owner"] == "Paul Winter" and review.supplier_id == "SUP-0029"
+    chosen = entry["sources"][0]["decision_id"]
+    history = client.get(f"/api/decisions/{chosen}/history").json()["data"]["events"]
+    assert {e["title"] for e in history} == {"Supplier grade changed", "Finding opened", "Decision proposed",
+                                             "Action authorized", "Internal review opened"}
+    opened, = [e for e in history if e["title"] == "Internal review opened"]
+    assert opened["record"]["id"] == review.id and "Paul Winter" in opened["detail"]
+    assert "sample terms" in opened["detail"]
+    path = f"/api/decisions/{chosen}/sample-window"
+    later = client.get(path, params={"requested_on": "2026-12-05"}).json()["data"]
+    assert (later["sample_by"], later["days_between"]) == ("2026-12-15", -1)
+    assert client.get(path, params={"requested_on": "2026-11-20"}).status_code == 422
+    assert client.get(path, params={"requested_on": "9999-12-31"}).status_code == 422
+    assert client.get(path, params={"requested_on": "2026-11-21", "option": 25}).status_code == 422
+    assert client.get("/api/trace", params={"trace_id": opened["trace_id"]}).json()["data"][0]["data"]["issue_id"] == review.id
     assert client.get("/api/forecast").json()["data"] == forecasts and len(store.all_rows(m.OutboxMessage)) == mails
 
 
@@ -147,6 +165,17 @@ def test_second_customer_regulation_without_launch_calendar(tmp_path, monkeypatc
     assert "88 days" in entry["next_step"] and "increased" not in entry["next_step"]
     assert {e["source_kind"] for e in entry["evidence"]} >= {"Official publication","Supplier evidence","Offline example"}
     assert client.get("/api/setup").json()["data"]["timezone"] == "Asia/Tokyo"
+    competing, = store.add_all([m.SupplierPartMap(component_id="C", supplier_id="V-10", share=0.2, source="second-map")])
+    system.emit(events.RISK_UPDATED, {})
+    disputed, = future(client)
+    assert disputed["option"]["button_label"] == "Check applicability"
+    assert disputed["option"]["exposure"]["share"] is None
+    assert any(e["path"] == "second-map" for e in disputed["evidence"])
+    with store.session() as db:
+        db.delete(db.get(m.SupplierPartMap, competing.id))
+        db.commit()
+    system.emit(events.RISK_UPDATED, {})
+    entry, = future(client)
     conflict, = store.add_all([m.Document(kind="notice", path="clarification", supplier_id="V-9",
                               text="AX-901 is exempt from the licensing requirement.")])
     changed = client.post(f"/api/decisions/{entry['decision_id']}/approve",
@@ -228,3 +257,53 @@ def test_unpriced_or_mixed_currency_lines_have_no_aggregate_value():
     assert order_value([]) is None
     assert order_value([line(1, "JPY"), line(1, "EUR")]) is None
     assert order_value([line(None, "EUR")]) is None
+
+
+def test_sample_scenario_requires_clear_terms_and_a_future_order():
+    from backend.agents.planner_regulatory import sample_window
+    as_of = date(2026, 6, 20)
+    order = m.PurchaseOrder(po_number="A", promised_date=date(2026, 7, 1))
+    ten = {"days": 10, "source": "supplier notice"}
+    assert sample_window([ten], as_of, [order])["days_between"] == 1
+    assert sample_window([ten], date(2026, 7, 2), [order]) is None
+    assert sample_window([ten, dict(ten, days=5)], as_of, [order]) is None
+    assert sample_window([dict(source="10 working days")], as_of, [order]) is None
+    assert sample_window([ten], as_of, []) is None
+
+
+def test_qualification_deduplication_follows_the_component_inside_the_assembly():
+    from backend.agents.planner_queue import physical_key
+    def opt(component, ref):
+        return dict(description="future supply review", horizon="future", exposure={"component": component},
+                    actions=[dict(type="human_review", supplier_id="V", part="A", reference=ref)])
+    old = opt("hinge", "qualification/V/A")
+    assert physical_key(old) == physical_key(opt("hinge", "qualification/V/A/hinge"))
+    assert physical_key(old) != physical_key(opt("spring", "qualification/V/A/spring"))
+
+
+def test_market_warning_opens_a_targeted_check_without_promising_order_impact():
+    client = TestClient(app)
+    proof = dict(path="https://polymarket.com/event/trade-rule", locator="polymarket:external_politics",
+                 quote="Yes=74.0%, risk_implied=74.0% (live Polymarket Gamma API)")
+    store.add_all([
+        m.Supplier(supplier_id="VN-X", name="Viet Manufacturing", country="VN"),
+        m.PurchaseOrder(supplier_id="VN-X", material_id="A1", po_number="P1", po_line=1, status="open",
+                        promised_date=date(2027, 1, 10), source="open-orders"),
+        m.PurchaseOrder(supplier_id="VN-X", material_id="A1", po_number="P-old", po_line=2, status="closed"),
+        m.PurchaseOrder(supplier_id="OTHER", material_id="A1", po_number="P-other", status="open"),
+        m.RiskScore(entity_type="supplier", entity_id="VN-X", grade=5, rating="B", reasons=[
+            dict(factor="external_politics", text="Country trade rule market", points=11.8, evidence=[proof])]),
+    ])
+    finding, = store.add_all([m.Issue(type="high_risk_rating", raised_by="risk", kind="copies_at_risk",
+        subject_type="supplier", subject_id="VN-X", supplier_id="VN-X", fingerprint="watch/VN-X",
+        evidence=[proof], suggested_actions=[{"type": "safety_stock", "label": "Verify the supply chain"}])])
+    system.emit(events.ISSUE_RAISED, {"issue_id": finding.id, "kind": finding.kind})
+    entry, = future(client)
+    choice = entry["option"]
+    assert choice["button_label"] == "Check applicability" and choice["copies_gained"] is None
+    assert choice["approval_value_eur"] == 0 and not choice["exposure"]["orders"]
+    assert choice["exposure"]["verification_orders"] == [
+        dict(po="P1", line=1, material="A1", promised="2027-01-10")]
+    assert choice["exposure"]["signals"][0]["sources"][0]["origin"] == "Live at collection"
+    assert any(e["path"] == "open-orders" for e in entry["evidence"])
+    assert not store.all_rows(m.Forecast) and not store.all_rows(m.OutboxMessage)

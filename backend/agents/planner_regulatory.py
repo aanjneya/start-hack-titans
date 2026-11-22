@@ -1,5 +1,5 @@
 """Convert a documented future-supply finding into an internal, non-spending review."""
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 import re
 from types import SimpleNamespace
@@ -19,12 +19,14 @@ def relevant(issue):
         return False
     actions = issue.suggested_actions or []
     if issue.kind != m.IssueKind.HUMAN_CHECK:
-        # The Risk Rater routes high supplier grades as copies_at_risk even for
-        # a country-level regulatory watch. Preserve its explicit compliance task.
-        return (issue.raised_by == "risk" and issue.subject_type == "supplier"
-                and issue.kind == m.IssueKind.COPIES_AT_RISK
-                and any(e.get("locator", "").startswith("regulations:") for e in issue.evidence)
-                and any(a.get("type") == "human_review" for a in actions))
+        if (issue.raised_by != "risk" or issue.subject_type != "supplier"
+                or issue.kind != m.IssueKind.COPIES_AT_RISK):
+            return False
+        evidence = [e.get("locator", "") for e in issue.evidence]
+        if any(loc.startswith("regulations:") for loc in evidence) and any(a.get("type") == "human_review" for a in actions):
+            return True
+        return (any(loc.startswith(("polymarket:", "gnews:", "gdelt:", "portal_news:")) for loc in evidence)
+                and any(a.get("type") in {"second_source", "safety_stock"} for a in actions))
     return any(a.get("type") == "second_source" or
                (a.get("type") == "human_review" and
                 ("compliance" in a.get("label", "").lower() or any(
@@ -32,7 +34,7 @@ def relevant(issue):
                for a in actions)
 
 
-def source_kind(item, documents):
+def source_kind(item, documents, matched_doc=None):
     path = item["path"]
     quote = item.get("quote", "").lower()
     if "offline" in quote or item.get("offline") is True:
@@ -46,7 +48,7 @@ def source_kind(item, documents):
             return "Market odds"
         if host == "news.google.com" or item.get("locator", "").startswith(("gnews:", "gdelt:")):
             return "News coverage"
-    doc = documents.get(path)
+    doc = matched_doc or documents.get(path)
     if doc:
         if doc.kind == "news":
             return "News coverage"
@@ -69,9 +71,11 @@ def supplier_signals(supplier_id, documents):
         previous = db.exec(query.where(m.RiskScore.grade != score.grade).limit(1)).first()
         # Compare the two records either side of the grade transition, even
         # when later evidence has changed contributions within the same grade.
-        first = db.exec(select(m.RiskScore).where(m.RiskScore.entity_type == "supplier",
-                        m.RiskScore.entity_id == supplier_id, m.RiskScore.id > previous.id
-                        ).order_by(m.RiskScore.id).limit(1)).one() if previous else None
+        first = None
+        if previous:
+            first = db.exec(select(m.RiskScore).where(m.RiskScore.entity_type == "supplier",
+                            m.RiskScore.entity_id == supplier_id, m.RiskScore.id > previous.id
+                            ).order_by(m.RiskScore.id).limit(1)).one()
     signals = []
     for reason in score.reasons:
         factor = reason.get("factor")
@@ -88,7 +92,7 @@ def supplier_signals(supplier_id, documents):
                 # A news feed can contain multiple dated stories in the same file.
                 doc = next((d for d in documents.values() if d.path.startswith(path + "#")
                             and quote.strip() in d.text), None)
-            proof = dict(item, source_kind=source_kind(item, documents))
+            proof = dict(item, source_kind=source_kind(item, documents, doc))
             origin = ("Offline example" if proof["source_kind"] == "Offline example" else
                       "Portal record" if doc or not urlsplit(path).scheme else
                       "Live at collection" if "live " in quote.lower() else "Collection mode unknown")
@@ -109,6 +113,21 @@ def supplier_signals(supplier_id, documents):
     return dict(supplier_rating=score.rating, signals=signals, other_drivers=other, last_grade_change=transition)
 
 
+def open_orders(supplier_id, dated, part=None, after=None):
+    """Only open purchasing records already known by the snapshot time, with optional notice scope."""
+    stmt = select(m.PurchaseOrder).where(m.PurchaseOrder.supplier_id == supplier_id)
+    if part:
+        stmt = stmt.where(m.PurchaseOrder.material_id == part)
+    if after:
+        stmt = stmt.where(m.PurchaseOrder.promised_date > after)
+    with session() as db:
+        rows = db.exec(stmt.order_by(m.PurchaseOrder.promised_date.is_(None), m.PurchaseOrder.promised_date,
+                                     m.PurchaseOrder.po_number, m.PurchaseOrder.po_line, m.PurchaseOrder.id)).all()
+    return [po for po in rows if (po.status or "").lower() in {"open", "awaiting_approval", "pending_approval"}
+            and (not po.order_date or po.order_date <= dated)
+            and (not po.actual_delivery_date or po.actual_delivery_date > dated)]
+
+
 def order_value(orders):
     """Whole value of identified lines in their contract currency; no inferred FX or loss."""
     currencies = {o.currency for o in orders}
@@ -117,6 +136,32 @@ def order_value(orders):
         return None
     amount = sum(Decimal(str(o.quantity)) * Decimal(str(o.unit_price)) for o in orders)
     return {"amount": float(amount), "currency": orders[0].currency}
+
+
+def sample_window(offers, as_of, orders):
+    """A sample can inform qualification. Only compare an unambiguous quoted window to a dated open line."""
+    durations = {offer.get("days") for offer in offers}
+    if len(durations) != 1 or None in durations or not orders:
+        return None
+    first_delivery = min(po.promised_date for po in orders)
+    if first_delivery < as_of:
+        return None
+    window = dict(as_of=as_of.isoformat(), sample_days=durations.pop(), first_delivery=first_delivery.isoformat(),
+                  source=offers[0]["source"])
+    return project_sample_date(window, as_of)
+
+
+def project_sample_date(window, requested_on):
+    """Apply the recorded offer to a date the buyer is considering, without modifying the decision."""
+    if requested_on < date.fromisoformat(window["as_of"]):
+        raise ValueError("Choose a date on or after this decision’s evidence snapshot.")
+    try:
+        sample_by = requested_on + timedelta(days=window["sample_days"])
+    except OverflowError:
+        raise ValueError("That date is outside the supported calendar.") from None
+    first = date.fromisoformat(window["first_delivery"])
+    return dict(window, requested_on=requested_on.isoformat(), sample_by=sample_by.isoformat(),
+                days_between=(first - sample_by).days)
 
 
 def regulatory_option(issue, plan=None):
@@ -137,6 +182,8 @@ def regulatory_option(issue, plan=None):
     mapping = by_part.get(target)
     material = next(iter(find_rows(m.Material, component_id=target)), None)
     name = material.description if material and material.description else target or "this component"
+    subject = next(iter(find_rows(m.Material, component_id=component)), None) if assembly else material
+    component_name = subject.description if subject and subject.description else component
     documents = {d.path: d for d in all_rows(m.Document)}
     proof = list(issue.evidence or [])
     part_refs = {target, mapping.supplier_ref if mapping else ""} - {""}
@@ -201,18 +248,26 @@ def regulatory_option(issue, plan=None):
     qualify = bool(source and mapping and source.share == 1 and not uncertainty and (restricted or longer)
                    and any(a.get("type") == "second_source" for a in issue.suggested_actions))
     action = "Start qualification review" if qualify else "Check applicability"
-    label = f"Qualify a backup source for {name}" if qualify else f"Check regulatory exposure for {supplier.name if supplier else name}"
+    subject_name = (supplier.name or supplier.supplier_id) if supplier else issue.supplier_id or name
+    label = f"Check supply exposure for {subject_name}"
+    if qualify:
+        label = f"Qualify a backup source for {component_name or name}"
     sample_offers = []
     if qualify:
         for path in sorted({d.path for d, _ in notice_lines}):
             sentences = re.split(r"(?<=[.!?])\s+", " ".join(documents[path].text.split()))
             for line in sentences:
-                if re.search(r"\bcan be sampled within \d+ days?\b", line, re.I):
-                    sample_offers.append(dict(text=line, source=path))
+                terms = re.search(r"\bcan be sampled within (\d{1,4}) (calendar |business |working )?days?\b", line, re.I)
+                if terms:
+                    offer = dict(text=line, source=path)
+                    if not terms[2] or terms[2].lower() == "calendar ":
+                        offer["days"] = int(terms[1])
+                    sample_offers.append(offer)
                     proof.append(dict(evidence(path, "supplier sample terms", line), source_kind="Supplier evidence"))
     facts.append(f"Applies to deliveries after {cutoff.isoformat()}." if cutoff else "Effective date unknown.")
     if sample_offers:
-        brief = "Check the supplier’s sample terms with Engineering and Quality. Record fit, release criteria and lead time before committing spend."
+        brief = ("Ask Engineering and Quality to assess the incumbent’s sample terms. "
+                 "In parallel, identify an independent supplier and verify qualification, capacity and lead time.")
     elif qualify:
         brief = "Identify a qualified alternative and compare capacity, lead time and terms with the incumbent supplier."
     else:
@@ -222,16 +277,15 @@ def regulatory_option(issue, plan=None):
         facts.append("Verify the notice against a supplier and order line before taking sourcing action.")
     as_of = plan.as_of if plan else issue.created_at
     dated = as_of.date()
-    pos = []
-    if mapping and cutoff:
-        with session() as db:
-            orders = db.exec(select(m.PurchaseOrder).where(m.PurchaseOrder.supplier_id == mapping.supplier_id,
-                             m.PurchaseOrder.material_id == target, m.PurchaseOrder.promised_date > cutoff)
-                             .order_by(m.PurchaseOrder.po_number, m.PurchaseOrder.po_line)).all()
-        # Quantities represent whole ordered lines. Partial receipts do not establish a remaining balance.
-        pos = [po for po in orders if (po.status or "").lower() in {"open", "awaiting_approval", "pending_approval"}
-               and (not po.order_date or po.order_date <= dated)
-               and (not po.actual_delivery_date or po.actual_delivery_date > dated)]
+    # These are scheduled PO quantities. Partial receipts do not establish a remaining balance.
+    pos = open_orders(mapping.supplier_id, dated, part=target, after=cutoff) if mapping and cutoff else []
+    verify = []
+    if supplier and not pos and not qualify and not cutoff:
+        verify = open_orders(supplier.supplier_id, dated, part=target or None)
+    for po in verify[:3]:
+        proof.append(dict(evidence(po.source, f"{po.po_number}/{po.po_line}",
+                                   f"Open PO for {po.material_id}. Applicability still needs confirmation."),
+                          source_kind="Order record"))
     for po in pos:
         proof.append(dict(evidence(po.source, f"{po.po_number}/{po.po_line}", f"Promised {po.promised_date}, quantity {po.quantity}, unit price {po.unit_price} {po.currency}"), source_kind="Order record"))
     if pos:
@@ -244,15 +298,22 @@ def regulatory_option(issue, plan=None):
     owners = resolve_approvers(roles, material.category if material else "", SimpleNamespace(as_of=as_of),
                                documents.values(), buyer=pos[0].buyer if pos else policy.setup().demo_buyer)
     reference = f"{'qualification' if qualify else 'applicability'}/{issue.supplier_id}/{target or issue.subject_id}"
+    if component and assembly:
+        reference += f"/{component}"
     for b in bom:
         if b.parent_id in products and b.source:
             proof.append(dict(evidence(b.source, f"{b.parent_id}/{target}", "Effective product BOM"), source_kind="Product BOM"))
     proof = [dict(e, source_kind=source_kind(e, documents)) for e in proof]
     exposure = dict(supplier=(supplier.name or supplier.supplier_id) if supplier else issue.supplier_id,
-                    component=component, assembly=assembly or None, share=source.share if source and not disputed_share else None,
+                    component=component, component_name=component_name, assembly=assembly or None, assembly_name=name if assembly else "",
+                    share=source.share if source and not disputed_share else None,
                     lead_days=mapping.lead_time_days if mapping else None, previous_lead_days=previous,
-                    uncertainties=uncertainty, sample_offers=sample_offers, order_value=order_value(pos),
+                    uncertainties=uncertainty, sample_offers=sample_offers, sample_window=sample_window(sample_offers, dated, pos),
+                    order_value=order_value(pos),
                     effective_after=cutoff.isoformat() if cutoff else None, **supplier_signals(issue.supplier_id, documents),
+                    verification_orders=[dict(po=o.po_number, line=o.po_line, material=o.material_id,
+                                              promised=o.promised_date.isoformat() if o.promised_date else None)
+                                         for o in verify[:3]],
                     orders=[dict(po=o.po_number, line=o.po_line, promised=o.promised_date.isoformat(),
                                  quantity=o.quantity) for o in pos])
     return dict(exposure=exposure, review_brief=brief, horizon="future", button_label=action, label=label, description="future supply review",

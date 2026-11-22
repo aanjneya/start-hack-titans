@@ -10,6 +10,8 @@ import {
 import type { BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
 import DataDrawer from "./data-drawer";
+import History from "./decision-history";
+import SampleTiming from "./sample-timing";
 
 type Snapshot = {
   queue: BuyerQueueEntry[];
@@ -90,8 +92,9 @@ export default function ControlRoom() {
 
   const lastSnapshot = useRef({version: "", fetched: 0});
   const request = useRef(0);
+  const nextRequest = useCallback(() => ++request.current, []);
   const refresh = useCallback(async (force = true) => {
-    const id = ++request.current;
+    const id = nextRequest();
     let health: HealthCheckResponse;
     try {
       health = await getData<HealthCheckResponse>("/api/health");
@@ -114,7 +117,7 @@ export default function ControlRoom() {
       failed.map(name => [name, previous[name as keyof Snapshot]]))}));
     lastSnapshot.current = {version: health.activity_version ?? "", fetched: failed.length ? 0 : Date.now()};
     setNow(Date.now());
-  }, []);
+  }, [nextRequest]);
 
   useEffect(() => {
     let alive = true;
@@ -127,11 +130,11 @@ export default function ControlRoom() {
     const second = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       alive = false;
-      ++request.current;
+      nextRequest();
       clearTimeout(timer);
       clearInterval(second);
     };
-  }, [refresh]);
+  }, [refresh, nextRequest]);
 
   const nextDrop = async () => {
     setDropBusy(true);
@@ -210,7 +213,6 @@ export default function ControlRoom() {
         Update unavailable for {missing.join(", ")}. Showing the last available data.
       </p>}
       {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} />}
-      <CaseUpdates snap={snap} openMail={id => { setActiveMail(id); setTab("emails"); }} />
 
       <div className="mt-6 space-y-6">
         <section aria-labelledby="decide">
@@ -253,6 +255,7 @@ export default function ControlRoom() {
           )}
         </section>
 
+        <CaseUpdates snap={snap} openMail={id => { setActiveMail(id); setTab("emails"); }} />
         <aside aria-labelledby="agents" className="grid items-start gap-6 lg:grid-cols-2">
           <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
           <LiveLog trace={snap.trace} />
@@ -320,22 +323,23 @@ function CaseUpdates({ snap, openMail }: { snap: Snapshot; openMail: (id: number
       const option = d.options[d.chosen_option!];
       const sent = snap.outbox.find(o => o.decision_id === d.id);
       const reply = sent && snap.inbox.filter(i => i.outbox_id === sent.id).sort((a,b) => b.id - a.id)[0];
+      const review = snap.issues.find(i => i.type === "recovery_review" && i.evidence.some(e => e.path === `decisions/${d.id}`));
       const state = d.status === "rejected" ? "Rejected" : reply ? replyOutcome(reply)
         : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
         : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
         : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
           ? "Simulated request sent. Waiting for a test reply." : "Chaser sent the request. Waiting for the supplier.")
         : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
-        : option?.actions.some(a => a.type === "human_review") ? `Assigned to ${d.approver || "the buyer"} for internal review.`
+        : review ? `Assigned to ${d.approver || "the buyer"} for internal review.`
         : "Approved. Waiting for the handoff.";
       const edition = snap.forecast.find(f => d.title.startsWith(f.edition + " ·"))?.edition;
       const accepted = sent && snap.inbox.find(i => i.outbox_id === sent.id && i.result?.confirmed_delivery);
       const outcome = accepted && edition ? forecastAfterReply(accepted, snap.forecast, edition) : "";
-      const review = snap.issues.find(i => i.type === "recovery_review" && i.evidence.some(e => e.path === `decisions/${d.id}`));
       const priced = reply && reply.result?.supplier_quote ? snap.queue.find(e => e.option.actions.some(a => a.quote_inbox_id === reply.id)) : undefined;
       return <li key={d.id}><strong>{option?.label ?? d.title}</strong>
         <span className="ml-2 text-sm text-muted">#{d.id} · {d.decided_by}</span>
         <p className="text-sm">{state}</p>{outcome && <p className="text-sm font-semibold">{outcome}</p>}
+        <History decision={d.id} activity={snap.health?.activity_version} />
         {review && <details className="text-sm"><summary className="cursor-pointer text-act">Open assigned review #{review.id}</summary>
           <p className="mt-1 font-semibold">{review.impact.note}</p><p>{review.reason}</p><p>Review status · {review.status}</p>
           <a className="text-act underline" href={API_URL + "/api/issues/" + review.id}>View review record</a></details>}
@@ -391,7 +395,7 @@ function TopBar(props: {
         <p className="text-sm text-muted">
           {props.setup?.site ? props.setup.site + " packing line" : "Packing line"}
           {props.setup && (props.setup.autonomy.mode === "control" ? " · Control mode" :
-            ` · Auto below ${formatMoney().format(props.setup.autonomy.auto_execute_below_eur)}`)}
+            ` · Auto below ${formatMoney(props.setup.currency).format(props.setup.autonomy.auto_execute_below_eur)}`)}
           {props.replayEnabled && snapshot && closes ? ` · Packing snapshot ${snapshot} · Close ${closes}` : countdown && (
             <>
               {", "}
@@ -403,7 +407,7 @@ function TopBar(props: {
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <span
-          title={props.mock ? "MOCK_MODE=true: no AI calls, no real emails" : "Live: real AI calls and emails"}
+          title={props.mock ? "Historical or simulated inputs. Email delivery is simulated." : "Live data. Email delivery follows the Chaser configuration."}
           className={`rounded px-2 py-1 text-xs font-bold ${props.mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
         >
           {props.replayEnabled ? "Historical replay" : props.mock ? "Mock mode" : "Live"}
@@ -458,8 +462,7 @@ function Hero({ editions }: { editions: Forecast[] }) {
               {f.edition} copies {f.shortfall == null ? "awaiting forecast" : short ? "projected short by close" : "short · on track"}
             </p>
             <p className="mt-1 text-sm text-muted tabular">
-              {fmt(f.still_to_pack)} still to pack
-              {f.still_to_pack != null && f.shortfall != null && `, ${fmt(Math.max(0, f.still_to_pack - (f.shortfall ?? 0)))} of them by close`}
+              <strong className="text-ink">{fmt(f.projected_packed)}</strong> total projected packed by close
               {f.limiting_part && (
                 <>
                   , held up by <span className="font-semibold text-ink">{f.limiting_part}</span>
@@ -533,9 +536,11 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
         <p className="mt-2 text-sm">{entry.next_step}</p>}
       {action?.quote_inbox_id != null && <p className="mt-1 text-sm font-semibold text-act">Quote received · Awaiting authorization</p>}
       <dl className="my-4 flex flex-wrap gap-x-7 gap-y-3 text-sm tabular">
-        <div><dt className="text-muted">{option.horizon === "future" ? "Time horizon" : "Conditional gain"}</dt><dd className="font-semibold">
-          {option.horizon === "future" ? "Future replenishment" : option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd></div>
-        <div><dt className="text-muted">{option.horizon === "future" ? "Future sourcing cost" : "Cost"}</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
+        {option.horizon !== "future" && <>
+          <div><dt className="text-muted">Conditional gain</dt><dd className="font-semibold">
+            {option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd></div>
+          <div><dt className="text-muted">Cost</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
+        </>}
         <div><dt className="text-muted">{option.horizon === "future" ? "Spend authorized" : "Approval value"}</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
         <div><dt className="text-muted">Assigned to</dt><dd>{assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
       </dl>
@@ -547,7 +552,9 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
       {entry.shared_shipment && <p className="mb-2 text-sm text-muted">
         Other options use this shipment ({entry.shared_shipment}). Count its copy gain once.
       </p>}
-      <p className="text-sm"><strong>Still needed</strong> · {entry.requirements.join(" · ")}</p>
+      {option.horizon === "future" && option.exposure?.sample_window
+        ? <p className="text-sm"><strong>First move</strong> · Check the incumbent’s {option.exposure.sample_window.sample_days}-day sample offer with Engineering and Quality.</p>
+        : <p className="text-sm"><strong>Still needed</strong> · {entry.requirements.join(" · ")}</p>}
     </div>
     <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
       {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
@@ -572,13 +579,16 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
           </table><p className="text-muted">Each alternative assumes its requirements are met.</p>
         </section>}
       </>}
+      {option.exposure?.sample_window && <SampleTiming key={entry.version} decision={entry.decision_id}
+        option={entry.option_index} window={option.exposure.sample_window} />}
       {option.review_brief && <p className="mt-2 font-medium">{option.review_brief}</p>}
-      {option.horizon === "future" && <p className="mt-2">Opening this review assigns the work to {assigned.join(" + ") || role}. Any purchase requires a separate decision.</p>}
+      {option.horizon === "future" && <p className="mt-2">Opening this review assigns the work to {assigned.join(" + ") || role}. Future sourcing cost is {cost == null ? "unknown" : approvalCurrency.format(cost)}. Any purchase requires a separate decision.</p>}
       {option.horizon !== "future" && rule && value != null && <p className="mt-2">
         {approvalCurrency.format(value)} falls in the {rule.approvers.join(" + ")} approval band
         {" "}from {approvalCurrency.format(lower)}{rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
         {option.actions.some(a => a.quote_inbox_id != null) && " This includes the original PO and the extra quoted charge."}
       </p>}
+      <History decision={entry.decision_id} option={entry.option_index} activity={snap.health?.activity_version} />
       <details className="my-3"><summary className="cursor-pointer">Linked decisions and findings</summary><ul className="mt-2 space-y-2">{entry.sources.map(source => {
         const card = snap.decisions.find(d => d.id === source.decision_id);
         return <li key={`${source.decision_id}-${source.option_index}`}>

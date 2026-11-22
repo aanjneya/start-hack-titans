@@ -5,7 +5,7 @@ Every response uses the ApiResponse envelope from API_CONTRACT.ts: {ok, data, er
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import select
 
+from ..agents.planner_history import decision_history
 from ..agents.planner_queue import buyer_queue, current_option, selection_version
 from ..agents.planner_delivery import DeliveryAdvice, SupplierQuote, already_requested
 
@@ -205,6 +206,41 @@ def get_decision(decision_id: int) -> dict:
         return ok(card.model_dump(mode="json"))
 
 
+def _decision_selection(db, decision_id, option):
+    card = db.get(DecisionCard, decision_id)
+    if not card:
+        raise HTTPException(404, "Decision not found.")
+    if option is None:
+        return card, card.chosen_option if card.chosen_option is not None else card.recommended
+    if not 0 <= option < len(card.options):
+        raise HTTPException(422, "Choose a valid option.")
+    if card.chosen_option is not None and option != card.chosen_option:
+        raise HTTPException(409, "This decision authorized another option.")
+    return card, option
+
+
+@app.get("/api/decisions/{decision_id}/history")
+def get_decision_history(decision_id: int, option: Optional[int] = None) -> dict:
+    with session() as db:
+        card, index = _decision_selection(db, decision_id, option)
+        return ok(decision_history(db, card, index))
+
+
+@app.get("/api/decisions/{decision_id}/sample-window")
+def get_sample_window(decision_id: int, requested_on: date, option: Optional[int] = None) -> dict:
+    from ..agents.planner_regulatory import project_sample_date
+
+    with session() as db:
+        card, index = _decision_selection(db, decision_id, option)
+        window = (card.options[index].get("exposure") or {}).get("sample_window") if index is not None else None
+    if not window:
+        raise HTTPException(409, "This option has no sourced sample interval and dated delivery to compare.")
+    try:
+        return ok(project_sample_date(window, requested_on))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
 @app.get("/api/buyer-queue")
 def get_buyer_queue() -> dict:
     with session() as s:
@@ -293,7 +329,13 @@ def reject(decision_id: int, req: DecideRequest | None = None) -> dict:
 
 
 @app.get("/api/trace")
-def get_trace(limit: int = 200, agent: Optional[str] = None, run_id: Optional[str] = None) -> dict:
+def get_trace(limit: int = 200, agent: Optional[str] = None, run_id: Optional[str] = None,
+              trace_id: Optional[int] = None) -> dict:
+    if trace_id is not None:
+        with session() as s:
+            entry = s.get(AgentLog, trace_id)
+            return ok([entry.model_dump(mode="json")] if entry and (not agent or entry.agent == agent)
+                      and (not run_id or entry.run_id == run_id) else [])
     return ok([e.model_dump(mode="json") for e in trace.recent(limit=limit, agent=agent, run_id=run_id)])
 
 

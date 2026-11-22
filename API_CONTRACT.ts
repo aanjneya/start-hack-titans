@@ -97,14 +97,25 @@ export interface Issue {
   updated_at: string;
 }
 
+export interface SampleWindow {
+  as_of: string; requested_on?: string; sample_days: number; sample_by: string; first_delivery: string;
+  days_between: number; source: string;
+}
+
 export interface SupplyExposure {
   supplier: string;
+  /** Open buying records the buyer can check while external applicability is unverified. */
+  verification_orders?: {po: string; line: number | null; material: string; promised: string | null}[];
   component: string;
+  component_name?: string;
   assembly: string | null;
+  assembly_name?: string;
   share: number | null;
   effective_after: string | null;
   uncertainties?: string[];
-  sample_offers?: {text: string; source: string}[];
+  sample_offers?: {text: string; source: string; days?: number}[];
+  /** Scenario using the supplier's quoted sample interval and earliest open PO date. */
+  sample_window?: SampleWindow | null;
   lead_days: number | null;
   previous_lead_days: number | null;
   order_value?: {amount: number; currency: string} | null;
@@ -210,6 +221,16 @@ export interface RiskScore {
   rating: string; // AAA..CCC
   reasons: { text: string; evidence?: Evidence[] }[];
   computed_at: string;
+}
+
+/** Decision-specific records. Each milestone comes from a linked finding, decision, mail, reply or forecast. */
+export interface DecisionHistory {
+  decision_id: number;
+  events: {
+    at: string; actor: string; title: string; detail: string;
+    record: {type: 'issue' | 'decision' | 'outbox' | 'inbox' | 'forecast'; id: number};
+    trace_id?: number; run_id?: string;
+  }[];
 }
 
 export interface AgentLogEntry {
@@ -363,11 +384,13 @@ export const API_ROUTES = {
   FORECAST: '/api/forecast', // GET -> Forecast[]
   ISSUE: '/api/issues/:id', // GET -> Issue
   DECISION: '/api/decisions/:id', // GET -> DecisionCard
+  SAMPLE_WINDOW: '/api/decisions/:id/sample-window', // GET ?requested_on=YYYY-MM-DD&option= -> SampleWindow, read-only comparison
+  DECISION_HISTORY: '/api/decisions/:id/history', // GET ?option= -> DecisionHistory, including the request that supplied a priced quote
   BUYER_QUEUE: '/api/buyer-queue', // GET -> BuyerQueueEntry[] in execution priority order
   DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
   DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest, an assigned signer can decline the recommendation
-  TRACE: '/api/trace', // GET ?limit=&agent=&run_id= -> AgentLogEntry[]
+  TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]
   RISK: '/api/risk', // GET -> RiskScore[]
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view

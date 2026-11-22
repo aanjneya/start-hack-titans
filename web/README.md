@@ -48,3 +48,6 @@ Pickup quote. PO 4500318775/2, SHP-2026-04313, 20,000 units, rev C, arrival 2026
 ```
 
 **Review priced offer** shows the fee, the amended PO, and Sofia’s approval route. The fixed buyer can inspect it. The Planner integration test simulates Sofia signing and feeds a threaded mailbox confirmation through Chaser and Ingest.
+
+
+On a future-supply card, expand the Polymarket line to see the actual market question and its source mode. Under **Why?**, **Compare sample timing** compares the scoped supplier offer with the earliest matching PO delivery. **Decision history** follows the exact finding, signer, review or supplier conversation. In the pickup simulation it includes the original inquiry and the forecast supported by the matched delivery reply.

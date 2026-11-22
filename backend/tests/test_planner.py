@@ -182,6 +182,18 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
         assert _decision_mails(card["id"])[0].status == "replied"
         assert not [log.detail for log in all_rows(AgentLog) if log.action == "error"]
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before + option["copies_gained"]
+    history = client.get(f"/api/decisions/{card['id']}/history").json()["data"]["events"]
+    titles = [e["title"] for e in history]
+    assert titles.count("Supplier quote matched") == titles.count("Delivery confirmation matched") == 1
+    assert titles.count("Supplier request sent in simulation") == titles.count("Action authorized") == 2
+    assert titles.index("Supplier quote matched") < max(i for i, title in enumerate(titles) if title == "Action authorized")
+    projection, = [e for e in history if e["title"] == "Standard forecast recalculated"]
+    assert "+5,200" in projection["detail"] and "605,200" in projection["detail"]
+    assert {e["record"]["id"] for e in history if e["record"]["type"] == "outbox"} == {
+        _decision_mails(ask_id)[0].id, spend.id}
+    client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
+    events_after = client.get(f"/api/decisions/{card['id']}/history").json()["data"]["events"]
+    assert [e["title"] for e in events_after if e not in history] == ["Duplicate reply retained"]
 
 
 def test_rejection_and_auto_threshold(tmp_path, monkeypatch, sleeve_snapshot):

@@ -32,33 +32,18 @@ class LaunchPlanner(Agent):
         super().__init__(bus)
         self._refreshed = {}
         # Restore approvals committed immediately before a process interruption.
-        outdated_baseline = False
-        for card in all_rows(DecisionCard):
-            if card.created_by != self.name:
-                continue
-            if card.status == "proposed" and card.recommended == 0 and card.options:
-                baseline = card.options[0]
-                if baseline.get("description") == "baseline" and (baseline.get("remaining_shortfall") or 0) > 0:
-                    outdated_baseline = True
-            if card.status == "proposed" and card.options and "product_id" not in card.options[0]:
-                outdated_baseline = True
+        with session() as db:
+            active = db.exec(select(DecisionCard).where(DecisionCard.created_by == self.name,
+                             DecisionCard.status.in_(["approved", "proposed"]))).all()
+            reviews = db.exec(select(Issue.id).where(Issue.type == "recovery_review",
+                              Issue.raised_by == self.name, Issue.status != "resolved").limit(1)).first()
+        for card in active:
             if card.status == "approved":
                 self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": card.chosen_option})
-
-        # Existing installations may already have a stale recommendation without another data drop.
-        if outdated_baseline:
+        # Rebuild outdated proposals from the persisted evidence without replaying a drop.
+        if reviews or any(c.status == "proposed" and c.issue_ids for c in active):
             plan = load_plan()
-            if plan:
-                self._refresh(plan, simulate(plan))
-        else:
-            # Existing deployments may already have authorized reviews when this follow-up becomes available.
-            with session() as s:
-                reviews = s.exec(select(Issue).where(Issue.type == "recovery_review", Issue.status != "resolved")).all()
-            pending = [i for i in reviews if i.impact.get("horizon") == "future"]
-            if pending:
-                plan = load_plan()
-                for issue in pending:
-                    self._sample_followup(issue, plan)
+            self._refresh(plan, simulate(plan) if plan else {})
 
     def on_truth_updated(self, event: Event) -> None:
         plan = load_plan()
@@ -144,7 +129,8 @@ class LaunchPlanner(Agent):
         closed = {i.id for i in issues if i.status == "resolved"}
         future_issues = {i.id for i in issues if relevant(i)} | followups
         with session() as s:
-            for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed")).all():
+            for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed",
+                                                         DecisionCard.created_by == self.name)).all():
                 obsolete_review = (any(o.get("horizon") == "future" for o in card.options)
                                    and not future_issues.intersection(card.issue_ids))
                 if closed.intersection(card.issue_ids) or obsolete_review:
@@ -251,6 +237,8 @@ class LaunchPlanner(Agent):
             self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": recommended, "by": "policy"})
 
     def on_decision_approved(self, event):
+        from .planner_queue import current_option
+
         with session() as s:
             card = s.get(DecisionCard, event.payload["decision_id"])
             if not card or card.created_by != self.name or card.status != "approved":
@@ -263,13 +251,20 @@ class LaunchPlanner(Agent):
                 return
             exists = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).first()
             expired = not exists and not paid_window_open(selected)
-            if expired:
+            sourced_handoff = selected.get("followup_for") or any(a.get("quote_inbox_id") for a in selected["actions"])
+            changed = not exists and not expired and sourced_handoff and current_option(s, card, card.chosen_option) is None
+            if expired or changed:
                 card.status = "outdated"
                 s.add(card)
                 s.commit()
         if expired:
             self.log("authorization_expired", "The quoted service expired before dispatch. Request current terms.",
                      data={"decision_id": card.id})
+            return
+        if changed:
+            self.log("authorization_changed", "The supporting evidence or assigned signer changed before dispatch.",
+                     data={"decision_id": card.id})
+            self.emit(events.PLANNER_RECHECK, {"decision_id": card.id})
             return
         review = next((a for a in selected["actions"] if a["type"] == "human_review"), None)
         if review:

@@ -53,6 +53,27 @@ def approvers(value, category, plan, documents, *, buyer="", **conditions):
     return resolve_approvers(roles, category, plan, documents, buyer)
 
 
+def amended_po_basis(orders, fee):
+    """Preserve the priced lines behind the authorization. Ambiguous or unconverted values stay unknown."""
+    if len({(o.po_number, o.supplier_id) for o in orders}) != 1:
+        return None
+    lines = {}
+    for o in orders:
+        if o.po_line is None or o.currency != "EUR" or o.quantity is None or o.unit_price is None:
+            return None
+        qty, unit = Decimal(str(o.quantity)), Decimal(str(o.unit_price))
+        if not qty.is_finite() or not unit.is_finite() or qty < 0 or unit < 0:
+            return None
+        terms = (o.material_id, qty, unit)
+        if o.po_line in lines and lines[o.po_line] != terms:
+            return None
+        lines[o.po_line] = terms
+    value = sum(qty * unit for _, qty, unit in lines.values())
+    return dict(po=orders[0].po_number, order_eur=float(value), fee_eur=fee, total_eur=float(value + Decimal(str(fee))),
+                lines=[dict(line=n, material=part, quantity=float(qty), unit_price=float(unit), value_eur=float(qty * unit))
+                       for n, (part, qty, unit) in sorted(lines.items())])
+
+
 def useful_until(plan, row, quantity):
     if not row.rate_per_hour or not quantity:
         return plan.deadline
@@ -129,6 +150,12 @@ def options_for(issue, plan, forecast, row):
                             approvers=signers, approval_roles=roles, assignments=assignments, approval_value_eur=value,
                             needs_approval=(value is None or policy.needs_approval(value)
                                             or (air and air_freight_limit(docs) is not None)), available=available))
+        shipment = actions[0].get("shipment_id") if actions else None
+        checks = plan.shipment_checks.get(shipment)
+        if checks:
+            choices[-1]["shipment_checks"] = checks
+            choices[-1]["evidence"].extend(evidence(r["source"], shipment, r["value"])
+                                           for check in checks for r in check["readings"])
     add("Keep the current plan", "baseline", 0, 0, "Retain released stock and confirmed line-ready deliveries.", value=0)
     targets = {a.get("target") for a in issue.suggested_actions or [] if a.get("target")}
     if issue.supplier_id:
@@ -175,9 +202,8 @@ def options_for(issue, plan, forecast, row):
             gain = alternative.projected_packed - forecast.projected_packed if forecast.projected_packed is not None else None
             orders = [o for o in all_rows(m.PurchaseOrder) if o.po_number == quote["po_number"] and o.supplier_id == msg.supplier_id]
             extra = quote["incremental_cost_eur"]
-            gross = None
-            if orders and all(o.currency == "EUR" and o.quantity is not None and o.unit_price is not None for o in orders):
-                gross = float(sum(Decimal(str(o.quantity)) * Decimal(str(o.unit_price)) for o in orders) + Decimal(str(extra)))
+            basis = amended_po_basis(orders, extra)
+            gross = basis["total_eur"] if basis else None
             expiry = parse_datetime(quote["valid_until"])
             purchase_by = min(expiry, arrival, useful_until(plan, row, gain), due)
             execute = bool(gain and gain > 0 and gross is not None and dock and approval_clock(plan.as_of) <= purchase_by)
@@ -189,6 +215,8 @@ def options_for(issue, plan, forecast, row):
                 actions=[order], value=gross, available=execute, air=quote["mode"] == "air",
                 proof=candidate["evidence"] + [evidence(f"inbox/{msg.id}", "supplier quote")])
             choices[-1]["latest_useful"] = purchase_by.isoformat()
+            if basis:
+                choices[-1]["approval_basis"] = basis
             if execute:
                 selected_gain = choices[recommended]["copies_gained"]
                 if selected_gain:
@@ -226,7 +254,7 @@ def options_for(issue, plan, forecast, row):
             review = {"type": "human_review", "product_id": pid, "part": part,
                       "reference": offer.path, "supplier_id": offer.supplier_id, "copies_at_risk": forecast.shortfall}
             add(f"Verify the offer for {qty:,} finished {material.description or part}", "supplier stock offer", cost, gain, note,
-                actions=[review], value=cost, proof=proof)
+                actions=[review], value=0, proof=proof)
             choices[-1]["needs_approval"] = True
             choices[-1]["latest_useful"] = min(useful_until(plan, row, gain) - lead, due).isoformat()
             if gain > 0:

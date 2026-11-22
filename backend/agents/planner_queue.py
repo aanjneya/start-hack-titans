@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from decimal import Decimal
 import hashlib
 import json
 import re
@@ -109,7 +110,8 @@ def _rank(item):
         qualified = (action.get("reference") or "").startswith("qualification/")
         scheduled = (o["promised"] for o in (option.get("exposure") or {}).get("orders", []) if o.get("promised"))
         return (True, 0 if qualified else 1, option.get("priority", 999), min(scheduled, default="9999-12-31"), -gain, item["key"])
-    return (not actionable_gain, 2, option.get("priority", 999), order_time, -gain, item["key"])
+    nonpreferred = (item.get("freight_comparison") or {}).get("preferred") is False
+    return (not actionable_gain, 2, option.get("priority", 999), order_time, -gain, nonpreferred, item["key"])
 
 
 def compare_freight(entries):
@@ -129,10 +131,17 @@ def compare_freight(entries):
         best = min(merit(o) for o in options)
         for entry in group:
             o = entry["option"]
-            entry["freight_comparison"] = dict(
+            others = sorted((a for a in options if a is not o), key=lambda a: (*merit(a), a["label"]))
+            comparison = dict(
                 fee_per_additional_copy=o["cost_eur"] / o["copies_gained"], preferred=merit(o) == best,
                 alternatives=[dict(label=a["label"], fee=a["cost_eur"], gain=a["copies_gained"])
-                              for a in sorted(options, key=merit) if a is not o])
+                              for a in others])
+            if others:
+                other = others[0]
+                comparison["difference"] = dict(alternative=other["label"],
+                    fee_eur=float(Decimal(str(o["cost_eur"])) - Decimal(str(other["cost_eur"]))),
+                    copies=o["copies_gained"] - other["copies_gained"])
+            entry["freight_comparison"] = comparison
 
 
 def buyer_queue(db):

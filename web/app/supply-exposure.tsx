@@ -12,6 +12,7 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
   const { orders, previous_lead_days: before, lead_days: after, assembly } = exposure;
   const change = before != null && after != null ? after - before : null;
   const knownUnits = orders.length > 0 && orders.every(o => o.quantity != null);
+  const firstDue = orders.map(o => o.promised).filter(Boolean).sort()[0];
   const headline = exposure.signals.find(signal => signal.factor === "trade_news")?.sources.find(source => source.title);
   const marketSignal = exposure.signals.find(signal => signal.sources.some(s => s.evidence.locator?.startsWith("polymarket:")));
   const market = marketSignal?.sources.find(s => s.evidence.locator?.startsWith("polymarket:"));
@@ -23,7 +24,8 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
     {headline && <p className="text-sm">{headline.title}.</p>}
     <p>{orders.length > 0
       ? <><strong>{knownUnits ? `${fmt(orders.reduce((sum, o) => sum + o.quantity!, 0))} ordered units` : "Orders in scope"}</strong>
-        {` across ${orders.length} open PO ${orders.length === 1 ? "line" : "lines"} in the supplier’s delivery window.`}</>
+        {` across ${orders.length} open PO ${orders.length === 1 ? "line" : "lines"}`}{firstDue &&
+          `, first due ${new Intl.DateTimeFormat("en-GB", {day:"numeric",month:"short",year:"numeric", timeZone:"UTC"}).format(new Date(firstDue + "T00:00:00Z"))}`}.</>
       : "The buyer needs to establish which order lines the warning covers."}
       {change != null && change > 0 ? ` Lead time grew from ${before} to ${after} days (+${change}).` :
         after != null ? ` Recorded lead time is ${after} days.` : ""}</p>
@@ -38,6 +40,19 @@ export function ExposureEvidence({ exposure: x }: { exposure: SupplyExposure }) 
   const changed = x.last_grade_change?.drivers.filter(d => d.after !== d.before)
     .sort((a, b) => Math.abs(b.after - b.before) - Math.abs(a.after - a.before));
   return <div className="mt-4 space-y-4">
+    {!!x.rating_path && x.rating_path.length > 1 && <section>
+      <h4 className="font-bold">How far does the supply risk reach?</h4>
+      <ol className="mt-2 divide-y divide-rule">{x.rating_path.map(node => <li key={node.tier + node.id} className="py-1.5">
+        <details><summary className="cursor-pointer">
+          <span className="capitalize">{node.id === x.assembly ? "Ordered assembly" : node.tier}</span> · {node.name}{" "}
+          <strong className="whitespace-nowrap">{node.previous && `${node.previous} → `}{node.rating}</strong>
+        </summary>
+          <p className="ml-4 mt-1 text-muted">{node.id} · {node.reason || "The Risk Rater recorded this grade."}</p>
+        </details>
+      </li>)}</ol>
+      <p className="mt-2 text-xs text-muted">Grades show each item’s latest risk rating and its preceding distinct grade.
+        The packing projection uses line-ready materials.</p>
+    </section>}
     {(x.signals.length > 0 || !!x.other_drivers?.length) && <section>
       <h4 className="font-bold">What changed in the supplier rating?</h4>
       {changed && changed.length > 0 && <p className="mt-1">

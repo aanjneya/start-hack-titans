@@ -1,12 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { DecisionHistory } from "../../API_CONTRACT";
-import { API_URL, getData } from "@/lib/api";
+import type { AgentLogEntry, DecisionHistory } from "../../API_CONTRACT";
+import { API_URL, getData, parseTs } from "@/lib/api";
 
 const agents: Record<string, string> = {
   watcher: "Watcher", ingest: "Ingest", reconciler: "Reconciler", risk: "Risk Rater", planner: "Planner", chaser: "Chaser", policy: "Company policy",
 };
+
+function TraceRecord({ id }: { id: number }) {
+  const [record, setRecord] = useState<AgentLogEntry>();
+  const [error, setError] = useState("");
+  const load = async () => {
+    if (record) return;
+    setError("");
+    try {
+      const [row] = await getData<AgentLogEntry[]>(`/api/trace?trace_id=${id}`);
+      if (row) setRecord(row);
+      else setError("No matching trace entry.");
+    } catch (e) { setError((e as Error).message); }
+  };
+  return <details className="mt-1 text-xs" onToggle={e => { if (e.currentTarget.open) void load(); }}>
+    <summary className="cursor-pointer text-act underline">Trace #{id}</summary>
+    {error ? <p role="alert">{error} <button className="underline" onClick={load}>Retry</button></p> :
+      record ? <div className="my-1 border-l border-rule pl-2">
+        <p className="font-semibold">{agents[record.agent] || record.agent} · {record.action.replaceAll("_", " ")}</p>
+        <p>{record.detail}</p>
+        <p className="text-muted">Run {record.run_id} · Logged {parseTs(record.ts)?.toLocaleString("en-GB", {timeZone:"UTC"})} UTC</p>
+        <a className="text-act underline" href={API_URL + "/api/trace?trace_id=" + id} target="_blank" rel="noreferrer">Raw record ↗</a>
+      </div> : <p role="status">Loading trace…</p>}
+  </details>;
+}
 
 export default function History({ decision, option, activity }: { decision: number; option?: number; activity?: string }) {
   const [open, setOpen] = useState(false);
@@ -31,8 +55,7 @@ export default function History({ decision, option, activity }: { decision: numb
       {history.events.map(e => <li key={`${e.record.type}-${e.record.id}-${e.title}`}>
         <p><strong>{e.title}</strong> · {agents[e.actor] || e.actor}</p>
         <p className="text-muted">{e.detail}</p>
-        {e.trace_id && <a className="text-xs text-act underline" href={API_URL + "/api/trace?trace_id=" + e.trace_id}
-          target="_blank" rel="noreferrer">Trace #{e.trace_id}</a>}
+        {e.trace_id && <TraceRecord id={e.trace_id} />}
       </li>)}
     </ol>}
   </details>;

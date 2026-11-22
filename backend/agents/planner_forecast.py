@@ -23,6 +23,7 @@ class Plan:
     inbound: list[dict] = field(default_factory=list)
     evidence: list[dict] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
+    shipment_checks: dict[str, list[dict]] = field(default_factory=dict)
 
 
 def simulate(plan: Plan, overrides=None, *, priority=None) -> dict[str, Forecast]:

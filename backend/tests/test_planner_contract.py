@@ -86,3 +86,16 @@ def test_recording_coapprovals_requires_the_designated_signers():
     assert client.post(url, json={"by": "Buyer", "approvals": ["CPO", "CFO"]}).status_code == 403
     assert client.post(url, json={"by": "CPO", "approvals": ["CFO", "Other"]}).status_code == 403
     assert client.post(url, json={"by": "CPO", "approvals": ["CFO"]}).status_code == 200
+
+
+def test_po_line_basis_counts_each_verified_line_once_and_requires_one_currency():
+    from backend.agents.planner_options import amended_po_basis
+    from backend.core.models import PurchaseOrder
+    line = PurchaseOrder(supplier_id="V", po_number="P", po_line=2, material_id="ASM", quantity=10,
+                         unit_price=5.25, currency="EUR")
+    same = line.model_copy(update={"source":"second export"})
+    second = line.model_copy(update={"po_line":3, "unit_price":1})
+    assert amended_po_basis([line, same, second], 4.25)["total_eur"] == 66.75
+    assert amended_po_basis([line, same.model_copy(update={"unit_price":6})], 4.25) is None
+    assert amended_po_basis([line, second.model_copy(update={"currency":"JPY"})], 4.25) is None
+    assert amended_po_basis([line, second.model_copy(update={"po_line":None})], 4.25) is None

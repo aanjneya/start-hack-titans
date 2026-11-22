@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
 from backend import system
 from backend.app.main import app
@@ -94,6 +95,11 @@ def test_real_magnets_open_one_future_review():
     assert gate["assessment"] == "PPAP" and gate["effective"] == "2025-04-01"
     assert [a["person"] for a in gate["signers"]] == ["Daniel Okafor", "Sofia Marchetti"]
     assert "PP-07" in gate["evidence"]["path"]
+    card = client.get(f"/api/decisions/{entry['decision_id']}").json()["data"]
+    index = next(i for i, e in enumerate(card["evidence"]) if e.get("locator") == "delivery window")
+    passage = client.get(f"/api/decisions/{card['id']}/evidence/{index}").json()["data"]
+    assert "move out by 6 weeks" in passage["evidence"]["quote"]
+    assert "Printed parts without magnets are not affected" in passage["excerpt"]
     window = exposure["sample_window"]
     assert (window["as_of"], window["sample_by"], window["first_delivery"], window["days_between"]) == (
         "2026-11-21", "2026-12-01", "2026-12-14", 13)
@@ -103,6 +109,9 @@ def test_real_magnets_open_one_future_review():
         ("4500318765", 2, "2026-12-14", 23000), ("4500318781", 1, "2027-01-04", 25500),
         ("4500318786", 3, "2027-01-15", 24500)]
     grade = exposure["last_grade_change"]
+    assert [(n["tier"], n["id"], n["previous"], n["rating"]) for n in exposure["rating_path"]] == [
+        ("supplier", "SUP-0029", "A", "CCC"), ("part", "CMP-MAG-005", "AA", "CCC"),
+        ("part", "CMP-GAM-007", "AA", "B"), ("product", "FG-GH6-CE", "BBB", "CCC")]
     assert (grade["previous"], grade["current"]) == ("A", "CCC")
     assert {"factor": "external_politics", "before": 11.2, "after": 11.2} in grade["drivers"]
     signals = {s["factor"]: s for s in exposure["signals"]}
@@ -291,6 +300,27 @@ def test_unpriced_or_mixed_currency_lines_have_no_aggregate_value():
     assert order_value([line(None, "EUR")]) is None
 
 
+def test_archived_decision_source_does_not_borrow_other_or_changed_documents():
+    client = TestClient(app)
+    card, = store.add_all([m.DecisionCard(evidence=[dict(path="news_feed", locator="one story",
+                                        quote="Production moves to July.")])])
+    docs = store.add_all([
+        m.Document(path="news_feed#July", title="Order update", text="Latest notice. Production moves to July. Contact Quality."),
+        m.Document(path="news_feed#other", title="Other article", text="Production moves to August."),
+        m.Document(path="newsXfeed#August", title="Different feed", text="Production moves to July. Different article.")])
+    url = f"/api/decisions/{card.id}/evidence/"
+    passage = client.get(url + "0").json()["data"]
+    assert passage["title"] == "Order update" and "Contact Quality" in passage["excerpt"]
+    with store.session() as db:
+        row = db.get(m.Document, docs[0].id)
+        row.text = "This delivery was cancelled."
+        db.add(row)
+        db.commit()
+    revised = client.get(url + "0").json()["data"]
+    assert revised["excerpt"] is None and revised["evidence"]["quote"] == passage["evidence"]["quote"]
+    assert client.get(url + "-1").status_code == client.get(url + "1").status_code == 404
+
+
 def test_sample_scenario_requires_clear_terms_and_a_future_order():
     from backend.agents.planner_regulatory import sample_window
     as_of = date(2026, 6, 20)
@@ -301,6 +331,40 @@ def test_sample_scenario_requires_clear_terms_and_a_future_order():
     assert sample_window([ten, dict(ten, days=5)], as_of, [order]) is None
     assert sample_window([dict(source="10 working days")], as_of, [order]) is None
     assert sample_window([ten], as_of, []) is None
+
+
+def test_sample_inquiry_requires_current_terms_for_the_same_article():
+    from backend.agents.planner_regulatory import scoped_samples
+    targets = {"AX-901"}
+    notice = m.Document(path="customer/notice", text="AX-901 requires a licence. Alternative hinges can be sampled within 8 days.")
+    assert scoped_samples([notice], targets, {"CL-77"}, "Door hinge")[0]["days"] == 8
+    notice.text += " CL-77 is a separate article."
+    assert scoped_samples([notice], targets, {"CL-77"}, "Door hinge") == []
+    notice.text += " AX-901 can be sampled within 4 working days."
+    scoped, = scoped_samples([notice], targets, {"CL-77"}, "Door hinge")
+    assert "AX-901" in scoped["text"] and "days" not in scoped
+
+    client = TestClient(app)
+    for drop in list_drops():
+        system.replay_step()
+        if any("components_delta" in name and "PackRight" in name for name in drop.added + drop.changed):
+            break
+    entry, = [q for q in future(client) if q["option"]["button_label"] == "Start qualification review"]
+    client.post(f"/api/decisions/{entry['decision_id']}/approve",
+                json={"by": "Paul Winter", "version": entry["version"]}).raise_for_status()
+    inquiry, = [q for q in future(client) if q["option"].get("followup_for") == entry["decision_id"]]
+    original = entry["option"]["exposure"]["sample_offers"][0]
+    with store.session() as db:
+        doc = db.exec(select(m.Document).where(m.Document.path == original["source"])).one()
+        doc.text = " ".join(doc.text.split()).replace(original["text"], "PR-CC-0312 clear cases can be sampled within 2 days.")
+        db.add(doc)
+        db.commit()
+    before = len(store.all_rows(m.OutboxMessage))
+    stale = client.post(f"/api/decisions/{inquiry['decision_id']}/approve",
+                        json={"by": "Paul Winter", "version": inquiry["version"]})
+    assert stale.status_code == 409 and len(store.all_rows(m.OutboxMessage)) == before
+    assert not any(q["option"].get("followup_for") == entry["decision_id"] for q in future(client))
+    assert client.get(f"/api/decisions/{inquiry['decision_id']}").json()["data"]["status"] == "outdated"
 
 
 def test_qualification_deduplication_follows_the_component_inside_the_assembly():
@@ -337,5 +401,6 @@ def test_market_warning_opens_a_targeted_check_without_promising_order_impact():
     assert choice["exposure"]["verification_orders"] == [
         dict(po="P1", line=1, material="A1", promised="2027-01-10")]
     assert choice["exposure"]["signals"][0]["sources"][0]["origin"] == "Live at collection"
+    assert [(n["tier"], n["id"]) for n in choice["exposure"]["rating_path"]] == [("supplier", "VN-X")]
     assert any(e["path"] == "open-orders" for e in entry["evidence"])
     assert not store.all_rows(m.Forecast) and not store.all_rows(m.OutboxMessage)

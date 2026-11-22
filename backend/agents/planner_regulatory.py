@@ -2,12 +2,12 @@
 from datetime import date, timedelta
 from decimal import Decimal
 import re
-from urllib.parse import urlsplit
 
 from sqlmodel import select
 
 from ..core import models as m, policy
 from ..core.store import all_rows, find_rows, latest_by, session
+from .planner_risk import buyer_risk, source_kind
 from .planner_counts import fitted_components
 from .planner_inputs import evidence
 from .planner_people import approval_assignments, signer_names, supplier_release_gate
@@ -31,85 +31,6 @@ def relevant(issue):
                 ("compliance" in a.get("label", "").lower() or any(
                     e.get("locator", "").startswith("regulations:") for e in issue.evidence)))
                for a in actions)
-
-
-def source_kind(item, documents, matched_doc=None):
-    path = item["path"]
-    quote = item.get("quote", "").lower()
-    if "offline" in quote or item.get("offline") is True:
-        return "Offline example"
-    host = (urlsplit(path).hostname or "").lower()
-    if host:
-        for domain in ("federalregister.gov", "eur-lex.europa.eu", "wto.org"):
-            if host == domain or host.endswith("." + domain):
-                return "Official publication"
-        if host == "polymarket.com" or host.endswith(".polymarket.com"):
-            return "Market odds"
-        if host == "news.google.com" or item.get("locator", "").startswith(("gnews:", "gdelt:")):
-            return "News coverage"
-    doc = matched_doc or documents.get(path)
-    if doc:
-        if doc.kind == "news":
-            return "News coverage"
-        if doc.supplier_id:
-            return "Supplier evidence"
-    return item.get("source_kind", "Unknown provenance")
-
-
-EXTERNAL_FACTORS = {"trade_news", "external_politics", "weather", "telemetry", "regulatory_change"}
-
-
-def supplier_signals(supplier_id, documents):
-    """Use only drivers retained on this supplier's latest rating in this database."""
-    with session() as db:
-        query = select(m.RiskScore).where(m.RiskScore.entity_type == "supplier",
-                                          m.RiskScore.entity_id == supplier_id).order_by(m.RiskScore.id.desc())
-        score = db.exec(query.limit(1)).first()
-        if not score:
-            return dict(supplier_rating=None, signals=[], other_drivers=[], last_grade_change=None)
-        previous = db.exec(query.where(m.RiskScore.grade != score.grade).limit(1)).first()
-        # Compare the two records either side of the grade transition, even
-        # when later evidence has changed contributions within the same grade.
-        first = None
-        if previous:
-            first = db.exec(select(m.RiskScore).where(m.RiskScore.entity_type == "supplier",
-                            m.RiskScore.entity_id == supplier_id, m.RiskScore.id > previous.id
-                            ).order_by(m.RiskScore.id).limit(1)).one()
-    signals = []
-    for reason in score.reasons:
-        factor = reason.get("factor")
-        if factor not in EXTERNAL_FACTORS:
-            continue
-        sources = []
-        for item in reason.get("evidence", []):
-            path = item.get("path", "")
-            if not path:
-                continue
-            quote = item.get("quote", "")
-            doc = documents.get(path)
-            if not doc and quote:
-                # A news feed can contain multiple dated stories in the same file.
-                doc = next((d for d in documents.values() if d.path.startswith(path + "#")
-                            and quote.strip() in d.text), None)
-            proof = dict(item, source_kind=source_kind(item, documents, doc))
-            origin = ("Offline example" if proof["source_kind"] == "Offline example" else
-                      "Portal record" if doc or not urlsplit(path).scheme else
-                      "Live at collection" if "live " in quote.lower() else "Collection mode unknown")
-            sources.append(dict(evidence=proof, origin=origin, title=doc.title if doc else "",
-                                published=doc.published_at.date().isoformat() if doc and doc.published_at else None))
-        if sources:
-            signals.append(dict(factor=factor, text=reason["text"], points=reason["points"], sources=sources))
-    retained = {s["factor"] for s in signals}
-    breakdown = next((reason["breakdown"] for reason in score.reasons if "breakdown" in reason), {})
-    other = [dict(factor=k, points=v) for k, v in sorted(breakdown.items())
-             if k in EXTERNAL_FACTORS - retained and v > 0]
-    transition = None
-    if previous and first:
-        old = next((r["breakdown"] for r in previous.reasons if "breakdown" in r), {})
-        new = next((r["breakdown"] for r in first.reasons if "breakdown" in r), {})
-        transition = dict(previous=previous.rating, current=first.rating,
-                          drivers=[dict(factor=k, before=old[k], after=new[k]) for k in sorted(old.keys() & new.keys())])
-    return dict(supplier_rating=score.rating, signals=signals, other_drivers=other, last_grade_change=transition)
 
 
 def open_orders(supplier_id, dated, part=None, after=None):
@@ -163,6 +84,36 @@ def project_sample_date(window, requested_on):
                 days_between=(first - sample_by).days)
 
 
+def mentions(text, identifiers):
+    return any(re.search(r"(?<![\w-])" + re.escape(ref) + r"(?![\w-])", text, re.I)
+               for ref in identifiers if ref)
+
+
+def scoped_samples(documents, targets, other_articles, component_name):
+    """Attribute a supplier's sample terms to this article or an explicitly related alternative."""
+    subject_words = {w.rstrip("s") for w in re.findall(r"[a-z]{4,}", (component_name or "").lower())}
+    subject_words -= {"part", "unit", "supplier", "component", "assembly", "with", "without", "finished"}
+    offers = []
+    for doc in documents:
+        text = " ".join(doc.text.split())
+        several_articles = mentions(text, other_articles)
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            terms = re.search(r"\bcan be sampled within (\d{1,4}) (calendar |business |working )?days?\b",
+                              sentence, re.I)
+            if not terms or mentions(sentence, other_articles):
+                continue
+            named = mentions(sentence, targets)
+            sample_words = {w.rstrip("s") for w in re.findall(r"[a-z]{4,}", sentence.lower())}
+            related = (not several_articles and bool(subject_words & sample_words)
+                       and re.search(r"\b(?:alternative|replacement)\b", sentence, re.I))
+            if named or related:
+                offer = dict(text=sentence, source=doc.path)
+                if not terms[2] or terms[2].lower() == "calendar ":
+                    offer["days"] = int(terms[1])
+                offers.append(offer)
+    return offers
+
+
 def regulatory_option(issue, plan=None):
     if not relevant(issue) or issue.status == "resolved":
         return None
@@ -186,19 +137,23 @@ def regulatory_option(issue, plan=None):
     documents = {d.path: d for d in all_rows(m.Document)}
     proof = list(issue.evidence or [])
     part_refs = {target, mapping.supplier_ref if mapping else ""} - {""}
-    for alias in find_rows(m.Alias, kind="part", canonical_id=target):
+    other_refs = {ref for p in mappings if p.component_id not in {component, target}
+                  for ref in (p.component_id, p.supplier_ref) if ref}
+    for alias in find_rows(m.Alias, kind="part"):
         origin = documents.get(alias.source)
-        if (supplier and origin and origin.supplier_id == supplier.supplier_id and alias.kind == "part"
-                and alias.canonical_id == target and (alias.confirmed or alias.confidence == 1)):
-            part_refs.add(alias.alias)
-            proof.append(dict(evidence(alias.source, alias.alias, f"{alias.alias} = {target}"), source_kind="Supplier evidence"))
+        if supplier and origin and origin.supplier_id == supplier.supplier_id and (alias.confirmed or alias.confidence == 1):
+            if alias.canonical_id == target:
+                part_refs.add(alias.alias)
+                proof.append(dict(evidence(alias.source, alias.alias, f"{alias.alias} = {target}"), source_kind="Supplier evidence"))
+            elif alias.canonical_id != component:
+                other_refs.add(alias.alias)
     notice_lines = []
     for doc in documents.values():
         if not supplier or doc.kind != "notice" or doc.supplier_id != supplier.supplier_id:
             continue
         # Bind timing to the same sentence as the article. A notice may cover several unrelated lines.
         for sentence in re.split(r"(?<=[.!?])\s+", " ".join(doc.text.split())):
-            if any(re.search(r"(?<![\w-])" + re.escape(ref) + r"(?![\w-])", sentence, re.I) for ref in part_refs):
+            if mentions(sentence, part_refs):
                 notice_lines.append((doc, sentence))
                 proof.append(dict(evidence(doc.path, "supplier article", sentence), source_kind="Supplier evidence"))
     history = [c for c in changes if mapping and c.table_name == "supplier_part_map" and c.row_id == mapping.id
@@ -251,18 +206,10 @@ def regulatory_option(issue, plan=None):
     label = f"Check supply exposure for {subject_name}"
     if qualify:
         label = f"Qualify a backup source for {component_name or name}"
-    sample_offers = []
-    if qualify:
-        for path in sorted({d.path for d, _ in notice_lines}):
-            sentences = re.split(r"(?<=[.!?])\s+", " ".join(documents[path].text.split()))
-            for line in sentences:
-                terms = re.search(r"\bcan be sampled within (\d{1,4}) (calendar |business |working )?days?\b", line, re.I)
-                if terms:
-                    offer = dict(text=line, source=path)
-                    if not terms[2] or terms[2].lower() == "calendar ":
-                        offer["days"] = int(terms[1])
-                    sample_offers.append(offer)
-                    proof.append(dict(evidence(path, "supplier sample terms", line), source_kind="Supplier evidence"))
+    notices = [documents[path] for path in sorted({d.path for d, _ in notice_lines})]
+    sample_offers = scoped_samples(notices, part_refs | {component}, other_refs, component_name) if qualify else []
+    proof.extend(dict(evidence(o["source"], "supplier sample terms", o["text"]), source_kind="Supplier evidence")
+                 for o in sample_offers)
     facts.append(f"Applies to deliveries after {cutoff.isoformat()}." if cutoff else "Effective date unknown.")
     if sample_offers:
         brief = ("Ask Engineering and Quality to assess the incumbent’s sample terms. "
@@ -293,6 +240,12 @@ def regulatory_option(issue, plan=None):
            and (not b.valid_from or b.valid_from <= dated) and (not b.valid_to or b.valid_to >= dated)]
     products = {p.product_id: p.name for p in all_rows(m.Product)}
     pids = sorted({b.parent_id for b in bom if b.parent_id in products})
+    nodes = [("supplier", issue.supplier_id, subject_name)] if issue.supplier_id else []
+    if source and component:
+        nodes.append(("part", component, component_name))
+        if assembly:
+            nodes.append(("part", assembly, name))
+        nodes.extend(("product", pid, products[pid]) for pid in pids)
     roles = policy.approvers_for(0)
     buyers = {po.buyer for po in (pos or verify) if po.buyer}
     buyer = next(iter(buyers)) if len(buyers) == 1 else ""
@@ -318,7 +271,7 @@ def regulatory_option(issue, plan=None):
                     lead_days=mapping.lead_time_days if mapping else None, previous_lead_days=previous,
                     uncertainties=uncertainty, qualification_gate=gate, sample_offers=sample_offers, sample_window=sample_window(sample_offers, dated, pos),
                     order_value=order_value(pos),
-                    effective_after=cutoff.isoformat() if cutoff else None, **supplier_signals(issue.supplier_id, documents),
+                    effective_after=cutoff.isoformat() if cutoff else None, **buyer_risk(nodes, documents),
                     verification_orders=[dict(po=o.po_number, line=o.po_line, material=o.material_id,
                                               promised=o.promised_date.isoformat() if o.promised_date else None)
                                          for o in verify[:3]],

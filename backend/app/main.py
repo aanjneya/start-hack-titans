@@ -62,7 +62,9 @@ def _chaser_poll_loop(stop) -> None:
 async def lifespan(_: FastAPI):
     import threading
 
-    system.bus()  # creates tables + registers agents
+    with system._lock:
+        trace.new_run_id()
+        system.bus().run_until_idle()  # resume committed decisions after every agent has subscribed
     stop = threading.Event()
     s = get_settings()
     if s.watch_interval_min > 0 and not s.mock_mode:
@@ -224,6 +226,17 @@ def get_decision_history(decision_id: int, option: Optional[int] = None) -> dict
     with session() as db:
         card, index = _decision_selection(db, decision_id, option)
         return ok(decision_history(db, card, index))
+
+
+@app.get("/api/decisions/{decision_id}/evidence/{index}")
+def get_decision_source(decision_id: int, index: int) -> dict:
+    from ..agents.planner_evidence import read_source
+
+    with session() as db:
+        card = db.get(DecisionCard, decision_id)
+        if not card or not 0 <= index < len(card.evidence):
+            raise HTTPException(404, "Citation not found on this decision.")
+        return ok(read_source(db, card.evidence[index]))
 
 
 @app.get("/api/decisions/{decision_id}/sample-window")

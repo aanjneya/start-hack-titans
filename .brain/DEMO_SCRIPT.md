@@ -15,6 +15,8 @@
 
 **Evening replay.** At the 21:38 drop Hamburg projects 608,000 Standard (32,000 short, clear cases) and 66,100 Collector’s (5,900 short, art books). Treat the terminal pickup and book offer as conditional recoveries.
 
+**Evidence the presenter can open.** In the magnet case, select **Read the supplier’s delivery notice** under **Why?**. The same card shows the historical grade chain from PackRight (A → CCC) through the magnet (AA → CCC) to Collector’s Edition (BBB → CCC). The ordered box itself moves from AA to B. **Compare sample timing** is available beside the primary action. Under the evening terminal review, the ERP records a discharge while the tracker still reports transit. Contacting the terminal is the next useful check.
+
 ## 3. Backup Plan
 - **Layer 1 (Primary)**: Use the verified `jivi` buyer screen with the dedicated demo database.
 - **Layer 2 (Wi-Fi / API drop)**: Open the prepared local replay backend with `MOCK_MODE=true`.

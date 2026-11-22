@@ -9,13 +9,33 @@ from datetime import timedelta
 
 from ..core import models as m
 from ..core.parsing import parse_datetime
-from ..core.store import all_rows
+from ..core.store import all_rows, latest_by
 from .planner_counts import fitted_components, receiving_corrections, site_counts
 from .planner_forecast import Plan
 
 
 def evidence(path, locator, quote=""):
     return {"path": path.partition("#")[0], "locator": locator, "quote": quote, "sha256": ""}
+
+
+def shipment_checks(shipments, conflicts):
+    """Attach only unresolved disagreements that still match both operational sources."""
+    by_source = {(s.shipment_id, s.source): s for s in latest_by(shipments, "shipment_id", "source")}
+    checks = defaultdict(list)
+    for c in conflicts:
+        if c.entity != "shipment" or c.status == "resolved" or c.field not in {"status", "eta"}:
+            continue
+        readings = []
+        for source, expected in ((c.source_a, c.value_a), (c.source_b, c.value_b)):
+            row = by_source.get((c.entity_id, source))
+            if not row or str(getattr(row, c.field) or "") != expected:
+                break
+            readings.append(dict(value=expected, source=source, note=row.note))
+        if len(readings) == 2 and readings[0]["value"] != readings[1]["value"]:
+            check = dict(field=c.field, readings=readings)
+            if check not in checks[c.entity_id]:
+                checks[c.entity_id].append(check)
+    return dict(checks)
 
 
 def clock(text, anchor):
@@ -234,7 +254,9 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             advice[(msg.supplier_id, fact["po_number"], fact["po_line"], fact["shipment_id"])] = (fact, msg.id)
     shipping_advices = [d for d in documents if d.kind == "shipping_advice"]
     visited = set()
-    for ship in sorted(all_rows(m.Shipment), key=lambda s: (s.id or 0)):
+    shipments = list(all_rows(m.Shipment))
+    plan.shipment_checks = shipment_checks(shipments, all_rows(m.Conflict))
+    for ship in sorted(shipments, key=lambda s: (s.id or 0)):
         if ship.shipment_id in visited or ship.dest_site != site:
             continue
         visited.add(ship.shipment_id)

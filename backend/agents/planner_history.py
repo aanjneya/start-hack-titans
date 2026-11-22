@@ -118,6 +118,9 @@ def decision_history(db, card, index):
         expired = traces.get(("decision_id", c.id, "authorization_expired"))
         if expired:
             history.append(_event(expired.ts, "Planner", "Quote expired before dispatch", expired.detail, "decision", c.id, expired))
+        changed = traces.get(("decision_id", c.id, "authorization_changed"))
+        if changed:
+            history.append(_event(changed.ts, "Planner", "Authorization needs new evidence", changed.detail, "decision", c.id, changed))
     for review in reviews:
         history.append(_event(review.created_at, "Planner", "Internal review opened",
                               f"{card.approver} · {review.impact.get('note') or review.summary}", "issue", review.id,

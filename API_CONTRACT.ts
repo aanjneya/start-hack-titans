@@ -42,6 +42,14 @@ export interface Evidence {
   quote: string;
 }
 
+/** The decision-time citation plus a bounded excerpt when its words match an ingested source. */
+export interface DecisionSource {
+  evidence: Evidence;
+  title: string;
+  excerpt: string | null;
+  published: string | null;
+}
+
 export type IssueKind = 'missing_info' | 'copies_at_risk' | 'human_check';
 
 /** FINDING FORMAT v1 (.brain/DATA_FORMAT.md): the one shape every agent uses to hand a problem on. */
@@ -109,6 +117,9 @@ export interface SampleWindow {
 
 export interface SupplyExposure {
   supplier: string;
+  /** Last stored grades for the named supplier, sourced material and products connected by the effective BOM. */
+  rating_path?: {tier: 'supplier' | 'part' | 'product'; id: string; name: string;
+    rating: string; previous: string | null; reason: string}[];
   /** Open buying records the buyer can check while external applicability is unverified. */
   verification_orders?: {po: string; line: number | null; material: string; promised: string | null}[];
   component: string;
@@ -140,6 +151,9 @@ export interface SupplyExposure {
 }
 
 export interface DecisionOption {
+  shipment_checks?: {field: 'status' | 'eta'; readings: {value: string; source: string; note: string}[]}[];
+  approval_basis?: {po: string; order_eur: number; fee_eur: number; total_eur: number;
+    lines: {line: number; material: string; quantity: number; unit_price: number; value_eur: number}[]};
   /** Optional, separately authorized correspondence on an assigned internal review. */
   followup_for?: number;
   exposure?: SupplyExposure;
@@ -195,6 +209,8 @@ export interface BuyerQueueEntry {
     fee_per_additional_copy: number | null;
     preferred: boolean;
     alternatives: {label: string; fee: number; gain: number}[];
+    /** Chosen fee and copies minus the best other service for this same line. */
+    difference?: {alternative: string; fee_eur: number; copies: number};
   };
   on_time_recovery: boolean;
   shared_shipment: string | null; // Alternatives using the same edition and shipment line share capacity
@@ -400,6 +416,7 @@ export const API_ROUTES = {
   DECISION: '/api/decisions/:id', // GET -> DecisionCard
   SAMPLE_WINDOW: '/api/decisions/:id/sample-window', // GET ?requested_on=YYYY-MM-DD&option= -> SampleWindow, read-only comparison
   DECISION_HISTORY: '/api/decisions/:id/history', // GET ?option= -> DecisionHistory, including the request that supplied a priced quote
+  DECISION_SOURCE: '/api/decisions/:id/evidence/:index', // GET -> DecisionSource, index in the stored card evidence
   BUYER_QUEUE: '/api/buyer-queue', // GET -> BuyerQueueEntry[] in execution priority order
   DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest

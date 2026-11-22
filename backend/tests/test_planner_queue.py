@@ -31,9 +31,14 @@ def test_evening_queue_preserves_findings_and_ranks_conditional_actions():
     books, pickup = items[:2]
     assert books["option"]["description"] == "supplier stock offer"
     assert (books["option"]["cost_eur"], books["option"]["copies_gained"]) == (16800, 2500)
+    assert books["option"]["approval_value_eur"] == 0  # price of goods versus authority to verify the offer
     assert "freight" in " ".join(books["requirements"]) and "dock" in " ".join(books["requirements"])
     assert pickup["option"]["description"] == "port pickup" and pickup["option"]["copies_gained"] == 25200
     assert pickup["option"]["cost_eur"] is None and pickup["shared_shipment"] == "SHP-2026-04276"
+    check, = pickup["option"]["shipment_checks"]
+    assert check["field"] == "status" and {r["value"] for r in check["readings"]} == {"arrived_port", "in_transit"}
+    assert {r["note"] for r in check["readings"]} == {"discharged at CTA Hamburg, available for pick-up", "RP: call terminal"}
+    assert "shipment_checks" not in books["option"]
     assert any(s["related_review"] for s in books["sources"])
     assert len([i for i in items if i["option"]["description"] == "port pickup"]) == 1
     assert len([i for i in items if i["option"]["description"] == "supplier stock offer"]) == 1
@@ -97,6 +102,9 @@ def test_stale_priced_action_cannot_dispatch(tmp_path, change):
     client.post("/api/inbox", json=dict(reply, quote=quote)).raise_for_status()
     entry, = [e for e in queue(client) if e["option"]["description"] == "pickup"]
     assert entry["option"]["approval_value_eur"] == 53150 and entry["option"]["approvers"] == ["Sofia Marchetti"]
+    basis = entry["option"]["approval_basis"]
+    assert (basis["order_eur"], basis["fee_eur"], basis["total_eur"]) == (52650, 500, 53150)
+    assert sum(row["value_eur"] for row in basis["lines"]) == 52650
     before = len(all_rows(OutboxMessage))
     # Change evidence before a truth.updated handler has superseded the displayed source card.
     with session() as db:
@@ -136,6 +144,9 @@ def test_competing_freight_quotes_can_be_compared_but_only_one_can_be_ordered(tm
     assert all(e["option"]["copies_gained"] == 5200 for e in offers.values())
 
     assert offers["pickup"]["freight_comparison"]["preferred"]
+    assert offers["pickup"]["freight_comparison"]["difference"] == {
+        "alternative": "Accept air quote", "fee_eur": -100, "copies": 0}
+    assert list(offers) == ["pickup", "air"]
     assert not offers["air"]["freight_comparison"]["preferred"]
     assert offers["pickup"]["freight_comparison"]["fee_per_additional_copy"] == pytest.approx(500 / 5200)
     assert offers["pickup"]["freight_comparison"]["alternatives"] == [
@@ -151,6 +162,44 @@ def test_competing_freight_quotes_can_be_compared_but_only_one_can_be_ordered(tm
     assert approve("air").status_code == 409
     assert len(all_rows(OutboxMessage)) == count + 1
     assert not any(e["option"]["actions"][0].get("quote_inbox_id") for e in queue(client))
+
+
+@pytest.mark.parametrize("dock_retained", [True, False])
+def test_restart_resumes_committed_approval_only_with_current_release(tmp_path, monkeypatch, dock_retained):
+    from backend.core import events, store
+
+    client = TestClient(app)
+    for _ in range(sleeve_scenario_steps()):
+        system.replay_step()
+    _, reply, fact = prepare_quote_request(client, tmp_path)
+    quote = dict(fact, mode="pickup", incremental_cost_eur=500, valid_until=fact["arrival"])
+    client.post("/api/inbox", json=dict(reply, quote=quote)).raise_for_status()
+    entry, = [e for e in queue(client) if e["option"]["description"] == "pickup"]
+    decision_id = entry["decision_id"]
+    emit = system.emit
+    with monkeypatch.context() as pause:
+        pause.setattr(system, "emit", lambda name, *args, **kwargs: {} if name == events.DECISION_APPROVED
+                      else emit(name, *args, **kwargs))
+        approved = client.post(f"/api/decisions/{decision_id}/approve", json={
+            "by": "Sofia Marchetti", "option": entry["option_index"], "version": entry["version"]})
+        assert approved.json()["data"]["decision"]["status"] == "approved"
+    if not dock_retained:
+        with session() as db:
+            slot = next(d for d in db.exec(select(Document)).all() if d.path.startswith("site/slot.csv") and d.extracted.get("rows"))
+            slot.extracted = {**slot.extracted, "rows": []}
+            db.add(slot)
+            db.commit()
+    count = len(all_rows(OutboxMessage))
+    for _ in range(2):
+        store.dispose_engine()
+        system._bus = None
+        with TestClient(app) as restarted:
+            state = restarted.get(f"/api/decisions/{decision_id}").json()["data"]
+            assert state["status"] == ("executed" if dock_retained else "outdated")
+            assert len(all_rows(OutboxMessage)) == count + int(dock_retained)
+            if not dock_retained:
+                events_after = restarted.get(f"/api/decisions/{decision_id}/history").json()["data"]["events"]
+                assert any(e["title"] == "Authorization needs new evidence" for e in events_after)
 
 
 def test_live_clock_expires_an_offer_between_snapshot_and_dispatch(tmp_path, monkeypatch):

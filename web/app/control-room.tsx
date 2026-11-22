@@ -1,17 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  ago, API_URL, clock, fmt, getData, parseTs, postData,
+  ago, API_URL, clock, eur, fmt, getData, parseTs, postData,
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
 import type { BuyerQueueEntry, CustomerSetup } from "../../API_CONTRACT";
 import DataDrawer from "./data-drawer";
+import { actionLine, entryDetail, humanizeAction } from "./observability/agent-meta";
+import { RiskBoard, SeverityLabel } from "./risk-board";
 
 type Snapshot = {
-  queue: BuyerQueueEntry[];
+  /** The backend's ranked buyer queue. Null until it first loads: an older backend has none, and the tiles then
+   *  rank the actions themselves. A failed refresh keeps the last queue. */
+  queue: BuyerQueueEntry[] | null;
   setup: CustomerSetup | null;
   health: HealthCheckResponse | null;
   forecast: Forecast[];
@@ -23,7 +27,7 @@ type Snapshot = {
   trace: AgentLogEntry[];
 };
 
-const EMPTY: Snapshot = { queue: [], setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
+const EMPTY: Snapshot = { queue: null, setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
 
 const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "watcher", name: "Watcher", job: "Watches the supplier portal for new files", color: "#5a6478" },
@@ -35,14 +39,25 @@ const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "human", name: "You", job: "Approve or reject", color: "#16213a" },
 ];
 const agentColor = (id: string) => AGENTS.find((a) => a.id === id)?.color ?? "#5a6478";
+const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+/** Trace names that are not one of the agents: supplier replies come in through the inbox; a replayed drop is the
+ *  Watcher's work (as in the Agents panel), anything else the coordinator logs (its loop guard) stays "Coordinator". */
+const OTHER_NAMES: Record<string, string> = { api: "Inbox" };
+const agentName = (id: string, action?: string) =>
+  AGENTS.find((a) => a.id === id)?.name ?? (id === "coordinator" && action === "drop" ? "Watcher" : OTHER_NAMES[id]) ?? sentenceCase(id);
 
-const SEVERITY: Record<number, { label: string; cls: string }> = {
-  5: { label: "Line stops", cls: "bg-stop text-white" },
-  4: { label: "Copies at risk", cls: "bg-stop-soft text-stop" },
-  3: { label: "Answer today", cls: "bg-warn-soft text-warn" },
-  2: { label: "Watch", cls: "bg-act-soft text-act" },
-  1: { label: "Info", cls: "bg-dock text-muted" },
-};
+
+/** "Email SUP-0028 · PO 4500318775/2 · SHP-2026-04313" for each action of an option (who it reaches). */
+function actionTargets(actions: Record<string, unknown>[] | undefined): string[] {
+  return (actions ?? []).map((a) => {
+    const v = (k: string) => (a[k] == null || a[k] === "" ? "" : String(a[k]));
+    const po = v("po_number") ? `PO ${v("po_number")}${v("po_line") ? `/${v("po_line")}` : ""}` : "";
+    const type = v("type").replaceAll("_", " ");
+    return [type && type[0].toUpperCase() + type.slice(1), v("supplier_id"), po, v("shipment_id"), v("part")]
+      .filter(Boolean)
+      .join(", ");
+  });
+}
 
 async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missing: string[] }> {
   const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue] = await Promise.allSettled([
@@ -53,7 +68,7 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missin
     getData<OutboxMessage[]>("/api/outbox"),
     getData<InboxMessage[]>("/api/inbox"),
     getData<RiskScore[]>("/api/risk"),
-    getData<AgentLogEntry[]>("/api/trace?limit=400"),
+    getData<AgentLogEntry[]>("/api/trace?limit=500"),
     getData<CustomerSetup>("/api/setup"),
     getData<BuyerQueueEntry[]>("/api/buyer-queue"),
   ]);
@@ -64,7 +79,7 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missin
     online: health.status === "fulfilled",
     snap: {
       setup: val(setup, null),
-      queue: val(queue, []),
+      queue: val(queue, null),
       health: val(health, null),
       forecast: val(forecast, []),
       decisions: val(decisions, []),
@@ -83,8 +98,10 @@ export default function ControlRoom() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [now, setNow] = useState<number>(0);
   const [dropBusy, setDropBusy] = useState(false);
+  /** When the running drop started: agents that log after this are working on it. */
+  const [dropStartedAt, setDropStartedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string>("");
-  const [tab, setTab] = useState<"findings" | "emails" | "risk">("findings");
+  const [tab, setTab] = useState<"activity" | "findings" | "emails" | "risk">("activity");
   const [showData, setShowData] = useState(false);
   const closeData = useCallback(() => setShowData(false), []);
 
@@ -113,6 +130,7 @@ export default function ControlRoom() {
   }, [refresh]);
 
   const nextDrop = async () => {
+    setDropStartedAt(Date.now());
     setDropBusy(true);
     setNotice("");
     try {
@@ -120,7 +138,7 @@ export default function ControlRoom() {
       setNotice(
         r.done
           ? `All ${r.drops} recorded drops are in. Restart the backend to play them again.`
-          : `Drop ${r.step} of ${r.of} processed: ${r.added} files added, ${r.changed} changed, ${r.removed} removed. ${r.open_issues} findings open.`,
+          : `Drop ${r.step} of ${r.of}: ${r.added} new files, ${r.changed} changed, ${r.removed} removed · ${r.open_issues} open findings`,
       );
     } catch (e) {
       setNotice(`The drop could not be processed: ${(e as Error).message}`);
@@ -137,22 +155,27 @@ export default function ControlRoom() {
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
-  const recovery = snap.queue.filter(entry => entry.on_time_recovery);
-  const other = snap.queue.filter(entry => !entry.on_time_recovery);
-  const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
-    {entries.map(entry => <li key={entry.key}>
-      <DecisionView entry={entry} snap={snap} onDone={refresh}
-        current={online === true && !missing.includes("queue") && !missing.includes("setup")} />
-    </li>)}
-  </ol>;
+  // Only collapse cards when every option and its approval route agree. Same headline but another PO stays a card of its own.
+  const decisionGroups = useMemo(() => {
+    const groups = new Map<string, DecisionCard[]>();
+    for (const d of snap.decisions) {
+      if (d.status !== "proposed") continue;
+      const key = JSON.stringify([d.summary || d.title, d.recommended, d.options]);
+      groups.set(key, [...(groups.get(key) ?? []), d]);
+    }
+    return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
+  }, [snap.decisions]);
 
   const deadline = editions.find((f) => f.deadline)?.deadline ?? null;
   const mock = snap.health?.mockMode ?? true;
 
   return (
+    <div className="theme-green min-h-screen bg-dock">
     <div className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
-        setup={snap.setup}
+        autonomy={snap.setup?.autonomy ?? null}
+        matrix={snap.setup?.approval_matrix ?? []}
+        buyer={snap.setup?.demo_buyer}
         online={online}
         mock={mock}
         deadline={deadline}
@@ -173,50 +196,49 @@ export default function ControlRoom() {
       )}
 
       {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
-        Update unavailable for {missing.join(", ")}. Showing the last available data.
+        Couldn&apos;t refresh {missing.join(", ")}. Showing the last data.
       </p>}
-      {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} />}
-      <CaseUpdates snap={snap} />
+      {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} loading={online === null} />}
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_400px]">
-        <section aria-labelledby="decide">
-          <div className="mb-3 flex items-baseline justify-between gap-4">
-            <h2 id="decide" className="text-xl font-bold">
-              Decide now
-            </h2>
-            <span className="text-sm text-muted tabular">
-              {snap.queue.length} {snap.queue.length === 1 ? "action" : "actions"}
-            </span>
-          </div>
-          {snap.queue.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">
-              {missing.includes("queue") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
-            </p>
-          ) : (
-            <>
-              {renderActions(recovery.length ? recovery : other)}
-              {recovery.length > 0 && other.length > 0 && <details className="mt-4">
-                <summary className="cursor-pointer py-2 text-sm font-semibold text-act">
-                  Other requests and reviews ({other.length})
-                </summary>
-                {renderActions(other)}
-              </details>}
-            </>
+      <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <RiskBoard
+          decisions={snap.decisions}
+          issues={snap.issues}
+          risk={snap.risk}
+          forecast={snap.forecast}
+          setup={snap.setup}
+          queue={snap.queue}
+          emptyText={missing.includes("decisions") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
+          onChanged={refresh}
+          renderDecision={(card) => (
+            <DecisionView
+              setup={snap.setup}
+              card={card}
+              similar={decisionGroups.find((g) => g.card.id === card.id)?.similar ?? []}
+              onDone={refresh}
+            />
           )}
-        </section>
+        />
 
-        <aside aria-labelledby="agents" className="space-y-6">
-          <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
-          <LiveLog trace={snap.trace} />
+        <aside aria-labelledby="agents" className="space-y-8">
+          <AgentLanes
+            trace={snap.trace}
+            now={now}
+            busy={dropBusy}
+            since={dropStartedAt}
+            onOpenData={() => setShowData(true)}
+          />
+          <CaseUpdates snap={snap} />
         </aside>
       </div>
 
       <section className="mt-10" aria-label="Details">
-        <div role="tablist" className="mb-4 flex gap-1 border-b border-rule">
+        <div role="tablist" className="mb-4 flex gap-1 overflow-x-auto border-b border-rule">
           {(
             [
-              ["findings", `Findings (${snap.issues.filter((i) => i.status !== "resolved").length} open)`],
-              ["emails", `Supplier emails (${snap.outbox.length})`],
+              ["activity", "Activity"],
+              ["findings", `Findings (${snap.issues.filter((i) => i.status !== "resolved").length})`],
+              ["emails", `Emails (${snap.outbox.length})`],
               ["risk", "Risk"],
             ] as const
           ).map(([id, label]) => (
@@ -233,11 +255,13 @@ export default function ControlRoom() {
             </button>
           ))}
         </div>
+        {tab === "activity" && <LiveLog trace={snap.trace} />}
         {tab === "findings" && <Findings issues={snap.issues} />}
         {tab === "emails" && <Emails outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
         {tab === "risk" && <Risk rows={snap.risk} />}
       </section>
       {showData && <DataDrawer onClose={closeData} />}
+    </div>
     </div>
   );
 }
@@ -263,33 +287,124 @@ function forecastAfterReply(reply: InboxMessage, forecasts: Forecast[], edition:
 
 function CaseUpdates({ snap }: { snap: Snapshot }) {
   const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed"].includes(d.status)))
-    .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id).slice(0, 3);
+    .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id).slice(0, 4);
   if (!decided.length) return null;
-  return <section aria-label="Decision follow-up" className="mt-6 rounded-lg border border-rule bg-surface p-5">
-    <h2 className="font-bold">Decision follow-up</h2>
-    <ul className="mt-3 space-y-3">{decided.map(d => {
-      const option = d.options[d.chosen_option!];
-      const sent = snap.outbox.find(o => o.decision_id === d.id);
-      const reply = sent && snap.inbox.filter(i => i.outbox_id === sent.id).sort((a,b) => b.id - a.id)[0];
-      const state = d.status === "rejected" ? "Rejected" : reply ? replyOutcome(reply)
-        : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
-        : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
-        : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
-          ? "Simulated request sent. Waiting for a test reply." : "Chaser sent the request. Waiting for the supplier.")
-        : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
-        : option?.actions.some(a => a.type === "human_review") ? "Assigned to the buyer for internal review."
-        : "Approved. Waiting for the handoff.";
-      const edition = snap.forecast.find(f => d.title.startsWith(f.edition + " ·"))?.edition;
-      const outcome = reply && edition ? forecastAfterReply(reply, snap.forecast, edition) : "";
-      return <li key={d.id}><strong>{option?.label ?? d.title}</strong>
-        <span className="ml-2 text-sm text-muted">#{d.id} · {d.decided_by}</span>
-        <p className="text-sm">{state}</p>{outcome && <p className="text-sm font-semibold">{outcome}</p>}</li>;
-    })}</ul>
-  </section>;
+  return (
+    <section aria-labelledby="decided">
+      <h2 id="decided" className="mb-3 text-xl font-bold">
+        Decided
+      </h2>
+      <ul className="divide-y divide-rule rounded-lg border border-rule bg-surface">
+        {decided.map((d) => {
+          const option = d.options[d.chosen_option!];
+          const sent = snap.outbox.find((o) => o.decision_id === d.id);
+          const reply = sent && snap.inbox.filter((i) => i.outbox_id === sent.id).sort((a, b) => b.id - a.id)[0];
+          const state = d.status === "rejected" ? "Rejected"
+            : reply ? replyOutcome(reply)
+            : sent?.status === "failed" ? "Email failed, check it"
+            : sent?.status === "draft" ? "Email draft ready"
+            : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null ? "Simulated email sent" : "Email sent, waiting for reply")
+            : sent?.status === "escalated" ? "Escalated to the buyer"
+            : option?.actions.some((a) => a.type === "human_review") ? "With the buyer for review"
+            : "Approved";
+          const edition = snap.forecast.find((f) => d.title.startsWith(f.edition + " ·"))?.edition;
+          const outcome = reply && edition ? forecastAfterReply(reply, snap.forecast, edition) : "";
+          return (
+            <li key={d.id} className="px-4 py-2.5">
+              <p className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-sm font-semibold" title={option?.label ?? d.title}>
+                  {option?.label ?? d.title}
+                </span>
+                <span className={`shrink-0 text-xs font-semibold ${d.status === "rejected" ? "text-stop" : "text-ok"}`}>
+                  {d.status === "rejected" ? "✕" : "✓"} {d.decided_by}
+                </span>
+              </p>
+              <p className="mt-0.5 text-xs text-muted">{state}</p>
+              {outcome && <p className="mt-0.5 text-xs font-semibold">{outcome}</p>}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** The human-in-the-loop switch as it is set in the customer setup, and who approves which amount (Soony's matrix). */
+function ApprovalsChip({ autonomy, matrix, buyer }: {
+  autonomy: CustomerSetup["autonomy"];
+  matrix: CustomerSetup["approval_matrix"];
+  buyer?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // The header wraps on narrow screens, so the chip can sit on the left or the right: open the panel towards the room.
+  const [alignRight, setAlignRight] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  const control = autonomy.mode === "control";
+  const limit = approvalCurrency.format(autonomy.auto_execute_below_eur);
+  return (
+    <div
+      ref={ref}
+      className="relative"
+      // Tabbing away closes it too (a click on the panel's own text has no related target and keeps it open).
+      onBlur={(e) => {
+        if (e.relatedTarget && !ref.current?.contains(e.relatedTarget)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        onClick={() => {
+          setAlignRight((ref.current?.getBoundingClientRect().right ?? 0) >= 304);
+          setOpen((o) => !o);
+        }}
+        className="rounded bg-act-soft px-2 py-1 text-xs font-bold text-act outline-none hover:bg-act/15 focus-visible:ring-[3px] focus-visible:ring-ring/40"
+      >
+        {control ? "Approvals on" : `Auto < ${limit}`}
+      </button>
+      {open && (
+        <div
+          id={panelId}
+          className={`absolute top-full z-30 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-rule bg-surface p-4 text-sm shadow-lg animate-in fade-in slide-in-from-top-1 duration-150 ${alignRight ? "right-0" : "left-0"}`}>
+          <p className="font-semibold text-ink">
+            {control ? "Every action waits for its approver" : `Agents act on their own below ${limit}`}
+          </p>
+          {matrix.length > 0 && (
+            <dl className="mt-3 space-y-1.5">
+              {matrix.map((r, i) => (
+                <div key={i} className="flex items-baseline justify-between gap-4">
+                  <dt className="text-muted tabular">
+                    {r.below_eur == null ? `≥ ${approvalCurrency.format(matrix[i - 1]?.below_eur ?? 0)}` : `< ${approvalCurrency.format(r.below_eur)}`}
+                  </dt>
+                  <dd className="text-right font-medium text-ink">{r.approvers.join(" + ")}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {buyer && <p className="mt-3 border-t border-rule pt-2.5 text-xs text-muted">You approve as {buyer}</p>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TopBar(props: {
-  setup: CustomerSetup | null;
+  autonomy: CustomerSetup["autonomy"] | null;
+  matrix: CustomerSetup["approval_matrix"];
+  buyer?: string;
   online: boolean | null;
   mock: boolean;
   deadline: string | null;
@@ -299,74 +414,85 @@ function TopBar(props: {
 }) {
   const end = parseTs(props.deadline);
   const left = end && props.now ? end.getTime() - props.now : null;
-  const countdown =
-    left == null
-      ? null
-      : left <= 0
-        ? "Packing has closed"
-        : `${Math.floor(left / 3_600_000)} h ${Math.floor((left % 3_600_000) / 60_000)} min until packing closes`;
   const closes = end?.toLocaleString("en-GB", {
     weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
   });
+  const status = props.online ? "Backend online" : props.online === false ? "Backend offline" : "Connecting";
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
-      <div>
-        {props.setup?.demo_buyer && (
-          <p className="text-sm font-semibold">
-            Demo view · {props.setup.demo_buyer} · Procurement buyer
-          </p>
+      {/* The one number that matters up here: time left until packing closes. */}
+      <h1 className="flex items-baseline gap-2" title={closes ? `Packing closes ${closes}` : undefined}>
+        {left == null ? (
+          <span className="text-lg font-semibold text-muted">Packing deadline</span>
+        ) : left <= 0 ? (
+          <span className="text-2xl font-bold">Packing has closed</span>
+        ) : (
+          <>
+            <span className="text-[30px] font-bold leading-none tabular">
+              {Math.floor(left / 3_600_000)} h {String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")} min
+            </span>
+            <span className="text-sm text-muted">until packing closes</span>
+          </>
         )}
-        <h1 className="text-2xl font-bold leading-tight">Grand Heist 6 launch</h1>
-        <p className="text-sm text-muted">
-          Soony packing line, Hamburg
-          {props.setup && (props.setup.autonomy.mode === "control" ? " · Control mode" :
-            ` · Auto below ${approvalCurrency.format(props.setup.autonomy.auto_execute_below_eur)}`)}
-          {countdown && (
-            <>
-              {", "}
-              <span className="font-semibold text-ink tabular">{countdown}</span>
-              {closes && ` (${closes})`}
-            </>
-          )}
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
+      </h1>
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        {props.autonomy && <ApprovalsChip autonomy={props.autonomy} matrix={props.matrix} buyer={props.buyer} />}
         <span
           title={props.mock ? "MOCK_MODE=true: no AI calls, no real emails" : "Live: real AI calls and emails"}
           className={`rounded px-2 py-1 text-xs font-bold ${props.mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
         >
-          {props.mock ? "Mock mode" : "Live"}
+          {props.mock ? "Mock" : "Live"}
         </span>
-        <span className="flex items-center gap-1.5 text-sm text-muted">
-          <span
-            aria-hidden
-            className={`inline-block h-2 w-2 rounded-full ${
-              props.online ? "bg-ok" : props.online === false ? "bg-stop" : "bg-rule"
-            }`}
-          />
-          {props.online ? "Backend online" : props.online === false ? "Backend offline" : "Connecting"}
-        </span>
+        <span
+          role="img"
+          aria-label={status}
+          title={status}
+          className={`inline-block h-2.5 w-2.5 rounded-full ${
+            props.online ? "bg-ok" : props.online === false ? "bg-stop" : "bg-rule"
+          }`}
+        />
         <button
           onClick={props.onDrop}
           disabled={props.busy || !props.online}
           className="rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-act disabled:cursor-not-allowed disabled:opacity-50"
           title="Sends the next real portal drop (from git history) through all agents. The first click starts from an empty store."
         >
-          {props.busy ? "Agents are working" : "Play next data drop"}
+          {props.busy ? (
+            "Agents are working"
+          ) : (
+            <>
+              <span className="sm:hidden">Next drop</span>
+              <span className="hidden sm:inline">Play next data drop</span>
+            </>
+          )}
         </button>
         <Link
           href="/observability"
           className="rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-semibold text-ink hover:border-act hover:text-act"
           title="Open dedicated AI Observability dashboard with per-agent visual reports"
         >
-          AI Observability
+          <span className="sm:hidden">Agents</span>
+          <span className="hidden sm:inline">AI Observability</span>
         </Link>
       </div>
     </header>
   );
 }
 
-function Hero({ editions }: { editions: Forecast[] }) {
+function Hero({ editions, loading }: { editions: Forecast[]; loading: boolean }) {
+  // First paint, before the backend has answered: quiet placeholders, not "no forecast yet".
+  if (editions.length === 0 && loading) {
+    return (
+      <section aria-label="Forecast" aria-busy="true" className="grid gap-px overflow-hidden rounded-xl bg-rule sm:grid-cols-2">
+        {[0, 1].map((i) => (
+          <div key={i} className="bg-surface px-6 py-6">
+            <div className="h-[clamp(56px,8vw,104px)] w-3/5 animate-pulse rounded-lg bg-dock" />
+            <div className="mt-4 h-5 w-2/5 animate-pulse rounded bg-dock" />
+          </div>
+        ))}
+      </section>
+    );
+  }
   if (editions.length === 0) {
     return (
       <section className="rounded-xl bg-surface px-6 py-10 text-muted">
@@ -384,16 +510,7 @@ function Hero({ editions }: { editions: Forecast[] }) {
               {f.shortfall == null ? "—" : fmt(f.shortfall)}
             </p>
             <p className="mt-2 text-lg font-semibold">
-              {f.edition} copies {f.shortfall == null ? "awaiting forecast" : short ? "projected short by close" : "short · on track"}
-            </p>
-            <p className="mt-1 text-sm text-muted tabular">
-              {fmt(f.still_to_pack)} still to pack
-              {f.still_to_pack != null && f.shortfall != null && `, ${fmt(Math.max(0, f.still_to_pack - (f.shortfall ?? 0)))} of them by close`}
-              {f.limiting_part && (
-                <>
-                  , held up by <span className="font-semibold text-ink">{f.limiting_part}</span>
-                </>
-              )}
+              {f.shortfall == null ? `${f.edition}: no forecast yet` : short ? `${f.edition} copies short` : `${f.edition} on track`}
             </p>
           </div>
         );
@@ -406,198 +523,321 @@ const approvalCurrency = new Intl.NumberFormat("en-IE", {
   style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2,
 });
 
-function DecisionView({ entry, snap, current, onDone }: {
-  entry: BuyerQueueEntry; snap: Snapshot; current: boolean; onDone: () => Promise<void>;
-}) {
+function DecisionView({ setup, card, similar, onDone }: { setup: CustomerSetup | null; card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
+  const [choice, setChoice] = useState<number>(card.recommended ?? 0);
+  const [why, setWhy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const option = entry.option;
-  const buyer = snap.setup?.demo_buyer;
-  const assigned = option.approvers ?? [];
-  const ownsAction = !!buyer && assigned.length === 1 && assigned[0] === buyer;
-  const cost = option.cost_eur;
-  const value = option.approval_value_eur;
-  const role = option.approval_roles?.join(" + ") || "Unassigned role";
-  const issueIds = [...new Set(entry.sources.flatMap(s => s.issue_ids))];
-  const matrix = snap.setup?.approval_matrix ?? [];
-  const band = value == null ? -1 : matrix.findIndex(r => r.below_eur == null || value < r.below_eur);
+  const option = card.options[choice];
+  const buyer = setup?.demo_buyer;
+  const assigned = option?.approvers ?? [];
+  const recommended = card.options[card.recommended ?? 0];
+  const ownsCard = !!buyer && recommended?.approvers?.length === 1 && recommended.approvers[0] === buyer;
+  const canDecide = ownsCard && assigned.length === 1 && assigned[0] === buyer && option?.available !== false;
+  const value = option?.approval_value_eur;
+  const matrix = setup?.approval_matrix ?? [];
+  const band = value == null ? -1 : matrix.findIndex(rule => rule.below_eur == null || value < rule.below_eur);
   const rule = matrix[band];
   const lower = matrix[band - 1]?.below_eur ?? 0;
-  const deadline = parseTs(entry.decide_by)?.toLocaleString("en-GB", {
-    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
-  });
+  const roles = option?.approval_roles ?? rule?.approvers ?? [];
+  const roleLabel = roles.join(" + ");
+  const awaiting = roleLabel || assigned.join(" + ") || "approval routing";
+  const people = assigned.filter(name => !roles.includes(name));
+  const quoted = option?.actions.some(action => action.quote_inbox_id != null);
 
   const decide = async (verb: "approve" | "reject") => {
-    if (!current || !ownsAction) return;
+    if (!canDecide || !buyer) return;
     setBusy(true);
     setError("");
     try {
-      await postData(`/api/decisions/${entry.decision_id}/${verb}`, {
-        by: buyer, option: entry.option_index, version: entry.version,
+      await postData(`/api/decisions/${card.id}/${verb}`, {
+        by: buyer,
+        option: verb === "approve" ? choice : undefined,
       });
+      onDone();
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      await onDone();
       setBusy(false);
     }
   };
 
-  return <article className="rounded-lg border border-rule bg-surface">
-    <div className="px-5 pt-4">
-      <p className="text-sm text-muted">{entry.edition} · {entry.part || "Packing capacity"}</p>
-      <h3 className="mt-1 text-lg font-bold leading-snug">{option.label}</h3>
-      <p className="mt-2 text-sm">{entry.next_step}</p>
-      <dl className="my-4 flex flex-wrap gap-x-7 gap-y-3 text-sm tabular">
-        <div><dt className="text-muted">Conditional gain</dt><dd className="font-semibold">
-          {option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd></div>
-        <div><dt className="text-muted">Cost</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
-        <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
-        <div><dt className="text-muted">Assigned to</dt><dd>{assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
-      </dl>
-      {entry.shared_shipment && <p className="mb-2 text-sm text-muted">
-        Other options use this shipment ({entry.shared_shipment}). Count its copy gain once.
-      </p>}
-      <p className="text-sm"><strong>Still needed</strong> · {entry.requirements.join(" · ")}</p>
-    </div>
-    <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
-      {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
-        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">Approve</button>
-        : <strong>Awaiting {role}</strong>}
-      {deadline && <span className="text-muted">Decide by {deadline} Hamburg time</span>}
-    </div>
-    {error && <p role="alert" className="px-5 pb-3 text-sm text-stop">{error}</p>}
-    <details className="border-t border-rule px-5 py-3 text-sm">
-      <summary className="cursor-pointer font-semibold text-act">Why? · {issueIds.length} linked {issueIds.length === 1 ? "finding" : "findings"}</summary>
-      <p className="mt-3">{option.risk_note}</p>
-      {rule && value != null && <p className="mt-2">
-        {approvalCurrency.format(value)} falls in the {rule.approvers.join(" + ")} approval band
-        {" "}from {approvalCurrency.format(lower)}{rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
-        {option.actions.some(a => a.quote_inbox_id != null) && " This includes the original PO and the extra quoted charge."}
-      </p>}
-      <ul className="my-3 space-y-2">{entry.sources.map(source => {
-        const card = snap.decisions.find(d => d.id === source.decision_id);
-        return <li key={`${source.decision_id}-${source.option_index}`}>
-          <a className="text-act underline" href={`${API_URL}/api/decisions/${source.decision_id}`}>Decision #{source.decision_id}</a>
-          {" · "}{card?.options[source.option_index]?.label ?? `Option ${source.option_index + 1}`}
-          {source.related_review && " · Related internal review"}
-          {source.issue_ids.map(id => <div key={id}><a className="text-act underline" href={`${API_URL}/api/issues/${id}`}>Finding #{id}</a>
-            {" · "}{snap.issues.find(i => i.id === id)?.summary}</div>)}
-        </li>;
-      })}</ul>
-      {snap.decisions.find(d => d.id === entry.decision_id)?.options.some(o => o.available === false) &&
-        <details className="mb-2"><summary className="cursor-pointer">Options ruled out</summary>
-          <ul className="mt-2 space-y-2">{snap.decisions.find(d => d.id === entry.decision_id)?.options
-            .filter(o => o.available === false).map((o, index) => <li key={index}>
-              <strong>{o.label}</strong>{o.copies_gained != null && ` · ${fmt(o.copies_gained)} additional copies`}
-              <p>{o.risk_note}</p>
-            </li>)}</ul>
-        </details>}
-      <details><summary className="cursor-pointer">Source evidence ({entry.evidence.length})</summary>
-        <ul className="mt-2 space-y-1">{entry.evidence.map((e,i) => <li key={i} className="break-words">
-          {e.path} · {e.locator} {e.quote && `· ${e.quote}`}</li>)}</ul>
-      </details>
-      {ownsAction && snap.decisions.find(d => d.id === entry.decision_id)?.recommended === entry.option_index &&
-        <button className="mt-3 font-semibold text-act" disabled={!current || busy} onClick={() => decide("reject")}>
-          Reject source decision #{entry.decision_id}</button>}
-    </details>
-  </article>;
+  return (
+    <article className="rounded-lg border border-rule bg-surface">
+      <div className="px-5 pt-4">
+        <h3 className="text-lg font-bold leading-snug">{card.summary || card.title}</h3>
+        <p className="mt-1 text-sm text-muted">
+          {card.title}
+          {similar.length > 0 && ` and ${similar.length} similar ${similar.length === 1 ? "card" : "cards"}`}
+        </p>
+      </div>
+
+      <fieldset className="mt-3 border-t border-rule">
+        <legend className="sr-only">Options</legend>
+        {card.options.map((o, i) => {
+          const off = o.available === false || !ownsCard;
+          return (
+            <label
+              key={i}
+              className={`flex cursor-pointer gap-3 border-b border-rule px-5 py-3 last:border-b-0 ${
+                choice === i ? "bg-act-soft" : "hover:bg-dock"
+              } ${off ? "cursor-not-allowed opacity-50" : ""}`}
+            >
+              <input
+                type="radio"
+                name={`card-${card.id}`}
+                className="mt-1 accent-[var(--color-act)]"
+                checked={choice === i}
+                disabled={off}
+                onChange={() => setChoice(i)}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-baseline gap-x-3">
+                  <span className="font-semibold">{o.label}</span>
+                  {card.recommended === i && <span className="text-xs font-semibold text-act">Recommended</span>}
+                </span>
+                {o.description && <span className="block text-sm text-muted">{o.description}</span>}
+                {actionTargets(o.actions).map((t) => (
+                  <span key={t} className="block text-sm text-ink">
+                    {t}
+                  </span>
+                ))}
+                <span className="mt-1 flex flex-wrap gap-x-4 text-sm tabular">
+                  <span>Costs {eur(o.cost_eur)}</span>
+                  <span>Gains {fmt(o.copies_gained)} copies</span>
+                  {o.remaining_shortfall != null && <span>Still short {fmt(o.remaining_shortfall)}</span>}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </fieldset>
+
+      <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3">
+        <dl className="flex w-full flex-wrap gap-x-8 gap-y-2 text-sm">
+          {quoted && <div><dt className="text-muted">Extra charge</dt><dd>{option.cost_eur == null ? "Unknown" : approvalCurrency.format(option.cost_eur)}</dd></div>}
+          <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
+          <div><dt className="text-muted">Required role</dt><dd>{roleLabel || "Pending"}</dd></div>
+          <div><dt className="text-muted">Assigned to</dt><dd>{people.join(" + ") || "Pending assignment"}</dd></div>
+        </dl>
+        {canDecide ? (
+          <>
+            <button onClick={() => decide("approve")} disabled={busy}
+              className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50">
+              Approve
+            </button>
+            <button onClick={() => decide("reject")} disabled={busy}
+              className="rounded-md border border-rule px-4 py-2 text-sm font-semibold hover:bg-dock disabled:opacity-50">
+              Reject
+            </button>
+          </>
+        ) : <span className="text-sm font-semibold">Awaiting {awaiting}</span>}
+        <button
+          onClick={() => setWhy((w) => !w)}
+          aria-expanded={why}
+          className="ml-auto text-sm font-semibold text-act hover:underline"
+        >
+          {why ? "Hide reasoning" : "Why?"}
+        </button>
+      </div>
+      {error && <p className="px-5 pb-3 text-sm text-stop">{error}</p>}
+      {why && (
+        <div className="border-t border-rule bg-dock/60 px-5 py-4 text-sm">
+          {rule && value != null && (
+            <p>Approval policy routes {approvalCurrency.format(value)} to {rule.approvers.join(" + ")}
+              {" "}for amounts from {approvalCurrency.format(lower)}
+              {rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
+              {quoted &&
+                " The approval value includes the original PO and the extra quoted charge."}
+            </p>
+          )}
+          {card.problem && <p className="font-semibold">{card.problem}</p>}
+          {card.reasoning && <p className="mt-2 whitespace-pre-line">{card.reasoning}</p>}
+          {option?.risk_note && <p className="mt-2 text-muted">Risk of this option: {option.risk_note}</p>}
+          {card.evidence.length > 0 && (
+            <>
+              <p className="mt-3 font-semibold">Evidence</p>
+              <ul className="mt-1 space-y-1">
+                {card.evidence.slice(0, 8).map((e, i) => (
+                  <li key={i} className="break-words text-muted">
+                    <span className="text-ink">{e.path}</span>
+                    {e.locator && `, ${e.locator}`}
+                    {e.quote && `: “${e.quote}”`}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </article>
+  );
 }
 
-function AgentLanes({ trace, now, onOpenData }: { trace: AgentLogEntry[]; now: number; onOpenData: () => void }) {
+function AgentLanes({
+  trace,
+  now,
+  busy,
+  since,
+  onOpenData,
+}: {
+  trace: AgentLogEntry[];
+  now: number;
+  /** A data drop is running right now. */
+  busy: boolean;
+  /** When it started (ms), to tell which agents already picked it up. */
+  since: number | null;
+  onOpenData: () => void;
+}) {
   const stats = useMemo(() => {
-    const out = new Map<string, { last?: AgentLogEntry; count: number; errors: number }>();
+    const out = new Map<string, { last?: AgentLogEntry; count: number }>();
     for (const e of trace) {
-      const s = out.get(e.agent) ?? { count: 0, errors: 0 };
+      // In replay mode the coordinator hands the drop over; detecting drops is the Watcher's job, so show it there.
+      const agent = e.agent === "coordinator" && e.action === "drop" ? "watcher" : e.agent;
+      const s = out.get(agent) ?? { count: 0 };
       // Show the newest real step, not the internal "handle:<event>" hand-off lines.
       if (!s.last && !e.action.startsWith("handle:") && e.action !== "unhandled") s.last = e;
       s.count += 1;
-      if (e.action === "error") s.errors += 1;
-      out.set(e.agent, s);
+      out.set(agent, s);
     }
     return out;
   }, [trace]);
-  const max = Math.max(1, ...[...stats.values()].map((s) => s.count));
-
   return (
     <section aria-labelledby="agents">
-      <h2 id="agents" className="mb-3 text-xl font-bold">
-        Agents at work
-      </h2>
-      <ul className="divide-y divide-rule rounded-lg border border-rule bg-surface">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h2 id="agents" className="flex items-baseline gap-2 text-xl font-bold">
+          Agents
+          {busy && <span className="text-sm font-semibold text-act">working on the drop</span>}
+        </h2>
+        <button
+          onClick={onOpenData}
+          className="text-sm font-semibold text-act hover:underline"
+          title="The data the Watcher fetched and Ingest cleaned, with SAP table and field names"
+        >
+          SAP data
+        </button>
+      </div>
+      <div className="relative overflow-hidden rounded-lg border border-rule bg-surface">
+        {busy && (
+          <div aria-hidden className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-act-soft">
+            <span className="agent-glint" />
+          </div>
+        )}
+      <ul className="divide-y divide-rule">
         {AGENTS.map((a) => {
           const s = stats.get(a.id);
           const ts = parseTs(s?.last?.ts);
-          const active = ts && now ? now - ts.getTime() < 15_000 : false;
+          // During a drop: an agent that logged after it started is on it (they pick it up in parallel), the rest wait.
+          const onDrop = busy && !!ts && since != null && ts.getTime() >= since - 1000;
+          const active = onDrop || (ts && now ? now - ts.getTime() < 15_000 : false);
+          const waiting = busy && !onDrop && a.id !== "human";
           return (
-            <li key={a.id} className="transition hover:bg-dock/50">
-              <div className="flex items-center gap-2 px-4 pt-3">
+            <li key={a.id}>
+              <Link
+                href={`/observability?agent=${a.id}`}
+                title={a.job}
+                className="flex items-center gap-2.5 px-4 py-2.5 transition-colors hover:bg-dock/60"
+              >
                 <span
                   aria-hidden
-                  className={`inline-block h-2.5 w-2.5 rounded-full ${active ? "beat" : ""}`}
-                  style={{ background: a.color, opacity: s ? 1 : 0.3 }}
+                  className={`inline-block h-2 w-2 shrink-0 rounded-full transition-opacity ${active ? "beat" : ""}`}
+                  style={{ background: a.color, opacity: waiting ? 0.35 : s ? 1 : 0.3 }}
                 />
-                <span className="font-semibold">{a.name}</span>
-                {a.id === "watcher" && (
-                  <button
-                    onClick={onOpenData}
-                    className="rounded border border-rule px-2 py-0.5 text-xs font-semibold text-act hover:bg-act-soft"
-                    title="Open the data the Watcher fetched, cleaned by Ingest, with SAP table and field names"
-                  >
-                    SAP data
-                  </button>
-                )}
-                <Link
-                  href={`/observability?agent=${a.id}`}
-                  className="rounded border border-rule px-2 py-0.5 text-xs font-semibold text-act hover:bg-act-soft"
-                  title="View agent trace and observability report"
-                >
-                  Report →
-                </Link>
-                <span className="ml-auto text-xs text-muted tabular">
-                  {s ? ago(s.last?.ts, now) : "idle"}
-                  {s && s.errors > 0 && <span className="ml-2 font-semibold text-stop">{s.errors} errors</span>}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold">{a.name}</span>
+                  <span className="block truncate text-xs text-muted" title={s?.last ? entryDetail(s.last) : undefined}>
+                    {/* An error shows only while it is the agent's newest step; one old hiccup does not pin the lane. */}
+                    {s?.last?.action === "error" ? (
+                      <span className="font-semibold text-stop">Error</span>
+                    ) : waiting ? (
+                      "Waiting"
+                    ) : s?.last ? (
+                      sentenceCase(actionLine(s.last))
+                    ) : (
+                      "Idle"
+                    )}
+                  </span>
                 </span>
-              </div>
-              <Link href={`/observability?agent=${a.id}`} className="block px-4 pb-3 pt-1">
-                <p className="text-xs text-muted">{a.job}</p>
-                {s?.last && (
-                  <p className="mt-1 truncate text-sm" title={s.last.detail}>
-                    {s.last.detail || s.last.action}
-                  </p>
-                )}
-                <div className="mt-2 h-1 rounded bg-dock" aria-hidden>
-                  <div className="h-1 rounded" style={{ width: `${((s?.count ?? 0) / max) * 100}%`, background: a.color }} />
-                </div>
+                <span className="shrink-0 text-xs text-muted tabular">{s ? ago(s.last?.ts, now) : ""}</span>
               </Link>
             </li>
           );
         })}
       </ul>
+      </div>
     </section>
   );
 }
 
+type LogRow = { key: string; e: AgentLogEntry; count: number; details: string[]; oldest: number };
+
+/** One agent doing the same thing within one run becomes one row with a count: a drop re-checks every finding, and the
+ *  Planner words each card with an AI call between the cards. Entries without a run id fold only with their neighbour.
+ *  The trace is newest first, so a row shows its newest entry; its key (run + agent + action, or the oldest entry id)
+ *  stays the same while newer entries of that run arrive, so an opened "+N more" list stays open. */
+function foldLog(trace: AgentLogEntry[], max = 40): LogRow[] {
+  const rows: LogRow[] = [];
+  const byRun = new Map<string, LogRow>();
+  let last: LogRow | undefined; // the row the previous entry went into
+  for (const e of trace) {
+    if (e.action.startsWith("handle:") || e.action === "unhandled") continue;
+    const runKey = e.run_id ? `${e.run_id}|${e.agent}|${e.action}` : null;
+    let row = runKey
+      ? byRun.get(runKey)
+      : last && !last.e.run_id && last.e.agent === e.agent && last.e.action === e.action
+        ? last
+        : undefined;
+    // Past the row limit, older entries still count towards the rows already shown.
+    if (!row && rows.length < max) {
+      row = { key: runKey ?? "", e, count: 0, details: [], oldest: e.id };
+      rows.push(row);
+      if (runKey) byRun.set(runKey, row);
+    }
+    if (row) {
+      row.count += 1;
+      row.oldest = e.id;
+      const detail = entryDetail(e);
+      if (detail && !row.details.includes(detail)) row.details.push(detail);
+    }
+    last = row;
+  }
+  for (const r of rows) if (!r.key) r.key = `id:${r.oldest}`;
+  return rows;
+}
+
 function LiveLog({ trace }: { trace: AgentLogEntry[] }) {
-  const rows = trace.filter((e) => !e.action.startsWith("handle:") && e.action !== "unhandled").slice(0, 40);
+  const rows = useMemo(() => foldLog(trace), [trace]);
   return (
-    <section aria-labelledby="log">
-      <h2 id="log" className="mb-3 text-xl font-bold">
-        What just happened
-      </h2>
+    <section aria-label="What the agents just did">
       <ol className="max-h-[420px] overflow-y-auto rounded-lg border border-rule bg-surface text-sm">
         {rows.length === 0 && <li className="px-4 py-6 text-muted">The agents have not done anything yet.</li>}
-        {rows.map((e) => (
-          <li key={e.id} className="flex gap-3 border-b border-rule px-4 py-2 last:border-b-0">
-            <span className="shrink-0 text-xs text-muted tabular">{clock(e.ts)}</span>
-            <span className="min-w-0">
-              <span className="font-semibold" style={{ color: agentColor(e.agent) }}>
-                {AGENTS.find((a) => a.id === e.agent)?.name ?? e.agent}
-              </span>{" "}
-              <span className={e.action === "error" ? "font-semibold text-stop" : "text-muted"}>
-                {e.action.replaceAll("_", " ")}
+        {rows.map(({ key, e, count, details }) => (
+          <li key={key} className="flex gap-3 border-b border-rule px-4 py-2.5 last:border-b-0">
+            <span className="w-16 shrink-0 pt-0.5 text-xs text-muted tabular">{clock(e.ts)}</span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: agentColor(e.agent) }} />
+                <span className="font-semibold">{agentName(e.agent, e.action)}</span>
+                <span className={e.action === "error" ? "font-semibold text-stop" : "text-muted"}>
+                  {sentenceCase(humanizeAction(e.action).label)}
+                </span>
+                {count > 1 && <span className="text-xs font-semibold text-muted tabular">×{count}</span>}
               </span>
-              <span className="block break-words">{e.detail}</span>
+              {details.length > 1 ? (
+                <details className="group mt-0.5 text-muted">
+                  <summary className="cursor-pointer list-none break-words [&::-webkit-details-marker]:hidden">
+                    {details[0]}{" "}
+                    <span className="whitespace-nowrap font-semibold text-act group-open:hidden">+{details.length - 1} more</span>
+                  </summary>
+                  <ul className="mt-1 space-y-1">
+                    {details.slice(1).map((d) => (
+                      <li key={d} className="break-words">{d}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : (
+                details[0] && <span className="mt-0.5 block break-words text-muted">{details[0]}</span>
+              )}
             </span>
           </li>
         ))}
@@ -616,26 +856,25 @@ function Findings({ issues }: { issues: Issue[] }) {
       <table className="w-full text-left text-sm">
         <thead className="border-b border-rule text-muted">
           <tr>
-            <th className="px-4 py-2 font-semibold">How bad</th>
-            <th className="px-4 py-2 font-semibold">What we found</th>
-            <th className="px-4 py-2 font-semibold">Found by</th>
+            <th className="px-4 py-2 font-semibold">Severity</th>
+            <th className="px-4 py-2 font-semibold">Finding</th>
+            <th className="px-4 py-2 font-semibold">Agent</th>
             <th className="px-4 py-2 font-semibold">Status</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((i) => {
-            const sev = SEVERITY[i.severity] ?? SEVERITY[1];
             return (
               <tr key={i.id} className={`border-b border-rule last:border-b-0 ${i.status === "resolved" ? "opacity-50" : ""}`}>
                 <td className="px-4 py-2 align-top">
-                  <span className={`whitespace-nowrap rounded px-2 py-0.5 text-xs font-semibold ${sev.cls}`}>{sev.label}</span>
+                  <SeverityLabel severity={i.severity} className="pt-0.5" />
                 </td>
                 <td className="px-4 py-2 align-top">
                   {i.summary}
                   {i.evidence[0]?.path && <span className="block text-xs text-muted">{i.evidence[0].path}</span>}
                 </td>
-                <td className="px-4 py-2 align-top capitalize">{i.raised_by}</td>
-                <td className="px-4 py-2 align-top capitalize">{i.status}</td>
+                <td className="px-4 py-2 align-top">{agentName(i.raised_by)}</td>
+                <td className="px-4 py-2 align-top">{sentenceCase(i.status)}</td>
               </tr>
             );
           })}

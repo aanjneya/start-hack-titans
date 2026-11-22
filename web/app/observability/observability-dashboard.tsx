@@ -12,6 +12,7 @@ import {
   AgentTimeline, ChaserReport, HumanAuditReport, IngestReport, OverviewReport,
   PlannerReport, ReconcilerReport, RiskRaterReport, WatcherReport,
 } from "./agent-reports";
+import { AgentWorkspace } from "./workspace/agent-workspace";
 
 const VALID_IDS = new Set<string>(AGENT_NAV.map((a) => a.id));
 
@@ -99,15 +100,15 @@ export default function ObservabilityDashboard() {
   const mock = snap.health?.mockMode ?? true;
 
   return (
-    <div className="flex min-h-screen bg-dock text-ink">
-      {/* Left Agent Icon Sidebar */}
+    <div className="theme-green flex min-h-screen bg-dock text-ink">
+      {/* Left Agent Icon Sidebar. Phones always get the icon rail, so the report keeps its width. */}
       <aside
         aria-label="Agent navigation"
         className={`sticky top-0 flex h-screen shrink-0 flex-col border-r border-rule bg-surface transition-[width] ${
-          collapsed ? "w-[72px]" : "w-[236px]"
+          collapsed ? "w-[72px]" : "w-[72px] md:w-[236px]"
         }`}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-rule px-3 py-4">
+        <div className="hidden items-center justify-between gap-2 border-b border-rule px-3 py-4 md:flex">
           {!collapsed && (
             <div className="min-w-0">
               <p className="truncate text-sm font-bold leading-tight">AI Observability</p>
@@ -134,12 +135,17 @@ export default function ObservabilityDashboard() {
             const ts = parseTs(st?.lastTs);
             const pulsing = ts && now ? now - ts.getTime() < 15_000 : false;
             const errs = st?.errors ?? 0;
+            const errText = `${errs} error${errs === 1 ? "" : "s"}`;
+            const statusId = `agent-status-${a.id}`;
+            const statusText = st?.count ? `${fmt(st.count)} · ${ago(st.lastTs, now)}` : "idle";
             return (
               <button
                 key={a.id}
                 type="button"
                 onClick={() => selectAgent(a.id)}
                 title={`${a.name} — ${a.role}`}
+                aria-label={`${a.shortName}${errs > 0 ? `, ${errText}` : ""}`}
+                aria-describedby={statusId}
                 aria-current={active ? "page" : undefined}
                 className={`relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left text-sm transition ${
                   active
@@ -148,8 +154,9 @@ export default function ObservabilityDashboard() {
                 }`}
               >
                 <span
-                  className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white shadow-xs"
-                  style={{ background: a.color }}
+                  className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                    active ? "bg-primary text-primary-foreground shadow-xs" : "bg-secondary text-ink"
+                  }`}
                 >
                   {a.icon}
                   {pulsing && (
@@ -161,19 +168,20 @@ export default function ObservabilityDashboard() {
                   {errs > 0 && (
                     <span
                       className="absolute -bottom-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-stop px-1 text-[10px] font-bold text-white"
-                      title={`${errs} errors`}
+                      title={errText}
                     >
                       {errs}
                     </span>
                   )}
                 </span>
 
+                <span id={statusId} className="sr-only">
+                  {pulsing ? `${statusText}, active now` : statusText}
+                </span>
                 {!collapsed && (
-                  <span className="min-w-0 flex-1">
+                  <span aria-hidden className="hidden min-w-0 flex-1 md:block">
                     <span className="block truncate">{a.shortName}</span>
-                    <span className="block truncate text-[11px] font-normal text-muted tabular">
-                      {st?.count ? `${fmt(st.count)} · ${ago(st.lastTs, now)}` : "idle"}
-                    </span>
+                    <span className="block truncate text-[11px] font-normal text-muted tabular">{statusText}</span>
                   </span>
                 )}
               </button>
@@ -191,7 +199,7 @@ export default function ObservabilityDashboard() {
               <path d="M19 12H5" />
               <path d="M12 19l-7-7 7-7" />
             </svg>
-            {!collapsed && <span>Control Room</span>}
+            {!collapsed && <span className="hidden md:inline">Control Room</span>}
           </Link>
         </div>
       </aside>
@@ -200,10 +208,7 @@ export default function ObservabilityDashboard() {
       <main className="min-w-0 flex-1 px-4 pb-16 sm:px-8">
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-rule py-5">
           <div className="flex items-center gap-3">
-            <span
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white"
-              style={{ background: activeMeta.color }}
-            >
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               {activeMeta.icon}
             </span>
             <div>
@@ -232,7 +237,7 @@ export default function ObservabilityDashboard() {
               type="button"
               onClick={nextDrop}
               disabled={dropBusy || !online}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-act disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
             >
               {dropBusy ? "Agents working…" : "Play next data drop"}
             </button>
@@ -253,10 +258,20 @@ export default function ObservabilityDashboard() {
           )}
 
           {selectedId === "overview" && (
-            <OverviewReport snap={snap} now={now} onSelectAgent={selectAgent} />
+            <OverviewReport snap={snap} now={now} online={online} onSelectAgent={selectAgent} />
           )}
-          {selectedId === "watcher" && <WatcherReport snap={snap} />}
-          {selectedId === "ingest" && <IngestReport snap={snap} />}
+          {selectedId === "watcher" && (
+            <>
+              <AgentWorkspace agent="watcher" snap={snap} />
+              <WatcherReport snap={snap} />
+            </>
+          )}
+          {selectedId === "ingest" && (
+            <>
+              <AgentWorkspace agent="ingest" snap={snap} />
+              <IngestReport snap={snap} />
+            </>
+          )}
           {selectedId === "reconciler" && <ReconcilerReport snap={snap} />}
           {selectedId === "chaser" && <ChaserReport snap={snap} />}
           {selectedId === "planner" && <PlannerReport snap={snap} />}

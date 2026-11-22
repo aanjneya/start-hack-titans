@@ -1,14 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { AgentRoster } from "@/components/ui/agent-roster";
 import {
-  ago, clock, eur, fmt, parseTs,
+  ago, clock, eur, fmt,
   type AgentLogEntry, type Conflict, type Evidence, type ExtendedRiskReason,
   type Forecast, type ObservabilitySnapshot, type RiskScore,
 } from "@/lib/api";
 import {
-  AGENT_NAV, TONE_CLASS, agentMeta, humanizeAction, isPlumbingEvent, type AgentId,
+  AGENT_NAV, TONE_CLASS, agentMeta, entryDetail, humanizeAction, isPlumbingEvent, type AgentId,
 } from "./agent-meta";
+import { buildRosterAgents, plural } from "./roster";
 
 // ---------------------------------------------------------------------------
 // Shared visual primitives
@@ -33,9 +35,10 @@ function KpiGrid({ items }: { items: KpiItem[] }) {
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {items.map((item) => (
         <div key={item.label} className="rounded-xl border border-rule bg-surface px-4 py-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted">{item.label}</p>
-          <p className={`figure mt-2 text-4xl ${KPI_COLOR[item.tone ?? "default"]}`}>{item.value}</p>
-          {item.hint && <p className="mt-1.5 text-xs text-muted">{item.hint}</p>}
+          {/* Number first, then a short label, like the tiles on the control room. */}
+          <p className={`figure text-4xl ${KPI_COLOR[item.tone ?? "default"]}`}>{item.value}</p>
+          <p className="mt-2 text-sm font-semibold text-ink">{item.label}</p>
+          {item.hint && <p className="mt-0.5 text-xs text-muted">{item.hint}</p>}
         </div>
       ))}
     </div>
@@ -129,10 +132,12 @@ function EmptyState({ text }: { text: string }) {
 export function OverviewReport({
   snap,
   now,
+  online = null,
   onSelectAgent,
 }: {
   snap: ObservabilitySnapshot;
   now: number;
+  online?: boolean | null;
   onSelectAgent: (id: AgentId) => void;
 }) {
   const realEvents = useMemo(() => snap.trace.filter((e) => !isPlumbingEvent(e)), [snap.trace]);
@@ -159,96 +164,36 @@ export function OverviewReport({
   }, [snap.trace]);
 
   const workers = AGENT_NAV.filter((a) => a.id !== "overview");
-  const maxReal = Math.max(1, ...workers.map((w) => agentStats.get(w.id)?.real ?? 0));
+  const roster = useMemo(() => buildRosterAgents(snap, now, online), [snap, now, online]);
 
   return (
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Total Agent Actions", value: fmt(realEvents.length), hint: `${fmt(snap.drops.length)} data drops processed`, tone: "act" },
-          { label: "Open Findings", value: fmt(openIssues), hint: `${fmt(snap.conflicts.filter((c) => c.status === "open").length)} open source conflicts`, tone: openIssues > 0 ? "warn" : "ok" },
-          { label: "Decisions Executed / Approved", value: fmt(snap.decisions.filter((d) => d.status === "approved" || d.status === "executed").length), hint: `${fmt(snap.decisions.filter((d) => d.status === "proposed").length)} waiting on human`, tone: "ok" },
+          { label: "Agent actions", value: fmt(realEvents.length), hint: `across ${plural(snap.drops.length, "data drop")}`, tone: "act" },
+          { label: "Open findings", value: fmt(openIssues), hint: `${plural(snap.conflicts.filter((c) => c.status === "open").length, "source conflict")} open`, tone: openIssues > 0 ? "warn" : "ok" },
+          { label: "Approved", value: fmt(snap.decisions.filter((d) => d.status === "approved" || d.status === "executed").length), hint: `${fmt(snap.decisions.filter((d) => d.status === "proposed").length)} waiting for approval`, tone: "ok" },
           {
-            label: "Errors & Human Overrides",
+            label: "Errors and overrides",
             value: fmt(totalErrors + humanOverrides),
-            hint: `${fmt(totalErrors)} errors · ${fmt(humanOverrides)} human rejections`,
+            hint: `${plural(totalErrors, "error")} · ${fmt(humanOverrides)} rejected by a person`,
             tone: totalErrors > 0 ? "stop" : humanOverrides > 0 ? "warn" : "ok",
           },
         ]}
       />
 
-      <section aria-label="Agent cards">
-        <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="text-lg font-bold">Parallel Agent Fleet — Click any card to inspect</h2>
-          <span className="text-xs text-muted">Office hours traceability: per-agent actions, outputs & errors</span>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {workers.map((agent) => {
-            const st = agentStats.get(agent.id);
-            const lastTs = parseTs(st?.last?.ts);
-            const active = lastTs && now ? now - lastTs.getTime() < 15_000 : false;
-            const realCount = st?.real ?? 0;
-            const errCount = st?.errors ?? 0;
-            return (
-              <button
-                key={agent.id}
-                type="button"
-                onClick={() => onSelectAgent(agent.id)}
-                className="group flex flex-col rounded-xl border border-rule bg-surface p-4 text-left transition hover:border-act hover:shadow-sm"
-              >
-                <div className="flex w-full items-center gap-2.5">
-                  <span
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
-                    style={{ background: agent.color }}
-                  >
-                    {agent.icon}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-bold text-ink group-hover:text-act">{agent.name}</span>
-                      <span
-                        className={`inline-block h-2 w-2 rounded-full ${active ? "beat" : ""}`}
-                        style={{ background: active ? "#2f7a4d" : realCount > 0 ? agent.color : "#d3d9e1" }}
-                        title={active ? "Active now" : st?.last ? `Last active ${ago(st.last.ts, now)}` : "Idle"}
-                      />
-                    </div>
-                    <p className="truncate text-xs text-muted">{agent.role}</p>
-                  </div>
-                </div>
-
-                <div className="mt-3 min-h-[36px] rounded-md bg-dock/70 px-3 py-2 text-xs text-ink">
-                  {st?.last ? (
-                    <span className="line-clamp-2">{st.last.detail || humanizeAction(st.last.action).label}</span>
-                  ) : (
-                    <span className="text-muted">Waiting for next drop or event…</span>
-                  )}
-                </div>
-
-                <div className="mt-3 flex w-full items-center justify-between text-xs tabular">
-                  <span className="text-muted">
-                    <strong className="text-ink">{fmt(realCount)}</strong> actions · {st?.last ? ago(st.last.ts, now) : "idle"}
-                  </span>
-                  {errCount > 0 ? (
-                    <span className="rounded bg-stop-soft px-2 py-0.5 font-semibold text-stop">{errCount} errors</span>
-                  ) : (
-                    <span className="font-semibold text-act opacity-0 transition group-hover:opacity-100">Open report →</span>
-                  )}
-                </div>
-
-                <div className="mt-2 h-1.5 w-full rounded-full bg-dock" aria-hidden>
-                  <div
-                    className="h-1.5 rounded-full transition-all"
-                    style={{ width: `${(realCount / maxReal) * 100}%`, background: agent.color }}
-                  />
-                </div>
-              </button>
-            );
-          })}
-        </div>
+      <section aria-label="Agent fleet" className="rounded-xl border border-rule bg-surface p-4 sm:p-5">
+        <AgentRoster
+          agents={roster}
+          title="Agents · pick one to open its report"
+          onSelectedChange={(id) => {
+            if (id) onSelectAgent(id as AgentId);
+          }}
+        />
       </section>
 
       <StackedBar
-        title="Workload Distribution Across Agents"
+        title="Actions per agent"
         segments={workers.map((w) => ({
           label: w.shortName,
           count: agentStats.get(w.id)?.real ?? 0,
@@ -271,10 +216,10 @@ export function WatcherReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Portal Drops Detected", value: fmt(snap.drops.length), hint: "Each drop triggers parallel downstream agents", tone: "act" },
-          { label: "Files Added", value: fmt(totalAdded), hint: "New ERP CSVs, notices, profiles & scans", tone: "ok" },
-          { label: "Files Modified", value: fmt(totalChanged), hint: "Updated schemas or replaced files", tone: totalChanged > 0 ? "warn" : "default" },
-          { label: "Files Removed", value: fmt(totalRemoved), hint: "Kept as historical provenance", tone: totalRemoved > 0 ? "stop" : "default" },
+          { label: "Data drops", value: fmt(snap.drops.length), hint: snap.drops[0] ? `last at ${clock(snap.drops[0].checked_at)}` : undefined, tone: "act" },
+          { label: "Files added", value: fmt(totalAdded), tone: "ok" },
+          { label: "Files changed", value: fmt(totalChanged), tone: totalChanged > 0 ? "warn" : "default" },
+          { label: "Files removed", value: fmt(totalRemoved), hint: "Old copies kept", tone: totalRemoved > 0 ? "stop" : "default" },
         ]}
       />
 
@@ -282,7 +227,7 @@ export function WatcherReport({ snap }: { snap: ObservabilitySnapshot }) {
         <EmptyState text="No portal drops processed yet. Click 'Play next data drop' above to replay real drops." />
       ) : (
         <div className="space-y-3">
-          <h2 className="text-lg font-bold">Portal Drop Checksums & File Deltas</h2>
+          <h2 className="text-lg font-bold">Drops</h2>
           {snap.drops.map((d) => (
             <details key={d.id} className="rounded-xl border border-rule bg-surface p-4" open={d.id === snap.drops[0]?.id}>
               <summary className="flex cursor-pointer flex-wrap items-center gap-3 list-none">
@@ -342,23 +287,23 @@ export function IngestReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Truth-Store Updates", value: fmt(snap.changes.length), hint: "Every change logged (no silent overwrites)", tone: "act" },
-          { label: "Missing Fields Filled", value: fmt(fills), hint: "From supplier replies & delta files", tone: "ok" },
-          { label: "Values Corrected", value: fmt(overwrites), hint: "Updated with full old → new provenance", tone: "warn" },
-          { label: "Ingest Errors", value: fmt(errors), hint: `${fmt(tables.size)} tables updated by deltas`, tone: errors > 0 ? "stop" : "ok" },
+          { label: "Changes logged", value: fmt(snap.changes.length), hint: "Each with old → new", tone: "act" },
+          { label: "Empty fields filled", value: fmt(fills), hint: "From replies and new files", tone: "ok" },
+          { label: "Values corrected", value: fmt(overwrites), tone: "warn" },
+          { label: "Errors", value: fmt(errors), hint: `${plural(tables.size, "table")} updated`, tone: errors > 0 ? "stop" : "ok" },
         ]}
       />
 
       <StackedBar
-        title="Truth-Store Change Breakdown"
+        title="Changes by type"
         segments={[
           { label: "Filled empty fields", count: fills, color: "#2f7a4d" },
-          { label: "Overwrites / corrections", count: overwrites, color: "#1d5fb4" },
+          { label: "Corrected values", count: overwrites, color: "#1d5fb4" },
         ]}
       />
 
       <section aria-label="Field change log">
-        <h2 className="mb-3 text-lg font-bold">Audit Diff: What Ingest Changed in the Truth Store</h2>
+        <h2 className="mb-3 text-lg font-bold">What changed (old → new)</h2>
         {snap.changes.length === 0 ? (
           <EmptyState text="No field diffs yet. Field changes appear when deltas, updated profiles, or supplier replies arrive." />
         ) : (
@@ -421,37 +366,37 @@ export function ReconcilerReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Open Findings", value: fmt(open.length), hint: "Active traps & discrepancies", tone: open.length > 0 ? "warn" : "ok" },
-          { label: "Line-Stoppers (Sev 5)", value: fmt(lineStops.length), hint: "Immediate launch blockers", tone: lineStops.length > 0 ? "stop" : "ok" },
-          { label: "Auto-Resolved", value: fmt(resolved.length), hint: "Closed automatically by newer drops/replies", tone: "ok" },
-          { label: "Source Conflicts", value: fmt(snap.conflicts.length), hint: `${fmt(snap.conflicts.filter((c) => c.status === "open").length)} currently open`, tone: "act" },
+          { label: "Open findings", value: fmt(open.length), tone: open.length > 0 ? "warn" : "ok" },
+          { label: "Urgent", value: fmt(lineStops.length), hint: "The line would stop", tone: lineStops.length > 0 ? "stop" : "ok" },
+          { label: "Closed on their own", value: fmt(resolved.length), hint: "By a newer drop or reply", tone: "ok" },
+          { label: "Source conflicts", value: fmt(snap.conflicts.length), hint: `${fmt(snap.conflicts.filter((c) => c.status === "open").length)} open`, tone: "act" },
         ]}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <StackedBar
-          title="Open Findings by Severity"
+          title="Open findings by severity"
           segments={[
-            { label: "5 · Line stops", count: open.filter((i) => i.severity === 5).length, color: "#b3261e" },
-            { label: "4 · Copies at risk", count: open.filter((i) => i.severity === 4).length, color: "#d9534f" },
-            { label: "3 · Answer today", count: open.filter((i) => i.severity === 3).length, color: "#a86a12" },
-            { label: "2 · Watch", count: open.filter((i) => i.severity === 2).length, color: "#1d5fb4" },
-            { label: "1 · Info", count: open.filter((i) => i.severity <= 1).length, color: "#5a6478" },
+            { label: "Urgent", count: open.filter((i) => i.severity === 5).length, color: "var(--signal-red)" },
+            { label: "High", count: open.filter((i) => i.severity === 4).length, color: "color-mix(in srgb, var(--signal-red) 70%, transparent)" },
+            { label: "Today", count: open.filter((i) => i.severity === 3).length, color: "var(--signal-amber)" },
+            { label: "Watch", count: open.filter((i) => i.severity === 2).length, color: "var(--signal-green)" },
+            { label: "Info", count: open.filter((i) => i.severity <= 1).length, color: "var(--border)" },
           ]}
         />
         <StackedBar
-          title="Where Reconciler Routed Each Finding"
+          title="Where each finding went"
           segments={[
-            { label: "Launch Planner (copies at risk)", count: byKind.copies_at_risk, color: "#127a7a" },
-            { label: "Chaser (missing info)", count: byKind.missing_info, color: "#2f7a4d" },
-            { label: "Human Gate (fraud / qty jumps)", count: byKind.human_check, color: "#16213a" },
+            { label: "Planner · copies at risk", count: byKind.copies_at_risk, color: "#127a7a" },
+            { label: "Chaser · missing info", count: byKind.missing_info, color: "#2f7a4d" },
+            { label: "Human check · fraud, big jumps", count: byKind.human_check, color: "#16213a" },
           ]}
         />
       </div>
 
       {snap.conflicts.length > 0 && (
         <section aria-label="Source conflicts">
-          <h2 className="mb-3 text-lg font-bold">Cross-Source Contradictions ({snap.conflicts.length})</h2>
+          <h2 className="mb-3 text-lg font-bold">Sources that disagree ({snap.conflicts.length})</h2>
           <div className="grid gap-3 md:grid-cols-2">
             {snap.conflicts.slice(0, 14).map((c: Conflict) => (
               <div key={c.id} className="rounded-xl border border-rule bg-surface p-4 text-sm">
@@ -482,7 +427,7 @@ export function ReconcilerReport({ snap }: { snap: ObservabilitySnapshot }) {
       )}
 
       <section aria-label="Reconciler findings">
-        <h2 className="mb-3 text-lg font-bold">Detected Issues & Evidence ({recIssues.length})</h2>
+        <h2 className="mb-3 text-lg font-bold">Findings ({recIssues.length})</h2>
         {recIssues.length === 0 ? (
           <EmptyState text="No Reconciler findings yet." />
         ) : (
@@ -537,19 +482,19 @@ export function ChaserReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Outbox Threads", value: fmt(snap.outbox.length), hint: `${fmt(pending)} waiting to send`, tone: "act" },
-          { label: "Delivered / Simulated", value: fmt(sent), hint: "Rate-limited (never spams suppliers)", tone: "ok" },
-          { label: "Replies Captured", value: fmt(replied), hint: `${fmt(snap.inbox.length)} inbox messages parsed`, tone: "ok" },
-          { label: "Escalated on Silence", value: fmt(escalated), hint: "Sent to human buyer when unanswered", tone: escalated > 0 ? "warn" : "default" },
+          { label: "Emails", value: fmt(snap.outbox.length), hint: `${fmt(pending)} waiting to send`, tone: "act" },
+          { label: "Sent", value: fmt(sent), hint: "Rate-limited per supplier", tone: "ok" },
+          { label: "Replies", value: fmt(replied), hint: `${plural(snap.inbox.length, "inbox message")} read`, tone: "ok" },
+          { label: "Escalated", value: fmt(escalated), hint: "No reply, handed to the buyer", tone: escalated > 0 ? "warn" : "default" },
         ]}
       />
 
       <StackedBar
-        title="Supplier Outreach Funnel"
+        title="Supplier emails"
         segments={[
           { label: "Replied", count: replied, color: "#2f7a4d" },
-          { label: "Sent / awaiting reply", count: Math.max(0, sent - replied), color: "#1d5fb4" },
-          { label: "Draft / approved", count: pending, color: "#a86a12" },
+          { label: "Waiting for reply", count: Math.max(0, sent - replied), color: "#1d5fb4" },
+          { label: "Not sent yet", count: pending, color: "#a86a12" },
           { label: "Escalated", count: escalated, color: "#b3261e" },
         ]}
       />
@@ -558,7 +503,7 @@ export function ChaserReport({ snap }: { snap: ObservabilitySnapshot }) {
         <EmptyState text="No supplier emails yet. Chaser triggers when Reconciler raises a missing-info finding or Planner executes an approved order." />
       ) : (
         <div className="space-y-3">
-          <h2 className="text-lg font-bold">Multilingual Email Threads & Extracted Replies</h2>
+          <h2 className="text-lg font-bold">Emails and replies</h2>
           {snap.outbox.map((m) => {
             const replies = snap.inbox.filter((r) => r.outbox_id === m.id);
             return (
@@ -608,16 +553,16 @@ export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Proposed Cards", value: fmt(proposed), hint: "Waiting for 1-click executive sign-off", tone: proposed > 0 ? "warn" : "ok" },
-          { label: "Approved / Executed", value: fmt(approved), hint: "Triggered recovery actions", tone: "ok" },
-          { label: "Rejected by Human", value: fmt(rejected), hint: "Tracked as human override signal", tone: rejected > 0 ? "stop" : "default" },
-          { label: "Superseded (Outdated)", value: fmt(outdated), hint: "Recomputed when a newer drop arrived", tone: "default" },
+          { label: "Waiting for approval", value: fmt(proposed), tone: proposed > 0 ? "warn" : "ok" },
+          { label: "Approved", value: fmt(approved), tone: "ok" },
+          { label: "Rejected", value: fmt(rejected), tone: rejected > 0 ? "stop" : "default" },
+          { label: "Outdated", value: fmt(outdated), hint: "Replaced after a newer drop", tone: "default" },
         ]}
       />
 
       {newestEditions.length > 0 && (
         <section aria-label="Pack forecasts">
-          <h2 className="mb-3 text-lg font-bold">Live Packing Forecast by Edition</h2>
+          <h2 className="mb-3 text-lg font-bold">Forecast by edition</h2>
           <div className="grid gap-4 md:grid-cols-2">
             {newestEditions.map((f) => {
               const still = f.still_to_pack ?? 0;
@@ -650,7 +595,7 @@ export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
       )}
 
       <section aria-label="Decision cards">
-        <h2 className="mb-3 text-lg font-bold">Decision Cards Generated ({snap.decisions.length})</h2>
+        <h2 className="mb-3 text-lg font-bold">Decision cards ({snap.decisions.length})</h2>
         {snap.decisions.length === 0 ? (
           <EmptyState text="No decision cards created yet." />
         ) : (
@@ -717,26 +662,26 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Critical (CCC · 6/6)", value: fmt(critical), hint: "Immediate line-stop or ban impact", tone: critical > 0 ? "stop" : "ok" },
-          { label: "High Risk (B · 5/6)", value: fmt(high), hint: "Finding auto-sent to Planner", tone: high > 0 ? "warn" : "ok" },
-          { label: "Products / Parts / Suppliers", value: `${products} / ${latest.filter((r) => r.entity_type === "part").length} / ${latest.filter((r) => r.entity_type === "supplier").length}`, hint: "3-tier bottom-up Moody's rollup", tone: "act" },
-          { label: "External & Reg Signals", value: fmt(extTotal), hint: "Polymarket · Open-Meteo · News · GPS · Regs", tone: "act" },
+          { label: "Critical", value: fmt(critical), hint: "Grade CCC · line stop or ban", tone: critical > 0 ? "stop" : "ok" },
+          { label: "High", value: fmt(high), hint: "Grade B · sent to the Planner", tone: high > 0 ? "warn" : "ok" },
+          { label: "Rated", value: `${products} / ${latest.filter((r) => r.entity_type === "part").length} / ${latest.filter((r) => r.entity_type === "supplier").length}`, hint: "Products / parts / suppliers", tone: "act" },
+          { label: "Outside signals", value: fmt(extTotal), hint: Object.keys(extCounts).length ? Object.keys(extCounts).join(" · ") : "None yet", tone: "act" },
         ]}
       />
 
       {Object.keys(extCounts).length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-rule bg-surface px-4 py-3 text-xs">
-          <span className="font-bold text-ink">Active World & Regulatory Feeds:</span>
+          <span className="font-bold text-ink">Outside signals:</span>
           {Object.entries(extCounts).map(([name, count]) => (
             <span key={name} className="rounded bg-act-soft px-2.5 py-1 font-semibold text-act tabular">
-              {name}: {count} signals
+              {name}: {count}
             </span>
           ))}
         </div>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold">Moody&apos;s Risk Scorecard ({visible.length})</h2>
+        <h2 className="text-lg font-bold">Risk ratings ({visible.length})</h2>
         <div className="flex gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
           {(["all", "product", "supplier", "part"] as const).map((k) => (
             <button
@@ -833,10 +778,10 @@ export function HumanAuditReport({ snap }: { snap: ObservabilitySnapshot }) {
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Total Human Decisions", value: fmt(decided.length), hint: "Full executive audit log", tone: "act" },
-          { label: "Approved Actions", value: fmt(approved), hint: "Released for execution", tone: "ok" },
-          { label: "Rejected / Overridden", value: fmt(rejected), hint: "Agent proposals declined by human", tone: rejected > 0 ? "stop" : "default" },
-          { label: "Pending Human Checks", value: fmt(pending + humanChecks), hint: `${pending} cards + ${humanChecks} fraud/qty gates`, tone: pending + humanChecks > 0 ? "warn" : "ok" },
+          { label: "Decisions", value: fmt(decided.length), tone: "act" },
+          { label: "Approved", value: fmt(approved), tone: "ok" },
+          { label: "Rejected", value: fmt(rejected), tone: rejected > 0 ? "stop" : "default" },
+          { label: "Waiting", value: fmt(pending + humanChecks), hint: `${plural(pending, "card")} · ${plural(humanChecks, "check")}`, tone: pending + humanChecks > 0 ? "warn" : "ok" },
         ]}
       />
 
@@ -844,7 +789,7 @@ export function HumanAuditReport({ snap }: { snap: ObservabilitySnapshot }) {
         <EmptyState text="No human approvals or rejections recorded yet. Approve or reject a card in Control Room to see the audit record." />
       ) : (
         <div className="space-y-3">
-          <h2 className="text-lg font-bold">Executive Sign-Off Ledger</h2>
+          <h2 className="text-lg font-bold">Who decided what</h2>
           {decided.map((d) => (
             <div key={d.id} className="rounded-xl border border-rule bg-surface p-4 text-sm">
               <div className="flex flex-wrap items-center gap-2">
@@ -892,16 +837,16 @@ export function AgentTimeline({
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold">
-            {agentId === "overview" ? "Cross-Agent Activity Stream" : `${agentMeta(agentId).name} Activity Log`}
+            {agentId === "overview" ? "Activity" : `${agentMeta(agentId).name} activity`}
           </h2>
-          <p className="text-xs text-muted">Plain-English trace of every action, decision, and error ({scoped.length} entries)</p>
+          <p className="text-xs text-muted tabular">{plural(scoped.length, "entry", "entries")}</p>
         </div>
         <div className="flex gap-1 rounded-lg border border-rule bg-dock p-1 text-xs font-semibold">
           {(
             [
               ["key", "Key events"],
-              ["errors", "Errors only"],
-              ["all", "All incl. hand-offs"],
+              ["errors", "Errors"],
+              ["all", "All"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -925,20 +870,19 @@ export function AgentTimeline({
           {scoped.slice(0, 80).map((e) => {
             const meta = agentMeta(e.agent);
             const h = humanizeAction(e.action);
+            const detail = entryDetail(e);
             return (
               <li key={e.id} className="py-2.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted tabular" title={ago(e.ts, now)}>{clock(e.ts)}</span>
-                  <span
-                    className="rounded px-2 py-0.5 text-xs font-semibold text-white"
-                    style={{ background: meta.color }}
-                  >
+                  <span className="inline-flex items-center gap-1.5 rounded bg-secondary px-2 py-0.5 text-xs font-semibold text-ink">
+                    <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: meta.color }} />
                     {meta.shortName}
                   </span>
                   <span className={`rounded px-2 py-0.5 text-xs font-semibold ${TONE_CLASS[h.tone]}`}>{h.label}</span>
                   {e.run_id && <span className="ml-auto font-mono text-[11px] text-muted">run {e.run_id.slice(0, 6)}</span>}
                 </div>
-                {e.detail && <p className="mt-1 break-words text-sm text-ink">{e.detail}</p>}
+                {detail && <p className="mt-1 break-words text-sm text-ink">{detail}</p>}
                 {e.evidence && e.evidence.length > 0 && <EvidenceList evidence={e.evidence} />}
               </li>
             );

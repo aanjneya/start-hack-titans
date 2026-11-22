@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import select
 
+from ..agents.planner_queue import buyer_queue, current_option, selection_version
 from ..agents.planner_delivery import DeliveryAdvice, SupplierQuote, already_requested
 
 from .. import system
@@ -171,10 +172,39 @@ def decisions(status: Optional[str] = None) -> dict:
     return ok(_rows(DecisionCard, order=DecisionCard.id.desc(), where=where))
 
 
+@app.get("/api/issues/{issue_id}")
+def get_issue(issue_id: int) -> dict:
+    with session() as s:
+        issue = s.get(Issue, issue_id)
+        if not issue:
+            raise HTTPException(404, "Finding not found.")
+        return ok(issue.model_dump(mode="json"))
+
+
+@app.get("/api/decisions/{decision_id}")
+def get_decision(decision_id: int) -> dict:
+    with session() as s:
+        card = s.get(DecisionCard, decision_id)
+        if not card:
+            raise HTTPException(404, "Decision not found.")
+        return ok(card.model_dump(mode="json"))
+
+
+@app.get("/api/buyer-queue")
+def get_buyer_queue() -> dict:
+    with session() as s:
+        return ok(buyer_queue(s))
+
+
 class DecideRequest(BaseModel):
+    version: Optional[str] = None
     by: str = "unknown"
     approvals: list[str] = []
     option: Optional[int] = None  # index into options; default = recommended
+
+
+class ChangedDecision(Exception):
+    """Release the approval transaction before refreshing the Planner's stored cards."""
 
 
 def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
@@ -186,13 +216,20 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
         if card.status != "proposed":
             raise HTTPException(409, f"decision {decision_id} is already {card.status}")
         selected = req.option if req.option is not None else card.recommended
+        if req.version is not None:
+            if selected is None or not 0 <= selected < len(card.options):
+                raise HTTPException(422, "Choose a valid option.")
+            if req.version != selection_version(card, selected, card.options[selected]):
+                raise HTTPException(409, "The option changed. Refresh the buyer queue.")
         if status == "approved":
             if selected is None or not 0 <= selected < len(card.options):
                 raise HTTPException(422, "Choose a valid option.")
             option = card.options[selected]
             if not option.get("available", True):
                 raise HTTPException(409, "The evidence does not support executing this option.")
-            if card.created_by == "planner" and already_requested(s, option.get("actions")):
+            if card.created_by == "planner" and option.get("product_id") and current_option(s, card, selected) is None:
+                raise ChangedDecision
+            if card.created_by == "planner" and already_requested(s, option, card):
                 raise HTTPException(409, "This action was already authorized on a related decision.")
             if option.get("approvers"):
                 signers = {name.strip().casefold() for name in [req.by, *req.approvals]}
@@ -211,7 +248,11 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
 @app.post("/api/decisions/{decision_id}/approve")
 def approve(decision_id: int, req: DecideRequest | None = None) -> dict:
     req = req or DecideRequest()
-    card = _decide(decision_id, "approved", req)
+    try:
+        card = _decide(decision_id, "approved", req)
+    except ChangedDecision:
+        system.emit(events.TRUTH_UPDATED, {"tables": ["decisions"]}, source="approval_recheck")
+        raise HTTPException(409, "The evidence or approval route changed. Review the refreshed buyer queue.") from None
     trace.log("human", "approve", f"decision {decision_id} by {req.by}", data={"decision_id": decision_id})
     result = system.emit(events.DECISION_APPROVED,
                          {"decision_id": decision_id, "option": card.chosen_option, "by": req.by})

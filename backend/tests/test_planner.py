@@ -132,16 +132,22 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
     card = sleeve_card(client)
     option = card["options"][card["recommended"]]
     assert option["description"] == mode and option["copies_gained"] > 0
-    assert option["cost_eur"] == 500 and option["approval_value_eur"] > 50000
+    assert option["cost_eur"] == 500 and option["approval_value_eur"] == 53150
     signers = ["Sofia Marchetti", "Jonas Lindqvist"] if mode == "air" else ["Sofia Marchetti"]
     assert option["approval_roles"] == (["Category lead", "CPO"] if mode == "air" else ["Category lead"])
     assert option["approvers"] == signers and option["needs_approval"]
     assert card["status"] == "proposed" and len(_decision_mails(ask_id)) == 1 and not _decision_mails(card["id"])
+    entries = client.get("/api/buyer-queue").json()["data"]
+    entry, = [e for e in entries if e["option"]["description"] == mode]
+    assert any(src["decision_id"] == card["id"] for src in entry["sources"])
+    assert entry["option"]["copies_gained"] == 5200
+    card = next(c for c in client.get("/api/decisions").json()["data"] if c["id"] == entry["decision_id"])
     url = f"/api/decisions/{card['id']}/approve"
-    assert client.post(url, json={"by": "Paul Winter"}).status_code == 403
+    selection = {"option": entry["option_index"], "version": entry["version"]}
+    assert client.post(url, json={**selection, "by": "Paul Winter"}).status_code == 403
     if mode == "air":
         assert client.post(url, json={"by": signers[0]}).status_code == 403
-    client.post(url, json={"by": signers[0], "approvals": signers[1:]}).raise_for_status()
+    client.post(url, json={**selection, "by": signers[0], "approvals": signers[1:]}).raise_for_status()
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before
     spend, = _decision_mails(card["id"])
     assert spend.decision_id == card["id"]

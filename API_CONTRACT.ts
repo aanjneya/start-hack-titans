@@ -131,6 +131,24 @@ export interface DecisionCard {
   created_at: string;
 }
 
+/** A ranked, actionable option and every source card supporting it. */
+export interface BuyerQueueEntry {
+  on_time_recovery: boolean;
+  shared_shipment: string | null; // Alternatives using the same edition and shipment line share capacity
+  key: string;
+  decision_id: number;
+  option_index: number;
+  version: string;
+  edition: string;
+  part: string | null;
+  decide_by: string | null;
+  option: DecisionOption;
+  next_step: string;
+  requirements: string[];
+  sources: {decision_id: number; option_index: number; issue_ids: number[]; related_review: boolean}[];
+  evidence: Evidence[];
+}
+
 export interface Forecast {
   id: number;
   computed_at: string;
@@ -272,6 +290,7 @@ export interface RunRequest {
 }
 
 export interface DecideRequest {
+  version?: string; // From the buyer queue. A material change requires a refresh (409).
   by: string;
   option?: number; // default: recommended; invalid indexes return 422, stale cards 409
   approvals?: string[]; // additional signers for jointly approved options
@@ -297,6 +316,9 @@ export const API_ROUTES = {
   ISSUES: '/api/issues', // GET ?status= -> Issue[]
   CONFLICTS: '/api/conflicts', // GET
   FORECAST: '/api/forecast', // GET -> Forecast[]
+  ISSUE: '/api/issues/:id', // GET -> Issue
+  DECISION: '/api/decisions/:id', // GET -> DecisionCard
+  BUYER_QUEUE: '/api/buyer-queue', // GET -> BuyerQueueEntry[] in execution priority order
   DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
   DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest

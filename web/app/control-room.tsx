@@ -3,14 +3,15 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ago, API_URL, clock, eur, fmt, getData, parseTs, postData,
+  ago, API_URL, clock, fmt, getData, parseTs, postData,
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
-import type { CustomerSetup } from "../../API_CONTRACT";
+import type { BuyerQueueEntry, CustomerSetup } from "../../API_CONTRACT";
 import DataDrawer from "./data-drawer";
 
 type Snapshot = {
+  queue: BuyerQueueEntry[];
   setup: CustomerSetup | null;
   health: HealthCheckResponse | null;
   forecast: Forecast[];
@@ -22,7 +23,7 @@ type Snapshot = {
   trace: AgentLogEntry[];
 };
 
-const EMPTY: Snapshot = { setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
+const EMPTY: Snapshot = { queue: [], setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
 
 const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "watcher", name: "Watcher", job: "Watches the supplier portal for new files", color: "#5a6478" },
@@ -43,20 +44,8 @@ const SEVERITY: Record<number, { label: string; cls: string }> = {
   1: { label: "Info", cls: "bg-dock text-muted" },
 };
 
-/** "Email SUP-0028 · PO 4500318775/2 · SHP-2026-04313" for each action of an option (who it reaches). */
-function actionTargets(actions: Record<string, unknown>[] | undefined): string[] {
-  return (actions ?? []).map((a) => {
-    const v = (k: string) => (a[k] == null || a[k] === "" ? "" : String(a[k]));
-    const po = v("po_number") ? `PO ${v("po_number")}${v("po_line") ? `/${v("po_line")}` : ""}` : "";
-    const type = v("type").replaceAll("_", " ");
-    return [type && type[0].toUpperCase() + type.slice(1), v("supplier_id"), po, v("shipment_id"), v("part")]
-      .filter(Boolean)
-      .join(", ");
-  });
-}
-
 async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missing: string[] }> {
-  const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup] = await Promise.allSettled([
+  const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue] = await Promise.allSettled([
     getData<HealthCheckResponse>("/api/health"),
     getData<Forecast[]>("/api/forecast"),
     getData<DecisionCard[]>("/api/decisions"),
@@ -66,14 +55,16 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missin
     getData<RiskScore[]>("/api/risk"),
     getData<AgentLogEntry[]>("/api/trace?limit=400"),
     getData<CustomerSetup>("/api/setup"),
+    getData<BuyerQueueEntry[]>("/api/buyer-queue"),
   ]);
   const val = <T,>(r: PromiseSettledResult<T>, fallback: T) => (r.status === "fulfilled" ? r.value : fallback);
   return {
-    missing: Object.entries({forecast, decisions, issues, outbox, inbox, risk, trace, setup})
+    missing: Object.entries({forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue})
       .filter(([, response]) => response.status === "rejected").map(([name]) => name),
     online: health.status === "fulfilled",
     snap: {
       setup: val(setup, null),
+      queue: val(queue, []),
       health: val(health, null),
       forecast: val(forecast, []),
       decisions: val(decisions, []),
@@ -146,16 +137,14 @@ export default function ControlRoom() {
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
-  // Only collapse cards when every option and its approval route agree. Same headline but another PO stays a card of its own.
-  const decisionGroups = useMemo(() => {
-    const groups = new Map<string, DecisionCard[]>();
-    for (const d of snap.decisions) {
-      if (d.status !== "proposed") continue;
-      const key = JSON.stringify([d.summary || d.title, d.recommended, d.options]);
-      groups.set(key, [...(groups.get(key) ?? []), d]);
-    }
-    return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
-  }, [snap.decisions]);
+  const recovery = snap.queue.filter(entry => entry.on_time_recovery);
+  const other = snap.queue.filter(entry => !entry.on_time_recovery);
+  const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
+    {entries.map(entry => <li key={entry.key}>
+      <DecisionView entry={entry} snap={snap} onDone={refresh}
+        current={online === true && !missing.includes("queue") && !missing.includes("setup")} />
+    </li>)}
+  </ol>;
 
   const deadline = editions.find((f) => f.deadline)?.deadline ?? null;
   const mock = snap.health?.mockMode ?? true;
@@ -196,21 +185,23 @@ export default function ControlRoom() {
               Decide now
             </h2>
             <span className="text-sm text-muted tabular">
-              {snap.decisions.filter(d => d.status === "proposed").length} open
+              {snap.queue.length} {snap.queue.length === 1 ? "action" : "actions"}
             </span>
           </div>
-          {decisionGroups.length === 0 ? (
+          {snap.queue.length === 0 ? (
             <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">
-              {missing.includes("decisions") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
+              {missing.includes("queue") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
             </p>
           ) : (
-            <ol className="space-y-4">
-              {decisionGroups.map(({ card, similar }) => (
-                <li key={card.id}>
-                  <DecisionView setup={snap.setup} card={card} similar={similar} onDone={refresh} />
-                </li>
-              ))}
-            </ol>
+            <>
+              {renderActions(recovery.length ? recovery : other)}
+              {recovery.length > 0 && other.length > 0 && <details className="mt-4">
+                <summary className="cursor-pointer py-2 text-sm font-semibold text-act">
+                  Other requests and reviews ({other.length})
+                </summary>
+                {renderActions(other)}
+              </details>}
+            </>
           )}
         </section>
 
@@ -415,155 +406,102 @@ const approvalCurrency = new Intl.NumberFormat("en-IE", {
   style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2,
 });
 
-function DecisionView({ setup, card, similar, onDone }: { setup: CustomerSetup | null; card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
-  const [choice, setChoice] = useState<number>(card.recommended ?? 0);
-  const [why, setWhy] = useState(false);
+function DecisionView({ entry, snap, current, onDone }: {
+  entry: BuyerQueueEntry; snap: Snapshot; current: boolean; onDone: () => Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const option = card.options[choice];
-  const buyer = setup?.demo_buyer;
-  const assigned = option?.approvers ?? [];
-  const recommended = card.options[card.recommended ?? 0];
-  const ownsCard = !!buyer && recommended?.approvers?.length === 1 && recommended.approvers[0] === buyer;
-  const canDecide = ownsCard && assigned.length === 1 && assigned[0] === buyer && option?.available !== false;
-  const value = option?.approval_value_eur;
-  const matrix = setup?.approval_matrix ?? [];
-  const band = value == null ? -1 : matrix.findIndex(rule => rule.below_eur == null || value < rule.below_eur);
+  const option = entry.option;
+  const buyer = snap.setup?.demo_buyer;
+  const assigned = option.approvers ?? [];
+  const ownsAction = !!buyer && assigned.length === 1 && assigned[0] === buyer;
+  const cost = option.cost_eur;
+  const value = option.approval_value_eur;
+  const role = option.approval_roles?.join(" + ") || "Unassigned role";
+  const issueIds = [...new Set(entry.sources.flatMap(s => s.issue_ids))];
+  const matrix = snap.setup?.approval_matrix ?? [];
+  const band = value == null ? -1 : matrix.findIndex(r => r.below_eur == null || value < r.below_eur);
   const rule = matrix[band];
   const lower = matrix[band - 1]?.below_eur ?? 0;
-  const roles = option?.approval_roles ?? rule?.approvers ?? [];
-  const roleLabel = roles.join(" + ");
-  const awaiting = roleLabel || assigned.join(" + ") || "approval routing";
-  const people = assigned.filter(name => !roles.includes(name));
-  const quoted = option?.actions.some(action => action.quote_inbox_id != null);
+  const deadline = parseTs(entry.decide_by)?.toLocaleString("en-GB", {
+    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+  });
 
   const decide = async (verb: "approve" | "reject") => {
-    if (!canDecide || !buyer) return;
+    if (!current || !ownsAction) return;
     setBusy(true);
     setError("");
     try {
-      await postData(`/api/decisions/${card.id}/${verb}`, {
-        by: buyer,
-        option: verb === "approve" ? choice : undefined,
+      await postData(`/api/decisions/${entry.decision_id}/${verb}`, {
+        by: buyer, option: entry.option_index, version: entry.version,
       });
-      onDone();
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      await onDone();
       setBusy(false);
     }
   };
 
-  return (
-    <article className="rounded-lg border border-rule bg-surface">
-      <div className="px-5 pt-4">
-        <h3 className="text-lg font-bold leading-snug">{card.summary || card.title}</h3>
-        <p className="mt-1 text-sm text-muted">
-          {card.title}
-          {similar.length > 0 && ` and ${similar.length} similar ${similar.length === 1 ? "card" : "cards"}`}
-        </p>
-      </div>
-
-      <fieldset className="mt-3 border-t border-rule">
-        <legend className="sr-only">Options</legend>
-        {card.options.map((o, i) => {
-          const off = o.available === false || !ownsCard;
-          return (
-            <label
-              key={i}
-              className={`flex cursor-pointer gap-3 border-b border-rule px-5 py-3 last:border-b-0 ${
-                choice === i ? "bg-act-soft" : "hover:bg-dock"
-              } ${off ? "cursor-not-allowed opacity-50" : ""}`}
-            >
-              <input
-                type="radio"
-                name={`card-${card.id}`}
-                className="mt-1 accent-[#1d5fb4]"
-                checked={choice === i}
-                disabled={off}
-                onChange={() => setChoice(i)}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-baseline gap-x-3">
-                  <span className="font-semibold">{o.label}</span>
-                  {card.recommended === i && <span className="text-xs font-semibold text-act">Recommended</span>}
-                </span>
-                {o.description && <span className="block text-sm text-muted">{o.description}</span>}
-                {actionTargets(o.actions).map((t) => (
-                  <span key={t} className="block text-sm text-ink">
-                    {t}
-                  </span>
-                ))}
-                <span className="mt-1 flex flex-wrap gap-x-4 text-sm tabular">
-                  <span>Costs {eur(o.cost_eur)}</span>
-                  <span>Gains {fmt(o.copies_gained)} copies</span>
-                  {o.remaining_shortfall != null && <span>Still short {fmt(o.remaining_shortfall)}</span>}
-                </span>
-              </span>
-            </label>
-          );
-        })}
-      </fieldset>
-
-      <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3">
-        <dl className="flex w-full flex-wrap gap-x-8 gap-y-2 text-sm">
-          {quoted && <div><dt className="text-muted">Extra charge</dt><dd>{option.cost_eur == null ? "Unknown" : approvalCurrency.format(option.cost_eur)}</dd></div>}
-          <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
-          <div><dt className="text-muted">Required role</dt><dd>{roleLabel || "Pending"}</dd></div>
-          <div><dt className="text-muted">Assigned to</dt><dd>{people.join(" + ") || "Pending assignment"}</dd></div>
-        </dl>
-        {canDecide ? (
-          <>
-            <button onClick={() => decide("approve")} disabled={busy}
-              className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50">
-              Approve
-            </button>
-            <button onClick={() => decide("reject")} disabled={busy}
-              className="rounded-md border border-rule px-4 py-2 text-sm font-semibold hover:bg-dock disabled:opacity-50">
-              Reject
-            </button>
-          </>
-        ) : <span className="text-sm font-semibold">Awaiting {awaiting}</span>}
-        <button
-          onClick={() => setWhy((w) => !w)}
-          aria-expanded={why}
-          className="ml-auto text-sm font-semibold text-act hover:underline"
-        >
-          {why ? "Hide reasoning" : "Why?"}
-        </button>
-      </div>
-      {error && <p className="px-5 pb-3 text-sm text-stop">{error}</p>}
-      {why && (
-        <div className="border-t border-rule bg-dock/60 px-5 py-4 text-sm">
-          {rule && value != null && (
-            <p>Approval policy routes {approvalCurrency.format(value)} to {rule.approvers.join(" + ")}
-              {" "}for amounts from {approvalCurrency.format(lower)}
-              {rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
-              {quoted &&
-                " The approval value includes the original PO and the extra quoted charge."}
-            </p>
-          )}
-          {card.problem && <p className="font-semibold">{card.problem}</p>}
-          {card.reasoning && <p className="mt-2 whitespace-pre-line">{card.reasoning}</p>}
-          {option?.risk_note && <p className="mt-2 text-muted">Risk of this option: {option.risk_note}</p>}
-          {card.evidence.length > 0 && (
-            <>
-              <p className="mt-3 font-semibold">Evidence</p>
-              <ul className="mt-1 space-y-1">
-                {card.evidence.slice(0, 8).map((e, i) => (
-                  <li key={i} className="break-words text-muted">
-                    <span className="text-ink">{e.path}</span>
-                    {e.locator && `, ${e.locator}`}
-                    {e.quote && `: “${e.quote}”`}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
-    </article>
-  );
+  return <article className="rounded-lg border border-rule bg-surface">
+    <div className="px-5 pt-4">
+      <p className="text-sm text-muted">{entry.edition} · {entry.part || "Packing capacity"}</p>
+      <h3 className="mt-1 text-lg font-bold leading-snug">{option.label}</h3>
+      <p className="mt-2 text-sm">{entry.next_step}</p>
+      <dl className="my-4 flex flex-wrap gap-x-7 gap-y-3 text-sm tabular">
+        <div><dt className="text-muted">Conditional gain</dt><dd className="font-semibold">
+          {option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd></div>
+        <div><dt className="text-muted">Cost</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
+        <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
+        <div><dt className="text-muted">Assigned to</dt><dd>{assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
+      </dl>
+      {entry.shared_shipment && <p className="mb-2 text-sm text-muted">
+        Other options use this shipment ({entry.shared_shipment}). Count its copy gain once.
+      </p>}
+      <p className="text-sm"><strong>Still needed</strong> · {entry.requirements.join(" · ")}</p>
+    </div>
+    <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
+      {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
+        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">Approve</button>
+        : <strong>Awaiting {role}</strong>}
+      {deadline && <span className="text-muted">Decide by {deadline} Hamburg time</span>}
+    </div>
+    {error && <p role="alert" className="px-5 pb-3 text-sm text-stop">{error}</p>}
+    <details className="border-t border-rule px-5 py-3 text-sm">
+      <summary className="cursor-pointer font-semibold text-act">Why? · {issueIds.length} linked {issueIds.length === 1 ? "finding" : "findings"}</summary>
+      <p className="mt-3">{option.risk_note}</p>
+      {rule && value != null && <p className="mt-2">
+        {approvalCurrency.format(value)} falls in the {rule.approvers.join(" + ")} approval band
+        {" "}from {approvalCurrency.format(lower)}{rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
+        {option.actions.some(a => a.quote_inbox_id != null) && " This includes the original PO and the extra quoted charge."}
+      </p>}
+      <ul className="my-3 space-y-2">{entry.sources.map(source => {
+        const card = snap.decisions.find(d => d.id === source.decision_id);
+        return <li key={`${source.decision_id}-${source.option_index}`}>
+          <a className="text-act underline" href={`${API_URL}/api/decisions/${source.decision_id}`}>Decision #{source.decision_id}</a>
+          {" · "}{card?.options[source.option_index]?.label ?? `Option ${source.option_index + 1}`}
+          {source.related_review && " · Related internal review"}
+          {source.issue_ids.map(id => <div key={id}><a className="text-act underline" href={`${API_URL}/api/issues/${id}`}>Finding #{id}</a>
+            {" · "}{snap.issues.find(i => i.id === id)?.summary}</div>)}
+        </li>;
+      })}</ul>
+      {snap.decisions.find(d => d.id === entry.decision_id)?.options.some(o => o.available === false) &&
+        <details className="mb-2"><summary className="cursor-pointer">Options ruled out</summary>
+          <ul className="mt-2 space-y-2">{snap.decisions.find(d => d.id === entry.decision_id)?.options
+            .filter(o => o.available === false).map((o, index) => <li key={index}>
+              <strong>{o.label}</strong>{o.copies_gained != null && ` · ${fmt(o.copies_gained)} additional copies`}
+              <p>{o.risk_note}</p>
+            </li>)}</ul>
+        </details>}
+      <details><summary className="cursor-pointer">Source evidence ({entry.evidence.length})</summary>
+        <ul className="mt-2 space-y-1">{entry.evidence.map((e,i) => <li key={i} className="break-words">
+          {e.path} · {e.locator} {e.quote && `· ${e.quote}`}</li>)}</ul>
+      </details>
+      {ownsAction && snap.decisions.find(d => d.id === entry.decision_id)?.recommended === entry.option_index &&
+        <button className="mt-3 font-semibold text-act" disabled={!current || busy} onClick={() => decide("reject")}>
+          Reject source decision #{entry.decision_id}</button>}
+    </details>
+  </article>;
 }
 
 function AgentLanes({ trace, now, onOpenData }: { trace: AgentLogEntry[]; now: number; onOpenData: () => void }) {

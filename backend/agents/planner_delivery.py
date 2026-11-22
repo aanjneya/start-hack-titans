@@ -32,21 +32,32 @@ class SupplierQuote(DeliveryAdvice):
 
 def review_key(review):
     key = f"{review['product_id']}/{review['part']}"
-    return f"{key}/{review['reference']}" if review.get("reference") else key
+    if review.get("reference"):
+        key += f"/{review['reference']}"
+    if review.get("po_line"):
+        key += f"/{review['po_number']}/{review['po_line']}"
+    return key
 
 
-def already_requested(s, actions):
+def already_requested(s, option, card=None):
     """A newer version of a card may still describe an already-authorized physical action."""
+    from .planner_queue import physical_key
+
+    actions = option.get("actions", [])
     if not actions:
         return False
     if actions[0].get("type") == "human_review":
         review = actions[0]
         fingerprint = issue_fingerprint("recovery_review", review_key(review))
-        return s.exec(select(Issue.id).where(Issue.fingerprint == fingerprint, Issue.raised_by == "planner",
-                                             Issue.status != "resolved")).first() is not None
+        if s.exec(select(Issue.id).where(Issue.fingerprint == fingerprint, Issue.raised_by == "planner",
+                                         Issue.status != "resolved")).first() is not None:
+            return True
     cards = s.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
                    DecisionCard.status.in_(["approved", "executed"]))).all()
-    return any(c.chosen_option is not None and c.options[c.chosen_option].get("actions") == actions for c in cards)
+    key = physical_key(option, card)
+    return any(c.chosen_option is not None and (
+        physical_key(c.options[c.chosen_option], c) == key if key else c.options[c.chosen_option].get("actions") == actions
+    ) for c in cards)
 
 
 class PlanningReplyIngest(IngestNormalizer):

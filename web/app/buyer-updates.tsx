@@ -90,11 +90,9 @@ export default function BuyerUpdates(props:Props) {
     [activity, queue, inbox, decisions, setup, describeReply]);
   const visible = all.filter(item => item.tier === "mine" || pref.level === "activity" || (pref.level === "outcomes" && item.tier === "outcomes"));
   const newest = activity[0]?.id;
-  useEffect(() => {
-    if (newest != null && (pref.seen === null || open || pref.seen > newest) && pref.seen !== newest) {
-      setPref(p => ({...p, seen:newest}));
-    }
-  }, [newest, open, pref.seen]);
+  if (newest != null && newest !== pref.seen && (open || pref.seen === null || pref.seen > newest)) {
+    setPref({...pref, seen:newest});
+  }
   useEffect(() => {
     try { localStorage.setItem(storeKey, JSON.stringify(pref)); } catch { /* Preferences still apply in this tab. */ }
   }, [pref, storeKey]);

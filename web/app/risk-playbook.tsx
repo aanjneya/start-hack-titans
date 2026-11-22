@@ -38,9 +38,12 @@ export default function RiskPlaybook({
   onActionComplete,
   signer = "Paul Winter",
   mock = true,
+  refreshKey,
 }: {
   onActionComplete?: () => Promise<void> | void;
   signer?: string;
+  /** Changes when a new risk check finishes (e.g. its run id): the playbook reloads so it never shows the previous drop. */
+  refreshKey?: string;
   /** Demo mode: the outside feeds are offline snapshots, so never call them "live". */
   mock?: boolean;
 }) {
@@ -96,7 +99,7 @@ export default function RiskPlaybook({
     return () => {
       active = false;
     };
-  }, [applyPlaybook]);
+  }, [applyPlaybook, refreshKey]);
 
   const toggleLever = (productId: string, leverId: string) => {
     setSelectedLevers((prev) => ({

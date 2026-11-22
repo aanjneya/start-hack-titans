@@ -97,7 +97,6 @@ export default function ObservabilityDashboard() {
   }, [snap.trace]);
 
   const activeMeta = agentMeta(selectedId);
-  const mock = snap.health?.mockMode ?? true;
 
   return (
     <div className="flex min-h-screen text-ink">
@@ -218,12 +217,6 @@ export default function ObservabilityDashboard() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <span
-              title={mock ? "MOCK_MODE=true: offline deterministic mode" : "Live: real external feeds & AI calls"}
-              className={`rounded px-2 py-1 text-xs font-bold ${mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
-            >
-              {mock ? "Mock mode" : "Live"}
-            </span>
             <span className="flex items-center gap-1.5 text-sm text-muted">
               <span
                 aria-hidden

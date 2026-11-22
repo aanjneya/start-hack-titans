@@ -386,7 +386,7 @@ export default function ControlRoom() {
         {tab === "risk" && (
           <>
             <SignalRefresh reading={riskCheck} scores={snap.risk} timezone={snap.setup?.timezone} online={online === true} mock={mock} refresh={refresh} />
-            <RiskPlaybook onActionComplete={refresh} signer={snap.setup?.demo_buyer || "Paul Winter"} mock={mock} />
+            <RiskPlaybook onActionComplete={refresh} signer={snap.setup?.demo_buyer || "Paul Winter"} mock={mock} refreshKey={riskCheck?.run_id ?? undefined} />
             <Risk rows={snap.risk} />
           </>
         )}
@@ -614,13 +614,9 @@ function TopBar(props: {
   onDrop: () => void;
 }) {
   const end = parseTs(props.deadline);
-  // A replay shows a recorded snapshot: count down from the snapshot time, not from today's clock.
-  const from = props.replayEnabled ? parseTs(props.snapshotTime)?.getTime() : props.now;
-  const left = end && from ? end.getTime() - from : null;
+  // Always the real clock, also in a replay: the countdown is the time left until packing actually closes.
+  const left = end && props.now ? end.getTime() - props.now : null;
   const closes = end?.toLocaleString("en-GB", {
-    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: props.setup?.timezone || "UTC",
-  });
-  const snapshot = parseTs(props.snapshotTime)?.toLocaleString("en-GB", {
     weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: props.setup?.timezone || "UTC",
   });
   const status = props.online ? "Backend online" : props.online === false ? "Backend offline" : "Connecting";
@@ -628,7 +624,7 @@ function TopBar(props: {
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       {/* The one number that matters up here: time left until packing closes. */}
       <h1 className="flex items-baseline gap-2"
-        title={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}>
+        title={closes ? `Packing closes ${closes}` : undefined}>
         {left == null ? (
           <span className="text-lg font-semibold text-muted">Packing deadline</span>
         ) : left <= 0 ? (
@@ -647,12 +643,6 @@ function TopBar(props: {
         {props.setup && (
           <ApprovalsChip autonomy={props.setup.autonomy} matrix={props.setup.approval_matrix} buyer={props.setup.demo_buyer} />
         )}
-        <span
-          title={props.mock ? "Historical or simulated inputs. Email delivery is simulated." : "Live data. Email delivery follows the Chaser configuration."}
-          className={`rounded px-2 py-1 text-xs font-bold ${props.mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
-        >
-          {props.replayEnabled ? "Replay" : props.mock ? "Mock" : "Live"}
-        </span>
         <span
           role="img"
           aria-label={status}

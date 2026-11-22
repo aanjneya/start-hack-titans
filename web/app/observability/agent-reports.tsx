@@ -751,7 +751,7 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
         )}
       </section>
 
-      <RiskPlaybook mock={mock} />
+      <RiskPlaybook mock={mock} refreshKey={snap.health?.lastRiskCheck?.run_id ?? undefined} />
     </div>
   );
 }

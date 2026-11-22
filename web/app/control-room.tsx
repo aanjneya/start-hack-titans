@@ -9,7 +9,6 @@ import {
 } from "@/lib/api";
 import type { ActionRun, BuyerActivity, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
-import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
 import DataDrawer from "./data-drawer";
 import { actionLine, entryDetail, humanizeAction } from "./observability/agent-meta";
 import { RiskBoard, SeverityLabel } from "./risk-board";
@@ -310,9 +309,13 @@ export default function ControlRoom() {
       {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
         Couldn&apos;t refresh {missing.join(", ")}. Showing the last data.
       </p>}
-      {(!missing.includes("forecast") || editions.length > 0) && (
-        <Hero editions={editions} loading={online === null} ready={online === true} replayEnabled={!!snap.health?.replayEnabled} />
-      )}
+      <AgentHighlights snap={snap} loading={online === null} onOpen={(next) => {
+        if (next === "risks") document.getElementById("decide")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        else {
+          setTab(next);
+          document.getElementById("details")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }} />
 
       <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <RiskBoard
@@ -354,7 +357,7 @@ export default function ControlRoom() {
         </aside>
       </div>
 
-      <section className="mt-10" aria-label="Details">
+      <section id="details" className="mt-10 scroll-mt-4" aria-label="Details">
         <div role="tablist" className="mb-4 flex gap-1 overflow-x-auto border-b border-rule">
           {(
             [
@@ -383,7 +386,7 @@ export default function ControlRoom() {
         {tab === "risk" && (
           <>
             <SignalRefresh reading={riskCheck} scores={snap.risk} timezone={snap.setup?.timezone} online={online === true} mock={mock} refresh={refresh} />
-            <RiskPlaybook onActionComplete={refresh} signer={snap.setup?.demo_buyer || "Paul Winter"} />
+            <RiskPlaybook onActionComplete={refresh} signer={snap.setup?.demo_buyer || "Paul Winter"} mock={mock} />
             <Risk rows={snap.risk} />
           </>
         )}
@@ -624,15 +627,21 @@ function TopBar(props: {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       {/* The one number that matters up here: time left until packing closes. */}
-      <HandWrittenTitle
-        className="mx-0 -ml-9 w-auto max-w-none px-[4.5rem] py-8"
-        titleClassName="text-[30px] font-bold leading-none tabular tracking-tight md:text-[30px]"
-        subtitleClassName="mt-1 text-sm text-muted"
-        titleTooltip={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}
-        title={left == null ? "Packing deadline" : left <= 0 ? "Packing has closed"
-          : `${Math.floor(left / 3_600_000)} h ${String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")} min`}
-        subtitle={left == null ? "waiting for the forecast" : left > 0 ? "until packing closes" : "\u00a0"}
-      />
+      <h1 className="flex items-baseline gap-2"
+        title={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}>
+        {left == null ? (
+          <span className="text-lg font-semibold text-muted">Packing deadline</span>
+        ) : left <= 0 ? (
+          <span className="text-2xl font-bold">Packing has closed</span>
+        ) : (
+          <>
+            <span className="text-[30px] font-bold leading-none tabular">
+              {Math.floor(left / 3_600_000)} h {String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")} min
+            </span>
+            <span className="text-sm text-muted">until packing closes</span>
+          </>
+        )}
+      </h1>
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         {props.updates}
         {props.setup && (
@@ -672,58 +681,67 @@ function TopBar(props: {
         <Link
           href="/observability"
           className="rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-semibold text-ink hover:border-act hover:text-act"
-          title="Open dedicated AI Observability dashboard with per-agent visual reports"
+          title="Open the team of AI agents: what each agent did, with its report"
         >
           <span className="sm:hidden">Agents</span>
-          <span className="hidden sm:inline">AI Observability</span>
+          <span className="hidden sm:inline">AI agents</span>
         </Link>
       </div>
     </header>
   );
 }
 
-function Hero({ editions, loading, ready, replayEnabled }: {
-  editions: Forecast[]; loading: boolean; ready: boolean; replayEnabled: boolean;
+/** The one number each agent would point you to, in the cards where the shortfall used to be. Each opens its detail. */
+function AgentHighlights({ snap, loading, onOpen }: {
+  snap: Snapshot;
+  loading: boolean;
+  onOpen: (target: "risks" | "findings" | "emails" | "risk") => void;
 }) {
-  // First paint, before the backend has answered: quiet placeholders, not "no forecast yet".
-  if (editions.length === 0 && loading) {
+  if (loading) {
     return (
-      <section aria-label="Forecast" aria-busy="true" className="grid gap-px overflow-hidden rounded-xl bg-rule sm:grid-cols-2">
-        {[0, 1].map((i) => (
-          <div key={i} className="bg-surface px-6 py-6">
-            <div className="h-[clamp(56px,8vw,104px)] w-3/5 animate-pulse rounded-lg bg-dock" />
-            <div className="mt-4 h-5 w-2/5 animate-pulse rounded bg-dock" />
+      <section aria-label="Agent highlights" aria-busy="true" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-rule lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="bg-surface px-5 py-4">
+            <div className="h-12 w-2/5 animate-pulse rounded-lg bg-dock" />
+            <div className="mt-3 h-4 w-3/5 animate-pulse rounded bg-dock" />
           </div>
         ))}
       </section>
     );
   }
-  if (editions.length === 0) {
-    return (
-      <section className="rounded-xl bg-surface px-6 py-10 text-muted">
-        {!ready ? "Waiting for the latest packing forecast." : replayEnabled
-          ? <>No forecast yet. Press <strong className="text-ink">Play next data drop</strong> to load the next snapshot.</>
-          : "A packing forecast needs a dated launch snapshot and shift calendar. Supplier reviews can proceed independently."}
-      </section>
-    );
-  }
+  const buyer = snap.setup?.demo_buyer;
+  const actions = (snap.queue ?? []).filter((e) => !e.option.followup_for && e.option.available !== false
+    && (!buyer || (e.option.approvers?.length === 1 && e.option.approvers[0] === buyer)));
+  const open = snap.issues.filter((i) => i.status !== "resolved");
+  const urgent = open.filter((i) => i.severity >= 5);
+  const high = open.filter((i) => i.severity === 4);
+  const suppliers = snap.risk.filter((r) => r.entity_type === "supplier" && r.grade >= 5).sort((a, b) => b.grade - a.grade);
+  const replied = new Set(snap.inbox.map((m) => m.outbox_id).filter((id): id is number => id != null));
+  const awaited = snap.outbox.filter((m) => m.status === "sent" && !replied.has(m.id));
+  const cards: { agent: string; value: number; label: string; hint: string; target: "risks" | "findings" | "emails" | "risk" }[] = [
+    { agent: "planner", value: actions.length, label: actions.length === 1 ? "action waiting for you" : "actions waiting for you",
+      hint: buyer ? `Routed to ${buyer}` : "Ready to decide", target: "risks" },
+    { agent: "reconciler", value: urgent.length, label: urgent.length === 1 ? "urgent finding" : "urgent findings",
+      hint: `${fmt(high.length)} more high`, target: "findings" },
+    { agent: "risk", value: suppliers.length, label: suppliers.length === 1 ? "high-risk supplier" : "high-risk suppliers",
+      hint: suppliers[0] ? `${suppliers[0].entity_id} rated ${suppliers[0].rating}` : "None below BBB", target: "risk" },
+    { agent: "chaser", value: awaited.length, label: awaited.length === 1 ? "supplier reply awaited" : "supplier replies awaited",
+      hint: `${fmt(snap.outbox.length)} ${snap.outbox.length === 1 ? "email" : "emails"} sent`, target: "emails" },
+  ];
   return (
-    <section aria-label="Forecast" className="grid gap-px overflow-hidden rounded-xl bg-rule sm:grid-cols-2">
-      {editions.map((f) => {
-        const short = (f.shortfall ?? 0) > 0;
-        return (
-          <div key={f.product_id} className="bg-surface px-5 py-4">
-            <p className={`figure text-[clamp(40px,5vw,64px)] ${short ? "text-stop" : "text-ok"}`}>
-              {f.shortfall == null ? "—" : fmt(f.shortfall)}
-            </p>
-            <p className="mt-2 text-lg font-semibold">
-              {f.edition}
-              {editions.some((o) => o.product_id !== f.product_id && o.edition === f.edition) && ` (${f.product_id})`}
-              {f.shortfall == null ? ": no forecast yet" : short ? " copies short" : " on track"}
-            </p>
-          </div>
-        );
-      })}
+    <section aria-label="Agent highlights" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-rule lg:grid-cols-4">
+      {cards.map((c) => (
+        <button key={c.agent} type="button" onClick={() => onOpen(c.target)}
+          className="group bg-surface px-5 py-4 text-left outline-none transition-colors hover:bg-act-soft focus-visible:bg-act-soft">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-muted">
+            <span aria-hidden className="h-2 w-2 rounded-full" style={{ background: agentColor(c.agent) }} />
+            {agentName(c.agent)}
+          </span>
+          <span className="figure mt-2 block text-[clamp(40px,4.5vw,60px)] text-act">{fmt(c.value)}</span>
+          <span className="mt-1 block text-base font-semibold text-ink">{c.label}</span>
+          <span className="block text-sm text-muted group-hover:text-ink">{c.hint}</span>
+        </button>
+      ))}
     </section>
   );
 }

@@ -8,7 +8,7 @@
 
 /* Tokens: Sage Garden (light), colours picked from the reference theme card and forecast chart. Warm off-white
    floor under the sage beams, white cards, near-black ink; sage #7b9082 for fills, deep sage #5f7556 for text accents
-   (readable on white). Red, amber and green stay status colours only ("the line stops", "watch", "ok").
+   (readable on white). No red: urgent is a deep green (#3f5a44), amber stays for "today", green for "ok".
    Not `inline`, so utilities read var(--color-*) and a subtree can re-tint them. */
 @theme {
   --color-dock: #f8f7f3;
@@ -16,8 +16,8 @@
   --color-ink: #141723;
   --color-muted: #6b6c70;
   --color-rule: #e8e7e0;
-  --color-stop: #c83e3a;
-  --color-stop-soft: #fdf4f3;
+  --color-stop: #3f5a44;
+  --color-stop-soft: #e9efe6;
   --color-act: #5f7556;
   --color-act-soft: #f1f3ee;
   --color-ok: #1f8a4c;
@@ -44,7 +44,7 @@
   --muted-foreground: #6b6c70;
   --accent: #c0c9bb;
   --accent-foreground: #141723;
-  --destructive: #c83e3a;
+  --destructive: #3f5a44;
   --border: #e8e7e0;
   --input: #e8e7e0;
   --ring: #7b9082;
@@ -53,8 +53,8 @@
   --brand-soft: #f1f3ee;
   --brand-ink: #4a5c45;
   --pane: #f6f6f2;
-  --signal-red: #c83e3a;
-  --signal-red-bg: #fdf4f3;
+  --signal-red: #3f5a44;
+  --signal-red-bg: #e9efe6;
   --signal-amber: #a3660b;
   --signal-amber-bg: #fdf4dc;
   --signal-green: #237a43;
@@ -149,7 +149,7 @@ body {
   animation: beat 1.2s ease-in-out infinite;
 }
 
-/* ---- Agent-at-work motion (AI Observability workspace) ---- */
+/* ---- Agent-at-work motion (AI agents workspace) ---- */
 
 /* Text that shimmers while an agent step runs. */
 @keyframes agent-shimmer {

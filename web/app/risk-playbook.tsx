@@ -23,9 +23,12 @@ function scoreToGrade(score: number): { grade: number; rating: string } {
   return { grade: 1, rating: "AAA" };
 }
 
+// Risk colours for this panel only: red while the risk is high, amber in between, green once it is low.
+const RISK_RED = "#c83e3a";
+const riskColor = (grade: number) => (grade >= 5 ? RISK_RED : grade === 4 ? "var(--color-warn)" : "var(--color-ok)");
 function gradeBadgeClass(grade: number): string {
-  if (grade >= 6) return "bg-stop text-white";
-  if (grade === 5) return "bg-stop-soft text-stop";
+  if (grade >= 6) return "bg-[#c83e3a] text-white";
+  if (grade === 5) return "bg-[#fbeceb] text-[#a8322f]";
   if (grade === 4) return "bg-warn-soft text-warn";
   if (grade === 3) return "bg-act-soft text-act";
   return "bg-ok-soft text-ok";
@@ -34,9 +37,12 @@ function gradeBadgeClass(grade: number): string {
 export default function RiskPlaybook({
   onActionComplete,
   signer = "Paul Winter",
+  mock = true,
 }: {
   onActionComplete?: () => Promise<void> | void;
   signer?: string;
+  /** Demo mode: the outside feeds are offline snapshots, so never call them "live". */
+  mock?: boolean;
 }) {
   const [playbook, setPlaybook] = useState<RiskPlaybookResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,14 +196,14 @@ export default function RiskPlaybook({
         </div>
       )}
 
-      {/* 1. HERO: MOODY'S PATH-TO-UPGRADE OPTIMIZER (CCC -> A) */}
+      {/* 1. Path to a better rating (CCC -> A) */}
       {playbook.upgrade_plans.length > 0 && (
         <section className="rounded-xl border border-rule bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
             <div>
-              <h3 className="text-base font-bold text-ink">Path-to-Upgrade Optimizer (Moody&apos;s Recourse)</h3>
+              <h3 className="text-base font-bold text-ink">Path to a better rating</h3>
               <p className="text-xs text-muted">
-                Toggle concrete levers to simulate live rating recovery — ranked by risk points eliminated per euro.
+                Pick actions to see how far the risk drops. Ranked by risk removed per euro.
               </p>
             </div>
             <span className="rounded-full bg-dock px-2.5 py-1 text-xs font-semibold text-muted">
@@ -236,18 +242,17 @@ export default function RiskPlaybook({
                   {/* Live Score Bar */}
                   <div className="mt-3">
                     <div className="flex justify-between text-[11px] text-muted tabular">
-                      <span>Risk index: {Math.round(plan.current_score)} → {Math.round(simScore)} / 100</span>
+                      <span>Risk {Math.round(plan.current_score)} → {Math.round(simScore)} / 100 · lower is better</span>
                       <span className="font-semibold text-ok">
                         −{Math.round(plan.current_score - simScore)} pts · {eur(simCost)}
                       </span>
                     </div>
-                    <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-dock">
+                    {/* Faint red: the risk today. Solid: the risk after the picked actions, red to green as it drops. */}
+                    <div className="relative mt-1 h-2.5 w-full overflow-hidden rounded-full bg-dock">
+                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, Math.max(6, plan.current_score))}%`, background: RISK_RED, opacity: 0.18 }} />
                       <div
-                        className="h-full rounded-full transition-all duration-300"
-                        style={{
-                          width: `${Math.min(100, Math.max(6, simScore))}%`,
-                          background: sim.grade >= 5 ? "var(--color-stop)" : sim.grade === 4 ? "var(--color-warn)" : "var(--color-ok)",
-                        }}
+                        className="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
+                        style={{ width: `${Math.min(100, Math.max(6, simScore))}%`, background: riskColor(sim.grade) }}
                       />
                     </div>
                   </div>
@@ -360,9 +365,9 @@ export default function RiskPlaybook({
         <section className="rounded-xl border border-rule bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
             <div>
-              <h3 className="text-base font-bold text-ink">Predictive Pre-Emptive Chasing (Live External Feeds → Chaser)</h3>
+              <h3 className="text-base font-bold text-ink">Early warnings from outside feeds → Chaser</h3>
               <p className="text-xs text-muted">
-                Live Polymarket, Open-Meteo, and global regulatory spikes matched to active corridors 24–72h before ERP shows a delay.
+                Polymarket, weather and regulation signals matched to active shipping routes 24–72 h before the ERP shows a delay.
               </p>
             </div>
             <span className="rounded-full bg-warn-soft px-2.5 py-1 text-xs font-bold text-warn tabular">
@@ -381,7 +386,7 @@ export default function RiskPlaybook({
                           +{al.lead_time_advantage_hours}h ahead of ERP
                         </span>
                         <span className="text-xs font-bold text-ink">{al.supplier_name} ({al.country})</span>
-                        <span className="text-xs text-muted">· {al.provider}</span>
+                        <span className="text-xs text-muted">· {mock ? al.provider.replace(/\s*Live Odds$/i, " (offline snapshot)") : al.provider}</span>
                         {al.shipment_id && <span className="font-mono text-[11px] text-muted">{al.shipment_id}</span>}
                       </div>
                       <p className="mt-1 text-xs text-ink">{al.signal_title}</p>
@@ -436,7 +441,7 @@ export default function RiskPlaybook({
             <div>
               <h3 className="text-base font-bold text-ink">Geo-Decorrelated 2nd-Source Scout &amp; Instant RFQ Pack</h3>
               <p className="text-xs text-muted">
-                Excludes embargoed/high-risk origins using live corridor feeds, simulates 70/30 dual-source grade recovery, and drafts spec-grounded RFQs.
+                Excludes embargoed/high-risk origins using route feeds, simulates 70/30 dual-source grade recovery, and drafts spec-grounded RFQs.
               </p>
             </div>
             <span className="rounded-full bg-act-soft px-2.5 py-1 text-xs font-bold text-act tabular">

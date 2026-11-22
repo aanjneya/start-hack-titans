@@ -1146,7 +1146,7 @@ function ActionCard({
             </p>
           )}
           {state === "error" && (
-            <p role="alert" title={error} className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug text-red-200">
+            <p role="alert" title={error} className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug text-amber-100">
               {error}
             </p>
           )}

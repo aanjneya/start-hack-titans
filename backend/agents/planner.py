@@ -129,9 +129,12 @@ class LaunchPlanner(Agent):
                 self._card(issue, plan, forecasts)
                 self._refreshed[issue.id] = (trace.current_run_id(), issue.updated_at)
         closed = {i.id for i in issues if i.status == "resolved"}
+        future_issues = {i.id for i in issues if relevant(i)}
         with session() as s:
             for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed")).all():
-                if closed.intersection(card.issue_ids):
+                obsolete_review = (any(o.get("horizon") == "future" for o in card.options)
+                                   and not future_issues.intersection(card.issue_ids))
+                if closed.intersection(card.issue_ids) or obsolete_review:
                     card.status = "outdated"
                     s.add(card)
             s.commit()
@@ -152,7 +155,8 @@ class LaunchPlanner(Agent):
             option = regulatory_option(issue, plan)
             self._save_card(issue, "Future supply · " + issue.fingerprint, [option], 0, None,
                             option["risk_note"], option["evidence"], option["label"], option["label"])
-            return
+            if issue.kind != IssueKind.COPIES_AT_RISK or not plan:
+                return
         product = issue.product_id or (issue.impact or {}).get("product_id")
         parts = {issue.part_id} if issue.part_id else {p.component_id for p in all_rows(SupplierPartMap)
                                                        if issue.supplier_id and p.supplier_id == issue.supplier_id}
@@ -240,7 +244,7 @@ class LaunchPlanner(Agent):
                              product_id=review["product_id"], part_id=review["part"],
                              reason=f"{card.approver}: {selected['risk_note']}",
                              supplier_id=review.get("supplier_id", ""),
-                             impact={**({"horizon": "future", "owner": card.approver} if selected.get("horizon") else {}),
+                             impact={**({"horizon": "future", "owner": card.approver, "note": selected.get("review_brief", "")} if selected.get("horizon") else {}),
                                      "product_id": review["product_id"], "copies_at_risk": review["copies_at_risk"],
                                      "due_by": card.decide_by.isoformat() if card.decide_by else None},
                              evidence=[{"path": f"decisions/{card.id}", "locator": f"approved option {card.chosen_option}"},

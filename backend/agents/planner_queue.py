@@ -57,6 +57,14 @@ def physical_key(option, card=None):
             line.get("shipment_id") or reference, part, target if purpose.startswith("request_quote_") else None)
 
 
+def authorization_key(option, card=None):
+    """Alternative paid services for one shipment line represent one freight commitment."""
+    key = physical_key(option, card)
+    if key and option["actions"][0].get("quote_inbox_id"):
+        return ("accept_freight_service", *key[1:])
+    return key
+
+
 def selection_version(card, index, option):
     return digest([card.id, index, option])
 
@@ -69,16 +77,16 @@ def _instructions(option):
     site = policy.setup().site or "receiving site"
     dock = [] if option.get("dock_released") else [f"Released {site} dock slot"]
     if kind == "port pickup":
-        return "Ask Logistics to arrange terminal pickup.", ["Terminal release", "Truck quote and arrival time", *dock]
+        return "Open a Logistics review to price pickup and confirm terminal and dock release.", ["Terminal release", "Truck quote and arrival time", *dock]
     if kind == "supplier stock offer":
-        return "Ask the buyer to verify the finished stock before placing a new PO.", [
+        return "Verify freight, arrival and dock release before placing a new PO.", [
             "Offer validity and freight cost", f"Timed arrival at {site}", "Released dock slot"]
     if kind == "quality concession review":
         return "Request a documented Quality concession for this lot.", ["Signed concession", "Recorded lot release"]
     if action["type"] == "human_review":
         return "Open an internal recovery review for the buyer.", ["A feasible recovery option and supporting evidence"]
     if action.get("quote_inbox_id"):
-        return "Ask the Chaser to accept the selected quote and request confirmation.", ["Supplier confirmation of line-ready delivery"]
+        return "Authorize the Chaser to accept this quote and request a confirmed delivery.", ["Supplier confirmation of line-ready delivery"]
     return action["ask"], ["Supplier response matched to the shipment and PO line", *dock]
 
 
@@ -92,12 +100,35 @@ def _rank(item):
             -gain, item["key"])
 
 
+def compare_freight(entries):
+    """Compare executable priced services for the same physical line and edition."""
+    quotes = {}
+    for entry in entries:
+        option = entry["option"]
+        if (not option["actions"][0].get("quote_inbox_id") or option.get("cost_eur") is None
+                or not (option.get("copies_gained") or 0) > 0):
+            continue
+        scope = (entry["edition"], authorization_key(option))
+        quotes.setdefault(scope, []).append(entry)
+    for group in quotes.values():
+        options = [e["option"] for e in group]
+        def merit(option):
+            return (-option["copies_gained"], option["cost_eur"])
+        best = min(merit(o) for o in options)
+        for entry in group:
+            o = entry["option"]
+            entry["freight_comparison"] = dict(
+                fee_per_additional_copy=o["cost_eur"] / o["copies_gained"], preferred=merit(o) == best,
+                alternatives=[dict(label=a["label"], fee=a["cost_eur"], gain=a["copies_gained"])
+                              for a in sorted(options, key=merit) if a is not o])
+
+
 def buyer_queue(db):
     cards = db.exec(select(DecisionCard).where(DecisionCard.created_by == "planner")
                     .order_by(DecisionCard.id.desc())).all()
     authorized = [(c, c.options[c.chosen_option]) for c in cards
                   if c.status in ("approved", "executed") and c.chosen_option is not None]
-    claimed = {physical_key(option, card) for card, option in authorized}
+    claimed = {authorization_key(option, card) for card, option in authorized}
     specific_decisions = {f"decisions/{card.id}" for card, opt in authorized
                           if any(a.get("type") == "human_review" and a.get("reference")
                                  for a in opt.get("actions", []))}
@@ -111,7 +142,7 @@ def buyer_queue(db):
             continue
         for index, option in enumerate(card.options):
             physical = physical_key(option, card)
-            if not physical or physical in claimed or option.get("available") is False:
+            if not physical or authorization_key(option, card) in claimed or option.get("available") is False:
                 continue
             key = digest([physical, sorted(option.get("approvers", [])), sorted(option.get("approval_roles", []))])
             step, requirements = _instructions(option)
@@ -154,6 +185,7 @@ def buyer_queue(db):
         entry["shared_shipment"] = scope[1] if counts[scope] > 1 and entry["option"].get("copies_gained") else None
         entry["on_time_recovery"] = not _rank(entry)[0]
         entry["evidence"] = list({digest(e): e for e in entry["evidence"]}.values())
+    compare_freight(groups.values())
     return sorted(groups.values(), key=_rank)
 
 

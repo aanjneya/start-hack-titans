@@ -177,7 +177,7 @@ def options_for(issue, plan, forecast, row):
         key = (c["supplier_id"], c["po_number"], c["po_line"], c["shipment_id"])
         action = {k: c[k] for k in ("supplier_id", "po_number", "po_line", "shipment_id", "part")}
         action.update(type="email", purpose="confirm_supply", ask=f"Confirm released revision, quantity and timed site delivery for PO "
-                                        f"{c['po_number']}/{c['po_line']} on {c['shipment_id']}.")
+                                        f"{c['po_number']}/{c['po_line']} on {c['shipment_id']}. If earlier delivery is possible, quote the additional fee, arrival and offer expiry.")
         earliest = max(plan.as_of, parse_datetime(c["eta"]) or plan.as_of)
         possible = simulate(plan, {key: (earliest, part, c["quantity"])})[pid]
         gain = possible.projected_packed - forecast.projected_packed if forecast.projected_packed is not None else None

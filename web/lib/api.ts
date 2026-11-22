@@ -92,12 +92,18 @@ export const EMPTY_OBSERVABILITY: ObservabilitySnapshot = {
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export class ApiHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function unwrap<T>(res: Response, path: string): Promise<T> {
   const body = (await res.json().catch(() => null)) as (ApiResponse<T> & { detail?: unknown }) | null;
   if (!res.ok || !body?.ok) {
     // FastAPI errors come as {detail: "..."}; our own as the ApiResponse envelope.
     const reason = body?.error?.message ?? (typeof body?.detail === "string" ? body.detail : null);
-    throw new Error(reason ?? `${res.status} ${res.statusText} on ${path}`);
+    throw new ApiHttpError(res.status, reason ?? `${res.status} ${res.statusText} on ${path}`);
   }
   return body.data as T;
 }

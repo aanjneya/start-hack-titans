@@ -87,6 +87,22 @@ def test_real_magnets_open_one_future_review():
     entry, = [q for q in future(client) if q["option"]["button_label"] == "Start qualification review"]
     assert "63 to 105 days" in entry["next_step"] and "2026-12-01" in entry["next_step"]
     assert entry["part"] == "CMP-GAM-007" and entry["option"]["copies_gained"] is None
+    exposure = entry["option"]["exposure"]
+    assert exposure["order_value"] == {"amount": 1870260, "currency": "CNY"}
+    assert exposure["effective_after"] == "2026-12-01"
+    assert any("sampled within 10 days" in o["text"] for o in exposure["sample_offers"])
+    assert exposure["previous_lead_days"] == 63 and exposure["lead_days"] == 105
+    assert [(o["po"], o["line"], o["promised"], o["quantity"]) for o in exposure["orders"]] == [
+        ("4500318765", 2, "2026-12-14", 23000), ("4500318781", 1, "2027-01-04", 25500),
+        ("4500318786", 3, "2027-01-15", 24500)]
+    grade = exposure["last_grade_change"]
+    assert (grade["previous"], grade["current"]) == ("A", "CCC")
+    assert {"factor": "external_politics", "before": 11.2, "after": 11.2} in grade["drivers"]
+    signals = {s["factor"]: s for s in exposure["signals"]}
+    assert signals["external_politics"]["sources"][0]["origin"] == "Offline example"
+    assert {"weather", "telemetry", "regulatory_change"} == {d["factor"] for d in exposure["other_drivers"]}
+    assert signals["trade_news"]["sources"][0]["published"] == "2026-11-21"
+    assert any(e["source_kind"] == "Product BOM" for e in entry["evidence"])
     assert len(entry["sources"]) >= 2
     forecasts = client.get("/api/forecast").json()["data"]
     assert forecasts and all(f["limiting_part"] != "CMP-MAG-005" for f in forecasts)
@@ -96,6 +112,7 @@ def test_real_magnets_open_one_future_review():
                              json={"by": "Paul Winter", "option": src["option_index"]})
         assert result.status_code == (200 if idx == 0 else 409)
     review, = [i for i in store.all_rows(m.Issue) if i.impact.get("horizon") == "future"]
+    assert review.impact["note"] == entry["option"]["review_brief"] and "sample terms" in review.impact["note"]
     assert review.impact["owner"] == "Paul Winter" and review.supplier_id == "SUP-0029"
     assert client.get("/api/forecast").json()["data"] == forecasts and len(store.all_rows(m.OutboxMessage)) == mails
 
@@ -130,6 +147,19 @@ def test_second_customer_regulation_without_launch_calendar(tmp_path, monkeypatc
     assert "88 days" in entry["next_step"] and "increased" not in entry["next_step"]
     assert {e["source_kind"] for e in entry["evidence"]} >= {"Official publication","Supplier evidence","Offline example"}
     assert client.get("/api/setup").json()["data"]["timezone"] == "Asia/Tokyo"
+    conflict, = store.add_all([m.Document(kind="notice", path="clarification", supplier_id="V-9",
+                              text="AX-901 is exempt from the licensing requirement.")])
+    changed = client.post(f"/api/decisions/{entry['decision_id']}/approve",
+                          json={"by": "Rin Abe", "version": entry["version"]})
+    assert changed.status_code == 409
+    disputed, = future(client)
+    assert disputed["option"]["button_label"] == "Check applicability"
+    assert disputed["option"]["exposure"]["uncertainties"] and not disputed["option"]["exposure"]["orders"]
+    with store.session() as db:
+        db.delete(db.get(m.Document, conflict.id))
+        db.commit()
+    system.emit(events.RISK_UPDATED, {})
+    entry, = future(client)
     with store.session() as db:
         db.delete(db.get(m.SupplierPartMap, facts[2].id))
         db.commit()
@@ -139,3 +169,62 @@ def test_second_customer_regulation_without_launch_calendar(tmp_path, monkeypatc
     revised, = future(client)
     assert revised["option"]["button_label"] == "Check applicability"
     assert revised["option"]["product_ids"] == [] and not store.all_rows(m.OutboxMessage)
+
+
+def test_supplier_country_warning_routes_without_customer_order_evidence():
+    client = TestClient(app)
+    issue, = store.add_all([m.Issue(type="high_risk_rating", raised_by="risk", kind="copies_at_risk",
+        subject_type="supplier", subject_id="V", supplier_id="V", fingerprint="supplier/V",
+        evidence=[{"path": "https://www.wto.org/customs", "locator": "regulations:regulatory_change"}],
+        suggested_actions=[{"type": "human_review", "label": "Verify compliance impact"}])])
+    system.emit(events.ISSUE_RAISED, {"issue_id": issue.id, "kind": issue.kind})
+    entry, = future(client)
+    assert entry["option"]["button_label"] == "Check applicability"
+    assert entry["option"]["exposure"]["orders"] == [] and entry["option"]["copies_gained"] is None
+    with store.session() as db:
+        finding = db.get(m.Issue, issue.id)
+        finding.suggested_actions = [{"type": "email", "label": "Verify shipment location"}]
+        db.add(finding)
+        db.commit()
+    system.emit(events.RISK_UPDATED, {})
+    assert future(client) == []
+
+
+def test_portal_manifest_advances_only_after_healthy_processing(tmp_path, monkeypatch):
+    """Drive the Watcher entry point, swapping only its portal transport and live gate."""
+    from dataclasses import replace
+    import hashlib
+    from backend.agents import watcher
+    config_for_watch = replace(config.get_settings(), mock_mode=False, soony_api_token="fixture",
+                               soony_base_url="https://fixture.invalid", portal_mirror=tmp_path / "mirror")
+    monkeypatch.setattr(watcher, "get_settings", lambda: config_for_watch)
+    path = "erp/packout_log.csv"
+    data = b"date,site,product_id,line,units_packed\n2026-11-02,Hamburg,FG-X,L1,5\n"
+    manifest = [{"path": path, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "url": path}]
+    monkeypatch.setattr(watcher.Watcher, "list_portal", lambda self: manifest)
+    monkeypatch.setattr(watcher.Watcher, "_get", lambda self, url: data)
+    attempts = []
+    def fail_once(event):
+        attempts.append(event.name)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary downstream outage")
+    system.bus().subscribe(events.TRUTH_UPDATED, "fixture_processor", fail_once)
+    client = TestClient(app)
+    first = client.post("/api/watch/check").json()["data"]
+    assert first["status"] == "partial" and not store.all_rows(m.PortalFile)
+    assert client.get("/api/health").json()["data"]["lastDrop"]["failures"][0]["agent"] == "fixture_processor"
+    second = client.post("/api/watch/check").json()["data"]
+    assert second["status"] == "completed" and len(attempts) == 2
+    assert len(store.all_rows(m.PortalFile)) == 1 and len(store.all_rows(m.Packout)) == 1
+    assert client.post("/api/watch/check").json()["data"] == {"added": 0, "changed": 0, "removed": 0}
+
+
+def test_unpriced_or_mixed_currency_lines_have_no_aggregate_value():
+    from backend.agents.planner_regulatory import order_value
+
+    def line(unit_price, currency):
+        return m.PurchaseOrder(po_number="P", quantity=3, unit_price=unit_price, currency=currency)
+    assert order_value([line(0.1, "JPY"), line(1, "JPY")]) == {"amount": 3.3, "currency": "JPY"}
+    assert order_value([]) is None
+    assert order_value([line(1, "JPY"), line(1, "EUR")]) is None
+    assert order_value([line(None, "EUR")]) is None

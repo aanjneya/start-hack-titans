@@ -25,7 +25,9 @@ export interface HealthCheckResponse {
   status: 'ok' | 'degraded';
   mockMode: boolean;
   replayEnabled?: boolean;
-  lastDrop?: {status: string; run_id: string; failures: RunResult['failures']} | null;
+  /** Changes with new agent activity or drop status. Polling clients may reuse a recent complete snapshot. */
+  activity_version?: string;
+  lastDrop?: {mode?: string; label?: string; status: string; run_id: string; failures: RunResult['failures']} | null;
   timestamp: string;
   dataRoot: string;
   agents: string[];
@@ -95,8 +97,33 @@ export interface Issue {
   updated_at: string;
 }
 
+export interface SupplyExposure {
+  supplier: string;
+  component: string;
+  assembly: string | null;
+  share: number | null;
+  effective_after: string | null;
+  uncertainties?: string[];
+  sample_offers?: {text: string; source: string}[];
+  lead_days: number | null;
+  previous_lead_days: number | null;
+  order_value?: {amount: number; currency: string} | null;
+  orders: {po: string; line: number | null; quantity: number | null; promised: string}[];
+  supplier_rating: string | null;
+  last_grade_change?: {
+    previous: string; current: string;
+    drivers: {factor: string; before: number; after: number}[];
+  } | null;
+  other_drivers?: {factor: string; points: number}[];
+  signals: {factor: string; text: string; points: number; sources: {
+    evidence: Evidence; origin: string; title?: string; published: string | null;
+  }[]}[];
+}
+
 export interface DecisionOption {
+  exposure?: SupplyExposure;
   horizon?: 'future';
+  review_brief?: string;
   button_label?: string;
   currency?: string;
   label: string;
@@ -141,6 +168,11 @@ export interface DecisionCard {
 
 /** A ranked, actionable option and every source card supporting it. */
 export interface BuyerQueueEntry {
+  freight_comparison?: {
+    fee_per_additional_copy: number | null;
+    preferred: boolean;
+    alternatives: {label: string; fee: number; gain: number}[];
+  };
   on_time_recovery: boolean;
   shared_shipment: string | null; // Alternatives using the same edition and shipment line share capacity
   key: string;
@@ -172,7 +204,7 @@ export interface Forecast {
 
 export interface RiskScore {
   id: number;
-  entity_type: 'part' | 'supplier';
+  entity_type: 'part' | 'supplier' | 'product';
   entity_id: string;
   grade: number; // 1 safe .. 6 critical
   rating: string; // AAA..CCC
@@ -334,7 +366,7 @@ export const API_ROUTES = {
   BUYER_QUEUE: '/api/buyer-queue', // GET -> BuyerQueueEntry[] in execution priority order
   DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
-  DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest
+  DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest, an assigned signer can decline the recommendation
   TRACE: '/api/trace', // GET ?limit=&agent=&run_id= -> AgentLogEntry[]
   RISK: '/api/risk', // GET -> RiskScore[]
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]

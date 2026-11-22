@@ -121,13 +121,14 @@ def test_watcher_live_diff_with_fake_portal(monkeypatch, tmp_path):
         return [{"path": p, "bytes": len(b), "sha256": hashlib.sha256(b).hexdigest(), "url": p}
                 for p, b in portal.items()]
 
-    monkeypatch.setenv("MOCK_MODE", "false")
-    monkeypatch.setenv("SOONY_API_TOKEN", "test")
-    monkeypatch.setenv("SOONY_BASE_URL", "https://portal.test")
-    monkeypatch.setenv("PORTAL_MIRROR", str(tmp_path / "mirror"))
-    config.reset_settings()
+    from dataclasses import replace
+    from backend.agents import watcher
     from backend.agents.watcher import Watcher
 
+    # Exercise real portal diffing while downstream agents use their offline providers.
+    settings = replace(config.get_settings(), mock_mode=False, soony_api_token="test",
+                       soony_base_url="https://portal.test", portal_mirror=tmp_path / "mirror")
+    monkeypatch.setattr(watcher, "get_settings", lambda: settings)
     monkeypatch.setattr(Watcher, "list_portal", lambda self: listing())
     monkeypatch.setattr(Watcher, "_get", lambda self, url: portal[url])
     with monkeypatch.context() as broken:
@@ -135,13 +136,12 @@ def test_watcher_live_diff_with_fake_portal(monkeypatch, tmp_path):
         with pytest.raises(ValueError, match="checksum mismatch"):
             system.watch_once()
     first = system.watch_once()
-    assert first["added"] == 2 and (tmp_path / "mirror" / "soony/erp/packout_log.csv").exists()
+    assert first["status"] == "completed" and first["added"] == 2 and (tmp_path / "mirror" / "soony/erp/packout_log.csv").exists()
     assert system.watch_once() == {"added": 0, "changed": 0, "removed": 0}
     portal["soony/erp/packout_log.csv"] += b"2026-11-03,DC-HAM,FG-X,L1,7\n"
     second = system.watch_once()
     assert second["changed"] == 1 and second["added"] == 0
-    monkeypatch.setenv("MOCK_MODE", "true")
-    config.reset_settings()
+    monkeypatch.setattr(watcher, "get_settings", config.get_settings)
     assert system.watch_once() == {"skipped": True}
 
 

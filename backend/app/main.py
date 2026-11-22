@@ -22,7 +22,7 @@ from ..core import events, policy, trace
 from ..core.replay import ReplayUnavailable
 from ..core.config import get_settings
 from ..core.models import (
-    Conflict, DecisionCard, DropRecord, FieldChange, Forecast, InboxMessage, Issue, OutboxMessage, RiskScore,
+    AgentLog, Conflict, DecisionCard, DropRecord, FieldChange, Forecast, InboxMessage, Issue, OutboxMessage, RiskScore,
     utcnow,
 )
 from ..core.store import query, session
@@ -91,9 +91,14 @@ def health() -> dict:
     s = get_settings()
     with session() as db:
         last = db.exec(select(DropRecord).order_by(DropRecord.id.desc())).first()
+        activity = db.exec(select(AgentLog.id, AgentLog.ts).order_by(AgentLog.id.desc()).limit(1)).first()
+    version = f"{activity.id}/{activity.ts.isoformat()}" if activity else "empty"
+    if last:
+        version += f"/{last.run_id}/{last.status}"
     return ok({
+        "activity_version": version,
         "replayEnabled": bool(s.replay_db_path and s.mock_mode),
-        "lastDrop": (dict(status=last.status, run_id=last.run_id, failures=last.failures or []) if last else None),
+        "lastDrop": (dict(status=last.status, mode=last.mode, label=last.label, run_id=last.run_id, failures=last.failures or []) if last else None),
         "status": "degraded" if last and last.status == "partial" else "ok",
         "mockMode": s.mock_mode,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -226,19 +231,22 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
         if card.status != "proposed":
             raise HTTPException(409, f"decision {decision_id} is already {card.status}")
         selected = req.option if req.option is not None else card.recommended
-        if req.version is not None:
-            if selected is None or not 0 <= selected < len(card.options):
-                raise HTTPException(422, "Choose a valid option.")
-            if req.version != selection_version(card, selected, card.options[selected]):
-                raise HTTPException(409, "The option changed. Refresh the buyer queue.")
+        if selected is None or not 0 <= selected < len(card.options):
+            raise HTTPException(422, "Choose a valid option.")
+        option = card.options[selected]
+        if req.version is not None and req.version != selection_version(card, selected, option):
+            raise HTTPException(409, "The option changed. Refresh the buyer queue.")
+        if status == "rejected" and selected != card.recommended:
+            raise HTTPException(422, "Decline the recommended option to reject this decision.")
+        if (card.created_by == "planner" and (option.get("product_id") or option.get("horizon") == "future")
+                and current_option(s, card, selected) is None):
+            raise ChangedDecision
+        if status == "rejected" and option.get("approvers"):
+            if req.by.strip().casefold() not in {name.casefold() for name in option["approvers"]}:
+                raise HTTPException(403, "Only an assigned signer can decline this decision.")
         if status == "approved":
-            if selected is None or not 0 <= selected < len(card.options):
-                raise HTTPException(422, "Choose a valid option.")
-            option = card.options[selected]
             if not option.get("available", True):
                 raise HTTPException(409, "The evidence does not support executing this option.")
-            if card.created_by == "planner" and (option.get("product_id") or option.get("horizon") == "future") and current_option(s, card, selected) is None:
-                raise ChangedDecision
             if card.created_by == "planner" and already_requested(s, option, card):
                 raise HTTPException(409, "This action was already authorized on a related decision.")
             if option.get("approvers"):
@@ -255,14 +263,18 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
     return card
 
 
-@app.post("/api/decisions/{decision_id}/approve")
-def approve(decision_id: int, req: DecideRequest | None = None) -> dict:
-    req = req or DecideRequest()
+def _current_decision(decision_id: int, status: str, req: DecideRequest):
     try:
-        card = _decide(decision_id, "approved", req)
+        return _decide(decision_id, status, req)
     except ChangedDecision:
         system.emit(events.PLANNER_RECHECK, {}, source="approval_recheck")
         raise HTTPException(409, "The evidence or approval route changed. Review the refreshed buyer queue.") from None
+
+
+@app.post("/api/decisions/{decision_id}/approve")
+def approve(decision_id: int, req: DecideRequest | None = None) -> dict:
+    req = req or DecideRequest()
+    card = _current_decision(decision_id, "approved", req)
     trace.log("human", "approve", f"decision {decision_id} by {req.by}", data={"decision_id": decision_id})
     result = system.emit(events.DECISION_APPROVED,
                          {"decision_id": decision_id, "option": card.chosen_option, "by": req.by})
@@ -274,7 +286,7 @@ def approve(decision_id: int, req: DecideRequest | None = None) -> dict:
 @app.post("/api/decisions/{decision_id}/reject")
 def reject(decision_id: int, req: DecideRequest | None = None) -> dict:
     req = req or DecideRequest()
-    card = _decide(decision_id, "rejected", req)
+    card = _current_decision(decision_id, "rejected", req)
     trace.log("human", "reject", f"decision {decision_id} by {req.by}", data={"decision_id": decision_id})
     result = system.emit(events.DECISION_REJECTED, {"decision_id": decision_id, "by": req.by})
     return ok({"decision": card.model_dump(mode="json"), **result})

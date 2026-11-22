@@ -85,6 +85,10 @@ class Watcher(Agent):
         result = system.process_drop(added=[f["path"] for f in added], changed=[f["path"] for f in changed],
                                    removed=removed, label=label, data_root=mirror, mode="live")
 
+        if result["status"] != "completed":
+            # Keep the last successful manifest so the next poll delivers these files again.
+            return result
+
         # Advance the manifest only once downstream processing has succeeded.
         with session() as db:
             for f in added + changed:

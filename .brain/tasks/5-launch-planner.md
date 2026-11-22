@@ -56,3 +56,7 @@ The historical €500 pickup raises the PO approval value to €53,150 and route
 - [x] **T5.13 (jivi branch)** Isolate replay from the live database, persist the completed commit, and surface interrupted agent work as a partial drop with trace links.
 
 Branch verification: 79 backend tests passed, including the historical pickup and duplicate reply. Repository verification passed. Browser checks covered source evidence, opening the internal review, the failed-drop warning and trace, and Sofia’s €53,150 approval route. The verified demo used an isolated mailbox and historical data.
+
+
+- [x] **T5.14 (jivi branch)** Bring supplier grade changes, retained external evidence, order-line dates and contract values into one review with a named owner. Corporate order records establish exposure; a market snapshot supplies context. Conflicting article terms route to applicability verification.
+- [x] **T5.15 (jivi branch)** Compare competing freight quotes on one line. Each mode can be priced independently. Only one paid service can be authorized. The supplier thread links back to the priced option; a duplicate reply preserves the accepted forecast.

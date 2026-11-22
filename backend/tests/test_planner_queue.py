@@ -120,3 +120,34 @@ def test_stale_priced_action_cannot_dispatch(tmp_path, change):
     options = [o for c in all_rows(DecisionCard) if c.status == "proposed" for o in c.options if o["description"] == "pickup"]
     assert options and all(not o["available"] and o["approvers"] == ["Sofia Marchetti"] for o in options)
     assert all(o["copies_gained"] == (0 if change == "late" else 5200) for o in options)
+
+
+def test_competing_freight_quotes_can_be_compared_but_only_one_can_be_ordered(tmp_path):
+    client = TestClient(app)
+    for _ in range(sleeve_scenario_steps()):
+        system.replay_step()
+    _, reply, fact = prepare_quote_request(client, tmp_path)
+    for mode, cost in (("air", 600), ("pickup", 500)):
+        quote = dict(fact, mode=mode, incremental_cost_eur=cost, valid_until=fact["arrival"])
+        client.post("/api/inbox", json=dict(reply, quote=quote)).raise_for_status()
+    offers = {e["option"]["description"]: e for e in queue(client)
+              if e["option"]["actions"][0].get("quote_inbox_id")}
+    assert set(offers) == {"air", "pickup"}
+    assert all(e["option"]["copies_gained"] == 5200 for e in offers.values())
+
+    assert offers["pickup"]["freight_comparison"]["preferred"]
+    assert not offers["air"]["freight_comparison"]["preferred"]
+    assert offers["pickup"]["freight_comparison"]["fee_per_additional_copy"] == pytest.approx(500 / 5200)
+    assert offers["pickup"]["freight_comparison"]["alternatives"] == [
+        {"label": "Accept air quote", "fee": 600, "gain": 5200}]
+
+    def approve(service):
+        entry = offers[service]
+        owners = entry["option"]["approvers"]
+        return client.post(f"/api/decisions/{entry['decision_id']}/approve", json={
+            "by": owners[0], "approvals": owners[1:], "option": entry["option_index"], "version": entry["version"]})
+    count = len(all_rows(OutboxMessage))
+    approve("pickup").raise_for_status()
+    assert approve("air").status_code == 409
+    assert len(all_rows(OutboxMessage)) == count + 1
+    assert not any(e["option"]["actions"][0].get("quote_inbox_id") for e in queue(client))

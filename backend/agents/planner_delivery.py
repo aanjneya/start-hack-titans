@@ -41,7 +41,7 @@ def review_key(review):
 
 def already_requested(s, option, card=None):
     """A newer version of a card may still describe an already-authorized physical action."""
-    from .planner_queue import physical_key
+    from .planner_queue import authorization_key
 
     actions = option.get("actions", [])
     if not actions:
@@ -54,9 +54,9 @@ def already_requested(s, option, card=None):
             return True
     cards = s.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
                    DecisionCard.status.in_(["approved", "executed"]))).all()
-    key = physical_key(option, card)
+    key = authorization_key(option, card)
     return any(c.chosen_option is not None and (
-        physical_key(c.options[c.chosen_option], c) == key if key else c.options[c.chosen_option].get("actions") == actions
+        authorization_key(c.options[c.chosen_option], c) == key if key else c.options[c.chosen_option].get("actions") == actions
     ) for c in cards)
 
 
@@ -154,7 +154,8 @@ def ingest_reply(msg, delivery, agent, *, quote=None):
             for row in s.exec(select(InboxMessage).where(InboxMessage.supplier_id == msg.supplier_id)
                               .order_by(InboxMessage.id.desc())).all():
                 old = (row.result or {}).get(field)
-                if old and all(old[k] == fact[k] for k in ("po_number", "po_line", "shipment_id")):
+                same_scope = old and all(old[k] == fact[k] for k in ("po_number", "po_line", "shipment_id"))
+                if same_scope and (not quote or old.get("mode") == fact["mode"]):
                     prior.append((row.id, old))
                     break
             if prior:

@@ -189,7 +189,10 @@ def test_rejection_and_auto_threshold(tmp_path, monkeypatch, sleeve_snapshot):
     from backend.core import config, policy
     client = TestClient(app)
     card = next(c for c in all_rows(DecisionCard) if "rev blocked" in c.title and c.title.endswith("CMP-GAM-004") and c.status == "proposed")
-    client.post(f"/api/decisions/{card.id}/reject", json={"by": "buyer"}).raise_for_status()
+    url = f"/api/decisions/{card.id}/reject"
+    assert client.post(url, json={"by": "another buyer"}).status_code == 403
+    assert client.post(url, json={"by": card.approver, "option": -1}).status_code == 422
+    client.post(url, json={"by": card.approver}).raise_for_status()
     assert not _decision_mails(card.id)
     policy_path = tmp_path / "auto.json"
     settings = {"customer": "Example", "autonomy": {"mode": "auto", "auto_execute_below_eur": 1},

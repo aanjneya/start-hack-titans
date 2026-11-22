@@ -15,6 +15,7 @@ from ..core.models import (
     Conflict,
     Document,
     EngineeringChange,
+    FieldChange,
     Evidence,
     GoodsReceipt,
     IssueKind,
@@ -31,6 +32,7 @@ from ..core.models import (
     Supplier,
     SupplierPartMap,
 )
+from .planner_counts import fitted_components
 from ..core.store import all_rows, latest_by, query
 
 # Thresholds (configurable defaults — never domain values from Soony's data)
@@ -107,6 +109,7 @@ class CheckContext:
     stock: list[StockLot]
     documents: list[Document]
     existing_conflicts: list[Conflict]
+    embedded: dict[str, str] = field(default_factory=dict)
     risk_by_part: dict[str, int] = field(default_factory=dict)
     risk_by_supplier: dict[str, int] = field(default_factory=dict)
 
@@ -202,7 +205,12 @@ def build_context(risk_by_part: dict[str, int] | None = None,
     goods_receipts = latest_by(all_rows(GoodsReceipt), "gr_number")
     gr_by_number = {g.gr_number: g for g in goods_receipts}
 
-    stock = latest_by(all_rows(StockLot), "material_id", "batch")
+    stock = latest_by(all_rows(StockLot), "site", "material_id", "batch")
+    embedded = {}
+    for part, assembly, _ in fitted_components(all_rows(SupplierPartMap), all_rows(FieldChange)):
+        consumers = [b.parent_id for b in bom_by_child[part.component_id] if b.parent_id in launch_products]
+        if consumers and all(any(b.child_id == assembly for b in bom_by_parent[pid]) for pid in consumers):
+            embedded[part.component_id] = assembly
     documents = latest_by(all_rows(Document), "path")
     existing_conflicts = list(all_rows(Conflict))
 
@@ -254,7 +262,7 @@ def build_context(risk_by_part: dict[str, int] | None = None,
         shipment_mats=shipment_mats,
         goods_receipts=goods_receipts,
         gr_by_number=gr_by_number,
-        stock=stock,
+        stock=stock, embedded=embedded,
         documents=documents,
         existing_conflicts=existing_conflicts,
         risk_by_part=risk_by_part or {},
@@ -282,7 +290,18 @@ def _due_by_iso(ctx: CheckContext) -> Optional[str]:
 
 def _usable_stock_for_part(ctx: CheckContext, part_id: str, excluded_batches: set[str] | None = None) -> float:
     excluded = excluded_batches or set()
-    return sum(float(s.quantity or 0) for s in ctx.stock if s.material_id == part_id and s.batch not in excluded)
+    by_site = defaultdict(list)
+    for row in ctx.stock:
+        if row.material_id == part_id:
+            by_site[row.site].append(row)
+    total = 0.0
+    for rows in by_site.values():
+        latest = max((r.snapshot_date or date.min for r in rows))
+        current = [r for r in rows if (r.snapshot_date or date.min) == latest]
+        balances = [r for r in current if not r.batch]
+        eligible = balances or [r for r in current if r.batch not in excluded]
+        total += sum(float(r.quantity or 0) for r in eligible)
+    return total
 
 
 def compute_part_impact(
@@ -295,6 +314,8 @@ def compute_part_impact(
 ) -> tuple[str, dict[str, Any]]:
     """Calculate Impact dict (`product_id`, `copies_at_risk`, `hours_buffer`, `due_by`, `note`) from data."""
     consumers = _part_products(ctx, part_id)
+    if part_id in ctx.embedded:
+        return "", {"copies_at_risk": 0, "note": f"Fitted into {ctx.embedded[part_id]} by the supplier."}
     if not consumers:
         return "", {"due_by": _due_by_iso(ctx), "note": note}
 
@@ -402,7 +423,9 @@ def check_erp_vs_tracker(ctx: CheckContext) -> tuple[list[CandidateFinding], lis
         launch_hit = [p for p in parts if p in ctx.launch_parts]
         primary_part = launch_hit[0] if launch_hit else (parts[0] if parts else "")
         po_list = ctx.shipment_pos.get(sid, [])
-        primary_po = po_list[0] if po_list else ""
+        matching = {po.po_number for number in po_list for po in ctx.pos_by_number.get(number, [])
+                    if po.material_id == primary_part}
+        primary_po = next(iter(matching)) if len(matching) == 1 else ""
 
         if erp and trk:
             diffs: list[str] = []
@@ -501,7 +524,7 @@ def check_erp_vs_tracker(ctx: CheckContext) -> tuple[list[CandidateFinding], lis
                 )
                 findings.append(CandidateFinding(
                     type="missing_from_tracker",
-                    kind=IssueKind.MISSING_INFO,
+                    kind=IssueKind.MISSING_INFO if primary_po else IssueKind.HUMAN_CHECK,
                     severity=Severity.MEDIUM,
                     key=sid,
                     summary=_truncate(
@@ -522,10 +545,10 @@ def check_erp_vs_tracker(ctx: CheckContext) -> tuple[list[CandidateFinding], lis
                     impact=impact,
                     suggested_actions=[
                         {
-                            "type": "email",
+                            "type": "email" if primary_po else "human_review",
                             "label": f"Request live tracking & departure confirmation for {sid} ({erp.reference or erp.mode})",
                             "target": erp.supplier_id or sid,
-                            "owner": "chaser",
+                            "owner": "chaser" if primary_po else "human",
                         }
                     ],
                     evidence=[
@@ -1278,6 +1301,8 @@ def check_single_source_and_news(ctx: CheckContext) -> list[CandidateFinding]:
         )
         zero_stock_no_po = (stock_qty <= 0 and not open_pos)
 
+        if part_id in ctx.embedded and not has_export_risk:
+            continue
         if not (zero_stock_no_po or has_export_risk):
             continue
 
@@ -1363,6 +1388,13 @@ def check_single_source_and_news(ctx: CheckContext) -> list[CandidateFinding]:
                 },
             ]
 
+        if part_id in ctx.embedded:
+            severity = Severity.HIGH
+            summary = f"{part_id} export restrictions threaten future {ctx.embedded[part_id]} supply"
+            reason = (f"The supplier fits {part_id} into {ctx.embedded[part_id]}. Finished boxes already at Hamburg "
+                      "can be packed. Qualify an alternative for future box orders.")
+            actions = [a for a in actions if a["type"] == "second_source"]
+
         ev = [
             Evidence(path=sp.source, locator=f"{sp.supplier_id}/{part_id}",
                      quote=f"share={sp.share}, lead_time={sp.lead_time_days}d, note={sp.note}"),
@@ -1372,7 +1404,7 @@ def check_single_source_and_news(ctx: CheckContext) -> list[CandidateFinding]:
 
         findings.append(CandidateFinding(
             type=ftype,
-            kind=IssueKind.COPIES_AT_RISK,
+            kind=IssueKind.HUMAN_CHECK if part_id in ctx.embedded else IssueKind.COPIES_AT_RISK,
             severity=severity,
             key=f"{part_id}|{sp.supplier_id}",
             summary=summary,

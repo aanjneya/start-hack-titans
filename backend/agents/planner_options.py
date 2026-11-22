@@ -132,7 +132,7 @@ def options_for(issue, plan, forecast, row):
     category = material.category if material else ""
     buyer = next((o.buyer for o in all_rows(m.PurchaseOrder) if o.po_number == issue.po_number and o.material_id == part), "")
     choices = []
-    def add(label, kind, cost, gained, note, *, actions=(), value=None, available=True, proof=(), air=False):
+    def add(label, kind, cost, gained, note, *, actions=(), value=None, available=True, proof=(), air=False, required_roles=None):
         monthly = None
         if air:
             period = plan.as_of.strftime("%Y-%m")
@@ -142,7 +142,7 @@ def options_for(issue, plan, forecast, row):
             if len(amounts) == 1:
                 from ..core.parsing import parse_number
                 monthly = parse_number(amounts[0])
-        roles = approval_roles(value, docs, air=air, monthly_spend=monthly, freight_eur=cost)
+        roles = required_roles or approval_roles(value, docs, air=air, monthly_spend=monthly, freight_eur=cost)
         signers = resolve_approvers(roles, category, plan, docs, buyer)
         policy_proof = [evidence(d.path, "page 1, approval routing") for d in docs if d.kind == "policy"]
         charts = [d for d in docs if d.kind == "org_chart" and any(person in d.text for person in signers)]
@@ -230,6 +230,31 @@ def options_for(issue, plan, forecast, row):
     for offer in docs:
         if offer.kind != "offer" or offer.supplier_id not in suppliers or not material:
             continue
+        text = " ".join(offer.text.split())
+        item = re.search(re.escape(part) + r" .*?finished-goods store.*?/ ([\d,]+) pcs .*?loaded within (\d+) h", text, re.I)
+        truck = re.search(r"about (\d+) h driving", text, re.I)
+        if item and truck and forecast.shortfall and forecast.limiting_part == part:
+            qty = int(item[1].replace(",", ""))
+            lead = timedelta(hours=int(item[2]) + int(truck[1]))
+            at = plan.as_of + lead
+            modeled = simulate(plan, {("supplier overrun", offer.path): (at, part, qty)})[pid]
+            gain = modeled.projected_packed - forecast.projected_packed
+            price = next((p for p in all_rows(m.SupplierPartMap) if p.supplier_id == offer.supplier_id
+                          and p.component_id == part and p.currency == "EUR"), None)
+            cost = round(qty * price.unit_price, 2) if price and price.unit_price is not None else None
+            proof = [evidence(offer.path, "page 1, finished-goods offer and transport", item[0])]
+            if price:
+                proof.append(evidence(price.source, part, f"EUR {price.unit_price} per unit"))
+            note = (f"{qty:,} finished units offered. Earliest modeled arrival {at.isoformat()}. "
+                    "Buyer must confirm offer validity, freight, dock release and a new PO before ordering.")
+            review = {"type": "human_review", "product_id": pid, "part": part,
+                      "reference": offer.path, "copies_at_risk": forecast.shortfall}
+            add(f"Verify the offer for {qty:,} finished art books", "supplier stock offer", cost, gain, note,
+                actions=[review], value=cost, proof=proof)
+            choices[-1]["needs_approval"] = True
+            if gain > 0:
+                recommended = len(choices) - 1
+                decide_by = min(decide_by, useful_until(plan, row, gain) - lead)
         # Only match the items covered by the rush-print paragraph (the art book is a separate offer).
         scope = re.search(r"agreement:\s*(.*?)\s+do\s+\d", " ".join(offer.text.split()), re.I)
         if not scope or not any(word.rstrip("s") in material.description.lower()
@@ -250,8 +275,44 @@ def options_for(issue, plan, forecast, row):
         add("Order a fresh rush print", "expedite", cost, gain,
             f"Up to {qty:,} units; earliest site arrival {at.isoformat()}. Freight and dock release require confirmation.",
             value=cost, available=False, proof=proof)
+    if issue.type == "quality_hold_failed_aql":
+        for lot in plan.lots:
+            if lot["part"] != part or lot["status"] != "Quality hold":
+                continue
+            inspection = next((d for d in docs if d.kind == "inspection" and lot["batch"] in d.text
+                               and "concession signed by Supplier Quality and the Category Lead"
+                               in " ".join(d.text.split())), None)
+            if not inspection:
+                continue
+            outcome = simulate(plan, {("concession", lot["batch"]): (plan.as_of, part, lot["quantity"])})[pid]
+            gain = outcome.projected_packed - forecast.projected_packed if forecast.projected_packed is not None else None
+            review = {"type": "human_review", "product_id": pid, "part": part,
+                      "reference": lot["batch"], "copies_at_risk": forecast.shortfall}
+            add(f"Request a documented concession for lot {lot['batch']}", "quality concession review", 0, gain,
+                "Supplier Quality and the responsible category lead must sign. PP-07 routes an exception for "
+                "a vacant seat to the head of procurement. The lot stays on hold pending a signed release.",
+                actions=[review], value=0, proof=lot["evidence"], required_roles=["Supplier Quality Lead", "Category lead"])
+            choices[-1]["needs_approval"] = True
+            if gain and gain > 0:
+                recommended = len(choices) - 1
     for a in issue.suggested_actions or []:
         kind = a.get("type")
+        if candidate and kind == "expedite" and "pick" in a["label"].lower() and a.get("target") == candidate["shipment_id"]:
+            c = candidate
+            key = (c["supplier_id"], c["po_number"], c["po_line"], c["shipment_id"])
+            earliest = max(plan.as_of, parse_datetime(c["eta"]) or plan.as_of)
+            modeled = simulate(plan, {key: (earliest, part, c["quantity"])})[pid]
+            gain = modeled.projected_packed - forecast.projected_packed if forecast.projected_packed is not None else None
+            review = {"type": "human_review", "product_id": pid, "part": part,
+                      "reference": c["shipment_id"], "copies_at_risk": forecast.shortfall}
+            add(f"Arrange terminal pickup for {c['shipment_id']}", "port pickup", None, gain,
+                "Conditional ceiling if cases reach the line immediately. Logistics must confirm terminal release, "
+                "a truck quote and an authorized dock slot before dispatch.", actions=[review], value=0,
+                proof=c["evidence"] + issue.evidence)
+            choices[-1]["needs_approval"] = True
+            if gain and forecast.limiting_part == part:
+                recommended = len(choices) - 1
+            continue
         if kind == "email" and candidate or kind == "expedite" and any(c["description"] == kind for c in choices):
             continue
         if kind in {"block_stock", "human_review"}:

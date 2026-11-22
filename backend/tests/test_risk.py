@@ -124,7 +124,7 @@ def test_replay_real_drops_updates_grades_and_logs_changes():
     types = {i.type for i in open_risk}
     assert {"high_risk_rating", "second_source_candidates"} <= types
     mag_finding = next(i for i in open_risk if i.type == "high_risk_rating" and i.part_id == "CMP-MAG-005")
-    assert mag_finding.kind == IssueKind.COPIES_AT_RISK and mag_finding.severity == Severity.LINE_STOP
+    assert mag_finding.kind == IssueKind.HUMAN_CHECK and mag_finding.severity == Severity.HIGH
     assert mag_finding.suggested_actions and mag_finding.evidence
     ss_finding = next(i for i in open_risk if i.type == "second_source_candidates")
     assert "CMP-MAG-005" in ss_finding.summary and len(ss_finding.suggested_actions) >= 1

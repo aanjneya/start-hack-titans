@@ -116,9 +116,9 @@ def test_replay_all_real_drops_without_code_change():
     drop2 = _reconciler_issues(status="open")
     mag = [i for i in drop2 if i.type == "single_source_export_ban" and i.part_id == "CMP-MAG-005"]
     assert len(mag) == 1
-    assert mag[0].severity == Severity.LINE_STOP
-    assert mag[0].impact.get("copies_at_risk") == 18900
-    assert mag[0].impact.get("hours_buffer") == 0.0
+    assert mag[0].severity == Severity.HIGH and mag[0].kind == IssueKind.HUMAN_CHECK
+    assert mag[0].impact.get("copies_at_risk") == 0
+    assert mag[0].impact.get("hours_buffer") is None
     assert any(i.type == "supplier_qualification_expired" and i.supplier_id == "SUP-0018" for i in drop2)
 
     # T3.0: Every reconciler finding conforms to Finding Format v1

@@ -13,6 +13,10 @@ from ..core import store
 from ..core.store import UpdateResult, session
 
 
+def issue_fingerprint(issue_type: str, key: str) -> str:
+    return hashlib.sha1(f"{issue_type}|{key}".encode()).hexdigest()[:16]
+
+
 class Agent:
     #: unique short name, shown in the agent log and UI
     name: ClassVar[str] = "agent"
@@ -57,7 +61,7 @@ class Agent:
                               for e in evidence], **fields)
         fields = {k: v for k, v in f.model_dump(mode="json").items()
                   if k not in {"type", "kind", "summary", "severity", "evidence"}}
-        fingerprint = hashlib.sha1(f"{type}|{key}".encode()).hexdigest()[:16]
+        fingerprint = issue_fingerprint(type, key)
         ev = [e.model_dump() for e in f.evidence]
         with session() as s:
             issue = s.exec(select(Issue).where(Issue.fingerprint == fingerprint)).first()

@@ -10,6 +10,7 @@ from sqlmodel import select
 from ..core import trace
 from ..core.models import DecisionCard, InboxMessage, Issue, OrderConfirmation, OutboxMessage
 from ..core.store import session
+from .base import issue_fingerprint
 from .ingest import IngestNormalizer
 
 
@@ -29,15 +30,20 @@ class SupplierQuote(DeliveryAdvice):
     valid_until: AwareDatetime
 
 
+def review_key(review):
+    key = f"{review['product_id']}/{review['part']}"
+    return f"{key}/{review['reference']}" if review.get("reference") else key
+
+
 def already_requested(s, actions):
     """A newer version of a card may still describe an already-authorized physical action."""
     if not actions:
         return False
     if actions[0].get("type") == "human_review":
         review = actions[0]
-        return s.exec(select(Issue.id).where(Issue.type == "recovery_review", Issue.raised_by == "planner",
-                      Issue.product_id == review["product_id"], Issue.part_id == review["part"],
-                      Issue.status != "resolved")).first() is not None
+        fingerprint = issue_fingerprint("recovery_review", review_key(review))
+        return s.exec(select(Issue.id).where(Issue.fingerprint == fingerprint, Issue.raised_by == "planner",
+                                             Issue.status != "resolved")).first() is not None
     cards = s.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
                    DecisionCard.status.in_(["approved", "executed"]))).all()
     return any(c.chosen_option is not None and c.options[c.chosen_option].get("actions") == actions for c in cards)
@@ -60,21 +66,37 @@ class PlanningReplyIngest(IngestNormalizer):
 
 def _text_confirmation(body):
     # Without an explicit positive, unambiguous answer keep the raw message for review.
-    if not re.search(r"\bconfirm(?:ed)?\b", body, re.I) or re.search(
-            r"\b(?:not|unconfirmed|estimate|tentative|quote|if|pending|cancelled)\b", body, re.I):
+    body = re.split(r"(?im)^\s*(?:>|On .+wrote:|-----Original Message-----)", body, maxsplit=1)[0]
+    if "?" in body or re.search(r"\b(?:not|cannot|unable|unconfirmed|estimate[d]?|tentative|if|pending|"
+                                r"cancelled|canceled|unless|provisional|would|might|subject to)\b|n['’]t\b", body, re.I):
+        return None
+    is_quote = bool(re.search(r"\b(?:quote|offer)\b", body, re.I))
+    if not is_quote and not re.search(r"\b(?:confirmed|we confirm|I confirm)\b", body, re.I):
         return None
     po_lines = re.findall(r"\bPO\s+(\d+)/(\d+)\b", body, re.I)
     shipments = re.findall(r"\bSHP-[\w-]+", body)
-    units = re.findall(r"\b([\d,]+) (?:pcs|units|pieces)\b", body, re.I)
+    units = re.findall(r"(?<![\d,.])\b((?:\d{1,3}(?:,\d{3})+|\d+)) (?:pcs|units|pieces)\b", body, re.I)
     rev = re.findall(r"\brev(?:ision)?[. ]+([A-Z])\b", body, re.I)
-    times = re.findall(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})", body)
-    if not all(len(x) == 1 for x in (po_lines, shipments, units, rev, times)):
+    timestamp = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})"
+    times = re.findall(timestamp, body)
+    if not all(len(x) == 1 for x in (po_lines, shipments, units, rev)):
         return None
+    fields = dict(po_number=po_lines[0][0], po_line=int(po_lines[0][1]), shipment_id=shipments[0],
+                  revision=rev[0].upper(), quantity=int(units[0].replace(",", "")))
     try:
-        return DeliveryAdvice(po_number=po_lines[0][0], po_line=int(po_lines[0][1]), shipment_id=shipments[0],
-                              revision=rev[0].upper(), quantity=int(units[0].replace(",", "")), arrival=times[0])
+        if is_quote:
+            arrival = re.findall(r"arrival\s*[:=]?\s*(" + timestamp + ")", body, re.I)
+            expiry = re.findall(r"valid until\s*[:=]?\s*(" + timestamp + ")", body, re.I)
+            modes = re.findall(r"\b(pickup|air|expedite)\b", body, re.I)
+            prices = re.findall(r"\b(?:incremental cost|additional fee)\s*[:=]?\s*(?:EUR\s*|€)(\d+(?:\.\d{2})?)(?!\d|[.,]\d)", body, re.I)
+            if len(times) == 2 and all(len(x) == 1 for x in (arrival, expiry, modes, prices)):
+                return SupplierQuote(**fields, mode=modes[0].lower(), incremental_cost_eur=float(prices[0]),
+                                     arrival=arrival[0], valid_until=expiry[0])
+        elif len(times) == 1:
+            return DeliveryAdvice(**fields, arrival=times[0])
     except ValueError:
-        return None
+        pass
+    return None
 
 
 def ingest_reply(msg, delivery, agent, *, quote=None):
@@ -99,6 +121,7 @@ def ingest_reply(msg, delivery, agent, *, quote=None):
             if len(s.exec(query).all()) <= 1:
                 return False
         advice = delivery or quote or (_text_confirmation(msg.body) if line else None)
+        quote = advice if isinstance(advice, SupplierQuote) else None
         fact = advice.model_dump(mode="json") if advice else {}
         field = "supplier_quote" if quote else "confirmed_delivery"
         reason = ""

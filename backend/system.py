@@ -71,6 +71,7 @@ def process_drop(
 
 
 def _process_drop(*, added, changed, removed, label, data_root, mode) -> dict:
+    b = bus()
     root = Path(data_root or get_settings().data_root)
     added, changed, removed = list(added), list(changed), list(removed)
     run_id = trace.new_run_id()
@@ -81,7 +82,6 @@ def _process_drop(*, added, changed, removed, label, data_root, mode) -> dict:
         s.refresh(rec)
     trace.log("coordinator", "drop", f"{label or mode}: +{len(added)} ~{len(changed)} -{len(removed)}",
               data={"drop_id": rec.id, "data_root": str(root)})
-    b = bus()
     b.emit(events.FILES_CHANGED, {"added": added, "changed": changed, "removed": removed,
                                   "label": label, "data_root": str(root), "drop_id": rec.id}, source="coordinator")
     steps = b.run_until_idle()
@@ -107,13 +107,13 @@ def emit(event_name: str, payload: dict, source: str = "api") -> dict:
 
 
 def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, outbox_id: int | None = None,
-                from_email: str = "", subject: str = "", language: str = "", source: str = "chaser", delivery=None, quote=None):
+                from_email: str = "", subject: str = "", language: str = "", source: str = "chaser", transport_message_id=None, delivery=None, quote=None):
     """Save a supplier/carrier reply in the inbox (no event). Inside an agent, follow with
     self.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": ..., "issue_id": ...})."""
     from .core.models import InboxMessage
 
     with session() as s:
-        msg = InboxMessage(supplier_id=supplier_id, body=body, issue_id=issue_id, outbox_id=outbox_id,
+        msg = InboxMessage(transport_message_id=transport_message_id, supplier_id=supplier_id, body=body, issue_id=issue_id, outbox_id=outbox_id,
                            from_email=from_email, subject=subject, language=language,
                            result={k: value.model_dump(mode="json") for k, value in
                                    (("delivery", delivery), ("quote", quote)) if value is not None})

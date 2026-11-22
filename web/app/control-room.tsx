@@ -55,11 +55,11 @@ function actionTargets(actions: Record<string, unknown>[] | undefined): string[]
   });
 }
 
-async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
+async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missing: string[] }> {
   const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup] = await Promise.allSettled([
     getData<HealthCheckResponse>("/api/health"),
     getData<Forecast[]>("/api/forecast"),
-    getData<DecisionCard[]>("/api/decisions?status=proposed"),
+    getData<DecisionCard[]>("/api/decisions"),
     getData<Issue[]>("/api/issues"),
     getData<OutboxMessage[]>("/api/outbox"),
     getData<InboxMessage[]>("/api/inbox"),
@@ -69,6 +69,8 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
   ]);
   const val = <T,>(r: PromiseSettledResult<T>, fallback: T) => (r.status === "fulfilled" ? r.value : fallback);
   return {
+    missing: Object.entries({forecast, decisions, issues, outbox, inbox, risk, trace, setup})
+      .filter(([, response]) => response.status === "rejected").map(([name]) => name),
     online: health.status === "fulfilled",
     snap: {
       setup: val(setup, null),
@@ -86,6 +88,7 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
 
 export default function ControlRoom() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY);
+  const [missing, setMissing] = useState<string[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [now, setNow] = useState<number>(0);
   const [dropBusy, setDropBusy] = useState(false);
@@ -95,9 +98,11 @@ export default function ControlRoom() {
   const closeData = useCallback(() => setShowData(false), []);
 
   const refresh = useCallback(async () => {
-    const { snap: next, online: up } = await loadSnapshot();
+    const { snap: next, online: up, missing: failed } = await loadSnapshot();
     setOnline(up);
-    if (up) setSnap(next);
+    setMissing(failed);
+    if (up) setSnap(previous => ({...next, ...Object.fromEntries(
+      failed.map(name => [name, previous[name as keyof Snapshot]]))}));
     setNow(Date.now());
   }, []);
 
@@ -145,6 +150,7 @@ export default function ControlRoom() {
   const decisionGroups = useMemo(() => {
     const groups = new Map<string, DecisionCard[]>();
     for (const d of snap.decisions) {
+      if (d.status !== "proposed") continue;
       const key = JSON.stringify([d.summary || d.title, d.recommended, d.options]);
       groups.set(key, [...(groups.get(key) ?? []), d]);
     }
@@ -177,7 +183,11 @@ export default function ControlRoom() {
         </p>
       )}
 
-      <Hero editions={editions} />
+      {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
+        Update unavailable for {missing.join(", ")}. Showing the last available data.
+      </p>}
+      {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} />}
+      <CaseUpdates snap={snap} />
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_400px]">
         <section aria-labelledby="decide">
@@ -186,12 +196,12 @@ export default function ControlRoom() {
               Decide now
             </h2>
             <span className="text-sm text-muted tabular">
-              {snap.decisions.length} open {snap.decisions.length === 1 ? "card" : "cards"}
+              {snap.decisions.filter(d => d.status === "proposed").length} open
             </span>
           </div>
           {decisionGroups.length === 0 ? (
             <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">
-              Nothing waits for a decision. When a data drop arrives, the Planner puts its proposals here.
+              {missing.includes("decisions") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
             </p>
           ) : (
             <ol className="space-y-4">
@@ -239,6 +249,52 @@ export default function ControlRoom() {
       {showData && <DataDrawer onClose={closeData} />}
     </div>
   );
+}
+
+type InboundEvidence = { eligible?: boolean; dock_released?: boolean; evidence?: {path: string}[] };
+
+function forecastAfterReply(reply: InboxMessage, forecasts: Forecast[], edition: string) {
+  if (!reply.result?.confirmed_delivery) return "";
+  const history = forecasts.filter(f => f.edition === edition).sort((a, b) => a.id - b.id);
+  for (const [index, f] of history.entries()) {
+    const inbound = f.details.inbound;
+    if (!Array.isArray(inbound)) continue;
+    const arrival = (inbound as InboundEvidence[]).find(row => row.evidence?.some(e => e.path === `inbox/${reply.id}`));
+    if (!arrival) continue;
+    if (!arrival.dock_released) return "Waiting for the site to release a dock slot.";
+    const previous = history[index - 1];
+    if (f.projected_packed == null || f.shortfall == null || previous?.projected_packed == null) return "";
+    const change = f.projected_packed - previous.projected_packed;
+    return `${edition} forecast at confirmation: ${fmt(f.projected_packed)} by close (${change > 0 ? "+" : ""}${fmt(change)}), ${fmt(f.shortfall)} short.`;
+  }
+  return "";
+}
+
+function CaseUpdates({ snap }: { snap: Snapshot }) {
+  const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed"].includes(d.status)))
+    .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id).slice(0, 3);
+  if (!decided.length) return null;
+  return <section aria-label="Decision follow-up" className="mt-6 rounded-lg border border-rule bg-surface p-5">
+    <h2 className="font-bold">Decision follow-up</h2>
+    <ul className="mt-3 space-y-3">{decided.map(d => {
+      const option = d.options[d.chosen_option!];
+      const sent = snap.outbox.find(o => o.decision_id === d.id);
+      const reply = sent && snap.inbox.filter(i => i.outbox_id === sent.id).sort((a,b) => b.id - a.id)[0];
+      const state = d.status === "rejected" ? "Rejected" : reply ? replyOutcome(reply)
+        : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
+        : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
+        : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
+          ? "Simulated request sent. Waiting for a test reply." : "Chaser sent the request. Waiting for the supplier.")
+        : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
+        : option?.actions.some(a => a.type === "human_review") ? "Assigned to the buyer for internal review."
+        : "Approved. Waiting for the handoff.";
+      const edition = snap.forecast.find(f => d.title.startsWith(f.edition + " ·"))?.edition;
+      const outcome = reply && edition ? forecastAfterReply(reply, snap.forecast, edition) : "";
+      return <li key={d.id}><strong>{option?.label ?? d.title}</strong>
+        <span className="ml-2 text-sm text-muted">#{d.id} · {d.decided_by}</span>
+        <p className="text-sm">{state}</p>{outcome && <p className="text-sm font-semibold">{outcome}</p>}</li>;
+    })}</ul>
+  </section>;
 }
 
 function TopBar(props: {
@@ -334,14 +390,14 @@ function Hero({ editions }: { editions: Forecast[] }) {
         return (
           <div key={f.edition} className="bg-surface px-6 py-6">
             <p className={`figure text-[clamp(64px,10vw,124px)] ${short ? "text-stop" : "text-ok"}`}>
-              {short ? fmt(f.shortfall) : "0"}
+              {f.shortfall == null ? "—" : fmt(f.shortfall)}
             </p>
             <p className="mt-2 text-lg font-semibold">
-              {f.edition} copies {short ? "will be missing at close" : "short: on track"}
+              {f.edition} copies {f.shortfall == null ? "awaiting forecast" : short ? "projected short by close" : "short · on track"}
             </p>
             <p className="mt-1 text-sm text-muted tabular">
               {fmt(f.still_to_pack)} still to pack
-              {f.still_to_pack != null && `, ${fmt(Math.max(0, f.still_to_pack - (f.shortfall ?? 0)))} of them by close`}
+              {f.still_to_pack != null && f.shortfall != null && `, ${fmt(Math.max(0, f.still_to_pack - (f.shortfall ?? 0)))} of them by close`}
               {f.limiting_part && (
                 <>
                   , held up by <span className="font-semibold text-ink">{f.limiting_part}</span>
@@ -669,7 +725,7 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const status = m.status === "sent" && mock ? "simulated" : m.status;
+  const status = m.status === "sent" && mock && m.sent_copy_pending == null ? "simulated" : m.status;
 
   const reply = async () => {
     setBusy(true);
@@ -748,7 +804,9 @@ function replyOutcome(r: InboxMessage): string {
     const when = parseTs(String(advice.arrival))?.toLocaleString("en-GB", {
       weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
     });
-    return `Bound to our request by Ingest: ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, arrives ${when}.`;
+    return res.supplier_quote
+      ? `Ingest recorded a quote for ${fmt(Number(advice.quantity))} pcs. The Planner can now compare the offer.`
+      : `Ingest confirmed ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, due ${when} Berlin time. The Planner checks dock release and packing time.`;
   }
   const fields = Array.isArray(res.fields) ? (res.fields as string[]) : [];
   return fields.length

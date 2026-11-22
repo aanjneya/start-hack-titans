@@ -178,6 +178,7 @@ export interface OutboxMessage {
   status: 'draft' | 'approved' | 'sent' | 'replied' | 'failed' | 'escalated';
   created_at: string;
   sent_at: string | null;
+  sent_copy_pending?: boolean | null; // Live SMTP accepted, awaiting IMAP Sent filing when true
   message_id: string; // Message-ID we sent; replies are matched by In-Reply-To
   run_id: string;
 }

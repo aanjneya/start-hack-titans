@@ -6,9 +6,10 @@ from sqlmodel import select
 from ..core import events, llm, trace
 from ..core.coordinator import Event
 from ..core.models import DecisionCard, Forecast, Issue, IssueKind, OutboxMessage, RiskScore, SupplierPartMap, utcnow
+from ..core.parsing import parse_datetime
 from ..core.store import all_rows, session
 from .base import Agent, register
-from .planner_delivery import already_requested
+from .planner_delivery import already_requested, review_key
 from .planner_forecast import simulate
 from .planner_inputs import load_plan
 from .planner_options import options_for
@@ -57,7 +58,7 @@ class LaunchPlanner(Agent):
                 previous = s.exec(select(Forecast).where(Forecast.product_id == pid).order_by(Forecast.id.desc())).first()
                 ignore = {"id", "computed_at", "deadline"}  # Compare instants separately from JSON payloads.
                 if previous and previous.model_dump(exclude=ignore) == forecast.model_dump(exclude=ignore) and (
-                    previous.deadline == forecast.deadline
+                    parse_datetime(previous.deadline) == forecast.deadline
                 ):
                     continue
                 s.add(forecast)
@@ -172,7 +173,7 @@ class LaunchPlanner(Agent):
                         continue
                 if (previous and previous.status != "outdated" and previous.options == options
                         and previous.reasoning == reasoning and previous.evidence == proof
-                        and previous.recommended == recommended and previous.decide_by == due):
+                        and previous.recommended == recommended and parse_datetime(previous.decide_by) == due):
                     continue
                 if previous and previous.status == "proposed":
                     previous.status = "outdated"
@@ -218,7 +219,7 @@ class LaunchPlanner(Agent):
             exists = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).first()
         review = next((a for a in selected["actions"] if a["type"] == "human_review"), None)
         if review:
-            self.raise_issue(type="recovery_review", key=f"{review['product_id']}/{review['part']}",
+            self.raise_issue(type="recovery_review", key=review_key(review),
                              kind=IssueKind.HUMAN_CHECK, severity=4, summary=selected["label"][:160],
                              product_id=review["product_id"], part_id=review["part"],
                              reason=f"{card.approver}: {selected['risk_note']}",

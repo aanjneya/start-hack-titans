@@ -73,22 +73,31 @@ class Watcher(Agent):
             data = self._get(url)
             if hashlib.sha256(data).hexdigest() != f["sha256"]:
                 self.log("error", f"checksum mismatch for {f['path']}", [{"path": f["path"]}])
-                continue
+                raise ValueError(f"checksum mismatch for {rel}")
             (mirror / rel).parent.mkdir(parents=True, exist_ok=True)
             (mirror / rel).write_bytes(data)
-        with session() as db:
-            for f in added + changed:
-                db.add(PortalFile(path=f["path"], sha256=f["sha256"], bytes=f.get("bytes")))
-            for p in removed:
-                for row in db.exec(select(PortalFile).where(PortalFile.path == p)).all():
-                    row.removed, row.seen_at = True, utcnow()
-                    db.add(row)
-            db.commit()
         label = f"portal check +{len(added)} ~{len(changed)} -{len(removed)}"
         self.log("check", label, data={"added": len(added), "changed": len(changed), "removed": len(removed)})
         if not (added or changed or removed):
             return {"added": 0, "changed": 0, "removed": 0}
         from .. import system  # local import: system imports the agents
 
-        return system.process_drop(added=[f["path"] for f in added], changed=[f["path"] for f in changed],
+        result = system.process_drop(added=[f["path"] for f in added], changed=[f["path"] for f in changed],
                                    removed=removed, label=label, data_root=mirror, mode="live")
+
+        # Advance the manifest only once downstream processing has succeeded.
+        with session() as db:
+            for f in added + changed:
+                rows = db.exec(select(PortalFile).where(PortalFile.path == f["path"])).all()
+                row = rows[-1] if rows else PortalFile(path=f["path"])
+                for previous in rows[:-1]:
+                    previous.removed = True
+                    db.add(previous)
+                row.sha256, row.bytes, row.removed, row.seen_at = f["sha256"], f.get("bytes"), False, utcnow()
+                db.add(row)
+            for path in removed:
+                for row in db.exec(select(PortalFile).where(PortalFile.path == path)).all():
+                    row.removed, row.seen_at = True, utcnow()
+                    db.add(row)
+            db.commit()
+        return result

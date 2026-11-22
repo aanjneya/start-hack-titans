@@ -1,0 +1,24 @@
+{
+  "document_type": "delivery_note",
+  "document_number": "WZ-261116-473",
+  "document_date": "2026-11-16",
+  "supplier_name": "Karton Nowak Sp. z o.o.",
+  "po_numbers": [
+    "4500318768"
+  ],
+  "lines": [
+    {
+      "part_number": "CMP-GAM-008",
+      "description": "Art Book Grand Heist 6 (96 p, hard",
+      "quantity_as_printed": "80.000",
+      "quantity_corrected_by_hand": "8 000",
+      "quantity": 8000.0,
+      "printed_quantity": 80000.0,
+      "unit": "PCS",
+      "packages": 40.0
+    }
+  ],
+  "remarks": "",
+  "handwritten_notes": "Printed quantity 80.000 crossed out and corrected by hand to 8 000.",
+  "language": "Polish"
+}

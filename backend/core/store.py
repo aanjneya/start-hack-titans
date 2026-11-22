@@ -61,6 +61,7 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _add_missing_columns(engine)
     with engine.begin() as conn:
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS inbox_transport_id ON inbox(transport_message_id)"))
         conn.execute(text(PART_JOURNEY_VIEW))
 
 

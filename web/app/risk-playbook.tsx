@@ -246,7 +246,7 @@ export default function RiskPlaybook({
                         className="h-full rounded-full transition-all duration-300"
                         style={{
                           width: `${Math.min(100, Math.max(6, simScore))}%`,
-                          background: sim.grade >= 5 ? "#b3261e" : sim.grade === 4 ? "#a86a12" : "#2f7a4d",
+                          background: sim.grade >= 5 ? "var(--color-stop)" : sim.grade === 4 ? "var(--color-warn)" : "var(--color-ok)",
                         }}
                       />
                     </div>
@@ -297,7 +297,7 @@ export default function RiskPlaybook({
                     <button
                       onClick={() => void executeUpgradePlan(plan)}
                       disabled={busyId === `exec-${plan.product_id}` || activeLevers.length === 0}
-                      className="rounded-md bg-act px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-ink disabled:opacity-50"
+                      className="rounded-md bg-act px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-ink disabled:opacity-50"
                     >
                       {busyId === `exec-${plan.product_id}`
                         ? "Executing…"
@@ -403,7 +403,7 @@ export default function RiskPlaybook({
                         <button
                           onClick={() => void dispatchPreemptive(al)}
                           disabled={busyId === al.alert_id}
-                          className="rounded bg-act px-2.5 py-1 text-xs font-semibold text-white hover:bg-ink disabled:opacity-50"
+                          className="rounded bg-act px-2.5 py-1 text-xs font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
                         >
                           {busyId === al.alert_id ? "Sending…" : "Dispatch Check"}
                         </button>
@@ -510,7 +510,7 @@ export default function RiskPlaybook({
                           <span className="font-bold text-ink">Spec-Grounded RFQ Draft · {sc.rfq_subject}</span>
                           <button
                             onClick={() => void copyRfq(sc)}
-                            className="rounded bg-ink px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-act"
+                            className="rounded bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground hover:bg-brand-ink"
                           >
                             {copiedId === sc.part_id ? "Copied ✓" : "Copy RFQ"}
                           </button>

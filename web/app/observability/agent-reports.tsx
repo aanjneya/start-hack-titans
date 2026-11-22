@@ -280,8 +280,8 @@ export function IngestReport({ snap }: { snap: ObservabilitySnapshot }) {
       <StackedBar
         title="Changes by type"
         segments={[
-          { label: "Filled empty fields", count: fills, color: "#2f7a4d" },
-          { label: "Corrected values", count: overwrites, color: "#1d5fb4" },
+          { label: "Filled empty fields", count: fills, color: "var(--color-ok)" },
+          { label: "Corrected values", count: overwrites, color: "var(--primary)" },
         ]}
       />
 
@@ -370,9 +370,9 @@ export function ReconcilerReport({ snap }: { snap: ObservabilitySnapshot }) {
         <StackedBar
           title="Where each finding went"
           segments={[
-            { label: "Planner · copies at risk", count: byKind.copies_at_risk, color: "#127a7a" },
-            { label: "Chaser · missing info", count: byKind.missing_info, color: "#2f7a4d" },
-            { label: "Human check · fraud, big jumps", count: byKind.human_check, color: "#16213a" },
+            { label: "Planner · copies at risk", count: byKind.copies_at_risk, color: "var(--color-act)" },
+            { label: "Chaser · missing info", count: byKind.missing_info, color: "var(--accent)" },
+            { label: "Human check · fraud, big jumps", count: byKind.human_check, color: "var(--color-muted)" },
           ]}
         />
       </div>
@@ -475,10 +475,10 @@ export function ChaserReport({ snap }: { snap: ObservabilitySnapshot }) {
       <StackedBar
         title="Supplier emails"
         segments={[
-          { label: "Replied", count: replied, color: "#2f7a4d" },
-          { label: "Waiting for reply", count: Math.max(0, sent - replied), color: "#1d5fb4" },
-          { label: "Not sent yet", count: pending, color: "#a86a12" },
-          { label: "Escalated", count: escalated, color: "#b3261e" },
+          { label: "Replied", count: replied, color: "var(--color-ok)" },
+          { label: "Waiting for reply", count: Math.max(0, sent - replied), color: "var(--primary)" },
+          { label: "Not sent yet", count: pending, color: "var(--color-warn)" },
+          { label: "Escalated", count: escalated, color: "var(--color-stop)" },
         ]}
       />
 
@@ -673,7 +673,7 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
               key={k}
               type="button"
               onClick={() => setFilter(k)}
-              className={`rounded-md px-3 py-1 capitalize ${filter === k ? "bg-ink text-white" : "text-muted hover:text-ink"}`}
+              className={`rounded-md px-3 py-1 capitalize ${filter === k ? "bg-primary text-primary-foreground" : "text-muted hover:text-ink"}`}
             >
               {k === "all" ? "All tiers" : `${k}s`}
             </button>
@@ -689,7 +689,7 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
             const reasons = (r.reasons ?? []) as ExtendedRiskReason[];
             const score = reasons[0]?.score_0_100 ?? Math.round((r.grade / 6) * 100);
             const breakdown = reasons[0]?.breakdown ?? {};
-            const barColor = r.grade >= 6 ? "#b3261e" : r.grade >= 5 ? "#a86a12" : r.grade >= 4 ? "#1d5fb4" : "#2f7a4d";
+            const barColor = r.grade >= 5 ? "var(--color-stop)" : r.grade >= 4 ? "var(--color-warn)" : "var(--color-ok)";
             return (
               <details key={`${String(r.entity_type)}-${r.entity_id}`} className="rounded-xl border border-rule bg-surface p-4" open={r.grade >= 5}>
                 <summary className="flex cursor-pointer items-center gap-3 list-none">

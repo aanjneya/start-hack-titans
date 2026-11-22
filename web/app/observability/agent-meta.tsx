@@ -77,7 +77,7 @@ export const AGENT_NAV: AgentMeta[] = [
     role: "Reads CSVs, spreadsheets, PDFs, scans and replies into one source of truth",
     job: "Reads every file, scan and reply into one truth",
     rosterName: "Ingest",
-    color: "#1d5fb4",
+    color: "#7b9082",
     icon: (
       <svg {...svgProps}>
         <ellipse cx="12" cy="5" rx="8" ry="3" />

@@ -1061,7 +1061,7 @@ function ActionCard({
       className={cn(
         "h-[19rem] w-full rounded-2xl shadow-[0_24px_50px_-24px_rgba(38,50,40,0.55)] ring-1 ring-black/5",
         executable
-          ? "bg-[linear-gradient(155deg,#2c3a30_0%,#4a5e4f_52%,#7b9082_100%)]"
+          ? "bg-[linear-gradient(155deg,#263228_0%,#3a4a3e_52%,#4f6355_100%)]"
           : "bg-[linear-gradient(155deg,#2a2d2b_0%,#3a3f3b_55%,#4d534e_100%)]",
       )}
     >
@@ -1108,7 +1108,7 @@ function ActionCard({
             ] as const
           ).map(([label, value]) => (
             <div key={label} className="rounded-lg bg-white/10 px-2.5 py-1.5 ring-1 ring-inset ring-white/15">
-              <dt className="text-[10.5px] font-medium uppercase tracking-wide text-white/60">{label}</dt>
+              <dt className="text-[10.5px] font-medium uppercase tracking-wide text-white/80">{label}</dt>
               <dd className="mt-0.5 truncate text-[16px] font-semibold tabular-nums">{value}</dd>
             </div>
           ))}

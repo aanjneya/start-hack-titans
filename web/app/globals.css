@@ -17,7 +17,7 @@
   --color-muted: #6b6c70;
   --color-rule: #e8e7e0;
   --color-stop: #c83e3a;
-  --color-stop-soft: #fbeceb;
+  --color-stop-soft: #fdf4f3;
   --color-act: #5f7556;
   --color-act-soft: #f1f3ee;
   --color-ok: #1f8a4c;
@@ -53,8 +53,8 @@
   --brand-soft: #f1f3ee;
   --brand-ink: #4a5c45;
   --pane: #f6f6f2;
-  --signal-red: #c0392b;
-  --signal-red-bg: #fbeceb;
+  --signal-red: #c83e3a;
+  --signal-red-bg: #fdf4f3;
   --signal-amber: #a3660b;
   --signal-amber-bg: #fdf4dc;
   --signal-green: #237a43;

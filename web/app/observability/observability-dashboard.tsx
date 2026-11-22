@@ -216,12 +216,12 @@ export default function ObservabilityDashboard() {
               {/* Redrawn for every agent you open. */}
               <HandWrittenTitle
                 key={selectedId}
-                className="mx-0 -ml-4 w-auto max-w-none px-12 py-5"
+                className="mx-0 -ml-4 w-fit max-w-none px-12 py-5"
                 titleClassName="text-2xl font-bold leading-tight tracking-tight md:text-2xl"
                 title={activeMeta.name}
                 subtitle={null}
               />
-              <p className="-mt-2 text-sm text-muted">{activeMeta.role}</p>
+              <p className="-mt-2 pl-8 text-sm text-muted">{activeMeta.role}</p>
             </div>
           </div>
 

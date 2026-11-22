@@ -39,7 +39,7 @@ const EMPTY: Snapshot = { queue: null, setup: null, health: null, forecast: [], 
 
 const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "watcher", name: "Watcher", job: "Watches the supplier portal for new files", color: "#5a6478" },
-  { id: "ingest", name: "Ingest", job: "Reads every file, scan and reply into one truth", color: "#1d5fb4" },
+  { id: "ingest", name: "Ingest", job: "Reads every file, scan and reply into one truth", color: "#7b9082" },
   { id: "reconciler", name: "Reconciler", job: "Checks the sources against each other", color: "#3b6f8f" },
   { id: "risk", name: "Risk rater", job: "Rates suppliers, parts and editions", color: "#a86a12" },
   { id: "planner", name: "Planner", job: "Forecasts packing and proposes decisions", color: "#127a7a" },
@@ -625,13 +625,13 @@ function TopBar(props: {
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       {/* The one number that matters up here: time left until packing closes. */}
       <HandWrittenTitle
-        className="mx-0 w-auto max-w-none px-[4.5rem] py-8"
+        className="mx-0 -ml-9 w-auto max-w-none px-[4.5rem] py-8"
         titleClassName="text-[30px] font-bold leading-none tabular tracking-tight md:text-[30px]"
         subtitleClassName="mt-1 text-sm text-muted"
         titleTooltip={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}
         title={left == null ? "Packing deadline" : left <= 0 ? "Packing has closed"
           : `${Math.floor(left / 3_600_000)} h ${String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")} min`}
-        subtitle={left != null && left > 0 ? "until packing closes" : null}
+        subtitle={left == null ? "waiting for the forecast" : left > 0 ? "until packing closes" : "\u00a0"}
       />
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         {props.updates}
@@ -655,7 +655,7 @@ function TopBar(props: {
         {props.replayEnabled && <button
           onClick={props.onDrop}
           disabled={props.busy || !props.online}
-          className="rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-act disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
           title="Resumes the next recorded drop in the dedicated replay database."
         >
           {props.busy ? (
@@ -827,7 +827,7 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
     </div>
     <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
       {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
-        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">{button}</button>
+        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-brand-ink disabled:opacity-50">{button}</button>
         : <strong>{pendingRoles.length ? `Awaiting named ${pendingRoles.join(" + ").toLowerCase()}` :
           assigned.length ? `Awaiting ${assigned.join(" + ")}` : "Awaiting assignment"}{!pendingRoles.length && assigned.length > 0 && assigned.join(" + ") !== role && ` · ${role}`}</strong>}
       {deadline && <span className="text-muted">Decide by {deadline} {snap.setup?.timezone || "UTC"}</span>}
@@ -1018,7 +1018,7 @@ function CardDetails({ setup, card, similar, onDone }: { setup: CustomerSetup | 
         {canDecide ? (
           <>
             <button onClick={() => decide("approve")} disabled={busy}
-              className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50">
+              className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-brand-ink disabled:opacity-50">
               Approve
             </button>
             <button onClick={() => decide("reject")} disabled={busy}
@@ -1361,7 +1361,7 @@ function EmailView({ focus, m, replies, mock, onSent, timezone, samples }: { foc
           <button
             onClick={reply}
             disabled={busy || !text.trim()}
-            className="mt-2 rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-white hover:bg-act disabled:opacity-50"
+            className="mt-2 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:bg-brand-ink disabled:opacity-50"
           >
             {mock ? "Send test reply" : "Record supplier reply"}
           </button>

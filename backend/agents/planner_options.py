@@ -132,6 +132,8 @@ def options_for(issue, plan, forecast, row):
     category = material.category if material else ""
     buyer = next((o.buyer for o in all_rows(m.PurchaseOrder) if o.po_number == issue.po_number and o.material_id == part), "")
     choices = []
+    due = parse_datetime((issue.impact or {}).get("due_by")) or plan.deadline
+    priority = next(i for i, edition in enumerate(plan.editions) if edition.product_id == pid)
     def add(label, kind, cost, gained, note, *, actions=(), value=None, available=True, proof=(), air=False, required_roles=None):
         monthly = None
         if air:
@@ -150,7 +152,9 @@ def options_for(issue, plan, forecast, row):
             chart = max(charts, key=lambda d: d.text.splitlines()[0])
             policy_proof.append(evidence(chart.path, "page 1, effective role"))
 
-        choices.append(dict(label=label, description=kind, cost_eur=cost, copies_gained=gained,
+        latest = min(useful_until(plan, row, gained), due)
+        choices.append(dict(product_id=pid, edition=row.edition, priority=priority, part=part,
+                            as_of=plan.as_of.isoformat(), latest_useful=latest.isoformat(), label=label, description=kind, cost_eur=cost, copies_gained=gained,
                             remaining_shortfall=None if gained is None or forecast.shortfall is None else max(0, forecast.shortfall - gained),
                             actions=list(actions), risk_note=note, evidence=[*proof, *policy_proof],
                             approvers=signers, approval_roles=roles, approval_value_eur=value,
@@ -172,7 +176,7 @@ def options_for(issue, plan, forecast, row):
         c = candidate
         key = (c["supplier_id"], c["po_number"], c["po_line"], c["shipment_id"])
         action = {k: c[k] for k in ("supplier_id", "po_number", "po_line", "shipment_id", "part")}
-        action.update(type="email", ask=f"Confirm released revision, quantity and timed site delivery for PO "
+        action.update(type="email", purpose="confirm_supply", ask=f"Confirm released revision, quantity and timed site delivery for PO "
                                         f"{c['po_number']}/{c['po_line']} on {c['shipment_id']}.")
         earliest = max(plan.as_of, parse_datetime(c["eta"]) or plan.as_of)
         possible = simulate(plan, {key: (earliest, part, c["quantity"])})[pid]
@@ -180,6 +184,7 @@ def options_for(issue, plan, forecast, row):
         add("Confirm existing supply", "information request", 0, gain,
             "Conditional ceiling at the earliest evidenced date, subject to a released dock. Asking creates no supply.",
             actions=[action], value=0, proof=c["evidence"])
+        choices[-1]["dock_released"] = c["dock_released"]
         if forecast.shortfall and earliest < plan.deadline and not c["eligible"] and not any(e["path"].startswith("inbox/") for e in c["evidence"]):
             recommended = 1
         if gain:
@@ -206,13 +211,14 @@ def options_for(issue, plan, forecast, row):
                 gross = float(sum(Decimal(str(o.quantity)) * Decimal(str(o.unit_price)) for o in orders) + Decimal(str(extra)))
             expiry = parse_datetime(quote["valid_until"])
             execute = bool(gain and gain > 0 and gross is not None and dock and expiry >= plan.as_of)
-            order = dict(action, ask=f"Accept quoted {quote['mode']} service for PO {quote['po_number']}/{quote['po_line']}, "
+            order = dict(action, purpose="accept_" + quote["mode"], ask=f"Accept quoted {quote['mode']} service for PO {quote['po_number']}/{quote['po_line']}, "
                                      f"{qty:g} units, extra EUR {extra:.2f}. Confirm site arrival.",
                          quote_inbox_id=msg.id)
             add(f"Accept {quote['mode']} quote", quote["mode"], extra, gain,
                 "Conditional on supplier confirmation. Requires a valid quote, released dock and priced PO.",
                 actions=[order], value=gross, available=execute, air=quote["mode"] == "air",
                 proof=candidate["evidence"] + [evidence(f"inbox/{msg.id}", "supplier quote")])
+            choices[-1]["latest_useful"] = min(expiry, useful_until(plan, row, gain), due).isoformat()
             if execute:
                 selected_gain = choices[recommended]["copies_gained"]
                 if selected_gain:
@@ -248,10 +254,11 @@ def options_for(issue, plan, forecast, row):
             note = (f"{qty:,} finished units offered. Earliest modeled arrival {at.isoformat()}. "
                     "Buyer must confirm offer validity, freight, dock release and a new PO before ordering.")
             review = {"type": "human_review", "product_id": pid, "part": part,
-                      "reference": offer.path, "copies_at_risk": forecast.shortfall}
+                      "reference": offer.path, "supplier_id": offer.supplier_id, "copies_at_risk": forecast.shortfall}
             add(f"Verify the offer for {qty:,} finished art books", "supplier stock offer", cost, gain, note,
                 actions=[review], value=cost, proof=proof)
             choices[-1]["needs_approval"] = True
+            choices[-1]["latest_useful"] = min(useful_until(plan, row, gain) - lead, due).isoformat()
             if gain > 0:
                 recommended = len(choices) - 1
                 decide_by = min(decide_by, useful_until(plan, row, gain) - lead)
@@ -304,12 +311,14 @@ def options_for(issue, plan, forecast, row):
             modeled = simulate(plan, {key: (earliest, part, c["quantity"])})[pid]
             gain = modeled.projected_packed - forecast.projected_packed if forecast.projected_packed is not None else None
             review = {"type": "human_review", "product_id": pid, "part": part,
-                      "reference": c["shipment_id"], "copies_at_risk": forecast.shortfall}
+                      "reference": c["shipment_id"], "shipment_id": c["shipment_id"],
+                      "supplier_id": c["supplier_id"], "po_number": c["po_number"], "po_line": c["po_line"], "copies_at_risk": forecast.shortfall}
             add(f"Arrange terminal pickup for {c['shipment_id']}", "port pickup", None, gain,
                 "Conditional ceiling if cases reach the line immediately. Logistics must confirm terminal release, "
                 "a truck quote and an authorized dock slot before dispatch.", actions=[review], value=0,
                 proof=c["evidence"] + issue.evidence)
             choices[-1]["needs_approval"] = True
+            choices[-1]["dock_released"] = c["dock_released"]
             if gain and forecast.limiting_part == part:
                 recommended = len(choices) - 1
             continue
@@ -342,7 +351,7 @@ def options_for(issue, plan, forecast, row):
         else:
             action = None
             if candidate and kind in {"email", "expedite", "other"}:
-                action = dict(choices[1]["actions"][0], ask=f"Obtain a quote and timed site delivery for: {a['label']}")
+                action = dict(choices[1]["actions"][0], purpose="request_quote_" + kind, target=a.get("target"), ask=f"Obtain a quote and timed site delivery for: {a['label']}")
             add(a["label"], kind, a.get("cost_eur"), None, "Awaiting evidence for quantity, arrival, and release.",
                 actions=[action] if action else [], value=0 if action else a.get("cost_eur"),
                 available=bool(action), air="air" in a["label"].lower() and not action)

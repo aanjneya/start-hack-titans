@@ -1,6 +1,7 @@
 """Launch Planner and Decision Copilot. Only new evidence changes the baseline."""
 from __future__ import annotations
 
+from sqlalchemy import text, update
 from sqlmodel import select
 
 from ..core import events, llm, trace
@@ -37,6 +38,8 @@ class LaunchPlanner(Agent):
                 baseline = card.options[0]
                 if baseline.get("description") == "baseline" and (baseline.get("remaining_shortfall") or 0) > 0:
                     outdated_baseline = True
+            if card.status == "proposed" and card.options and "product_id" not in card.options[0]:
+                outdated_baseline = True
             if card.status == "approved":
                 self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": card.chosen_option})
 
@@ -153,13 +156,14 @@ class LaunchPlanner(Agent):
             f = forecasts[row.product_id]
             options, recommended, due = options_for(issue, plan, f, row)
             selected = options[recommended]
-            risk = [r for r in all_rows(RiskScore) if r.entity_id in {issue.supplier_id, issue.part_id}]
+            grades = {r.entity_id: r.grade for r in sorted(all_rows(RiskScore), key=lambda r: r.id)
+                      if r.entity_id in {issue.supplier_id, issue.part_id}}
             reasoning = f"{issue.reason} Projected total: {f.projected_packed}; shortfall: {f.shortfall}. " + selected["risk_note"]
             reported = (issue.impact or {}).get("copies_at_risk")
             if reported is not None:
                 reasoning += f" The originating finding estimates {reported} copies exposed."
-            if risk:
-                reasoning += " Risk grades: " + ", ".join(f"{r.entity_id} {r.grade}/6" for r in risk) + "."
+            if grades:
+                reasoning += " Risk grades: " + ", ".join(f"{key} {grades[key]}/6" for key in sorted(grades)) + "."
             title = f"{row.edition} · {issue.type.replace('_', ' ')} · {issue.part_id or issue.subject_id}"
             proof = issue.evidence + plan.evidence + [e for o in options for e in o["evidence"]]
             proof = list({(e["path"], e.get("locator", "")): e for e in proof}.values())
@@ -175,9 +179,6 @@ class LaunchPlanner(Agent):
                         and previous.reasoning == reasoning and previous.evidence == proof
                         and previous.recommended == recommended and parse_datetime(previous.decide_by) == due):
                     continue
-                if previous and previous.status == "proposed":
-                    previous.status = "outdated"
-                    s.add(previous)
                 headline = f"{row.edition}: {f.shortfall} copies short. {selected['label']}."
                 alternate = f"{selected['label']}. {row.edition} projects a shortfall of {f.shortfall} copies."
                 wording = [headline, alternate]
@@ -193,8 +194,13 @@ class LaunchPlanner(Agent):
                                     approver_reason=f"Customer approval matrix on €{selected['approval_value_eur']} "
                                                     f"for the selected action.",
                                     needs_approval=selected["needs_approval"], decide_by=due, created_by=self.name)
+                # Wording logs through a separate connection. Claim only after that call returns.
+                s.execute(text("BEGIN IMMEDIATE"))
+                if previous:
+                    s.execute(update(DecisionCard).where(
+                        DecisionCard.id == previous.id, DecisionCard.status == "proposed").values(status="outdated"))
                 auto = (not card.needs_approval and selected["available"] and bool(selected["actions"])
-                        and not already_requested(s, selected["actions"]))
+                        and not already_requested(s, selected, card))
                 if auto:
                     card.status, card.chosen_option, card.decided_by, card.decided_at = "approved", recommended, "policy", utcnow()
                 s.add(card)

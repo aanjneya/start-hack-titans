@@ -3,15 +3,18 @@
 // Control room: what can stop the line, one tile per part or supplier. Plain words and one number per tile;
 // "See details" opens the three best actions as 3D cards, each routed to its approver by amount.
 import {
-  ArrowRight, Boxes, Check, ChevronDown, ClipboardCheck, Loader2, Mail, PackageSearch, ShieldCheck, Sparkles, Truck,
+  ArrowLeft, ArrowRight, Boxes, Check, ChevronDown, ClipboardCheck, Loader2, Mail, PackageSearch, ShieldCheck, Sparkles, Truck,
   Users, X, type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import ModalPanel from "./modal-panel";
+import { findingHref, followupHref } from "./buyer-links";
+import { SourceList } from "./decision-source";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { TiltCard } from "@/components/ui/3d-card";
 import { fmt, getData, postData, type DecisionCard, type Forecast, type Issue, type RiskScore } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { BuyerQueueEntry, CustomerSetup } from "../../API_CONTRACT";
+import type { ActionRun, BuyerQueueEntry, CustomerSetup } from "../../API_CONTRACT";
 
 type Matrix = CustomerSetup["approval_matrix"];
 
@@ -487,6 +490,8 @@ export function RiskBoard({
   focus,
   emptyText,
   onChanged,
+  onActionClose,
+  current,
   renderDecision,
   renderAction,
 }: {
@@ -502,6 +507,8 @@ export function RiskBoard({
   focus?: { key: string; n: number } | null;
   emptyText: string;
   onChanged: () => void;
+  onActionClose?: () => void;
+  current: boolean;
   /** The full decision card, for "More details" inside the dialog. */
   renderDecision?: (card: DecisionCard) => ReactNode;
   /** The full view of one buyer-queue action (its key), for "More details"; cards it covers are not repeated. */
@@ -544,6 +551,10 @@ export function RiskBoard({
     setSnapshot(null);
     setSelectedAction(null);
   }, []);
+  const closeAction = useCallback(() => {
+    close();
+    onActionClose?.();
+  }, [close, onActionClose]);
   const [focusSeen, setFocusSeen] = useState(0);
   if (focus && focus.n !== focusSeen) {
     setFocusSeen(focus.n);
@@ -582,11 +593,11 @@ export function RiskBoard({
       )}
 
       {selectedAction && renderAction && (
-        <ModalPanel label="Buyer decision" onClose={close}>
+        <ModalPanel label="Buyer decision" onClose={closeAction}>
           <div className="p-4 sm:p-6">
             <div className="mb-3 flex items-center justify-between gap-4">
               <h2 className="font-semibold">Buyer decision</h2>
-              <CloseButton onClose={close} />
+              <CloseButton onClose={closeAction} />
             </div>
             {renderAction(selectedAction) ?? <p role="status">This action is no longer in the buyer queue.</p>}
           </div>
@@ -595,6 +606,7 @@ export function RiskBoard({
       {snapshot && (
         <RiskDialog
           group={snapshot}
+          current={current}
           live={groups.find((g) => g.key === snapshot.key)}
           decisions={decisions}
           issues={issues}
@@ -632,6 +644,7 @@ export function SeverityLabel({ severity, className }: { severity: number; class
 function RiskTile({ group, onOpen }: { group: RiskGroup; onOpen: () => void }) {
   const s = sev(group.severity);
   const num = headline(group);
+  const cta = group.actions.length > 1 ? "Compare actions" : group.actions.length === 1 ? "Review action" : "Review findings";
   return (
     <article
       className="group relative flex w-full flex-col overflow-hidden rounded-xl border border-rule bg-surface p-4 focus-within:ring-2 focus-within:ring-act hover:border-act"
@@ -649,13 +662,12 @@ function RiskTile({ group, onOpen }: { group: RiskGroup; onOpen: () => void }) {
       )}
       <button
         type="button"
-        onClick={onOpen}
+        onClick={e => { e.currentTarget.focus({ preventScroll: true }); onOpen(); }}
         aria-haspopup="dialog"
-        aria-label={`See details: ${group.title}, ${[group.thing, group.company].filter(Boolean).join(", ")}`}
-        // The whole tile is the click target (stretched over the card); the visible label stays "See details".
+        aria-label={`${cta} for ${group.title} · ${[group.thing, group.company].filter(Boolean).join(", ") || group.key}`}
         className="mt-auto inline-flex items-center gap-1.5 self-start pt-4 text-[13.5px] font-semibold text-act outline-none after:absolute after:inset-0 after:rounded-xl after:content-[''] group-hover:underline"
       >
-        See details
+        {cta}
         <ArrowRight aria-hidden className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none" />
       </button>
     </article>
@@ -714,53 +726,10 @@ function useAlreadyAuthorized(actions: RiskAction[], decisions: DecisionCard[], 
 
 function CloseButton({ onClose }: { onClose: () => void }) {
   return (
-    <button type="button" onClick={onClose} aria-label="Close"
-      className="flex size-9 shrink-0 items-center justify-center rounded-md border border-rule bg-surface text-muted hover:text-ink">
-      <X aria-hidden className="size-4" />
+    <button type="button" onClick={onClose}
+      className="flex shrink-0 items-center gap-1 rounded-md border border-rule bg-surface px-3 py-2 text-sm font-semibold text-muted hover:text-ink">
+      <X aria-hidden className="size-4" /> Close
     </button>
-  );
-}
-
-function ModalPanel({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const downOnBackdrop = useRef(false);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (!dialog.open) dialog.showModal();
-    const root = document.documentElement;
-    const before = root.style.overflow;
-    root.style.overflow = "hidden";
-    return () => {
-      root.style.overflow = before;
-      // Leaving the page (Next keeps it alive, hidden) must not leave a modal open. Safe under Strict Mode too:
-      // the re-run reopens it before the queued close event arrives, and onClose ignores a dialog that is open.
-      if (dialog.open) dialog.close();
-    };
-  }, []);
-
-  return (
-    <dialog
-      ref={ref}
-      aria-label={label}
-      onClose={() => {
-        if (!ref.current?.open) onClose();
-      }}
-      onCancel={(e) => {
-        e.preventDefault();
-        onClose();
-      }}
-      // Close on a backdrop click only when the press also started there (not when a text selection is dragged out).
-      onMouseDown={(e) => {
-        downOnBackdrop.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && downOnBackdrop.current) onClose();
-      }}
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(1060px,calc(100vw-2rem))] max-w-none overflow-y-auto rounded-2xl border border-rule bg-dock p-0 text-ink shadow-2xl animate-in fade-in zoom-in-95 duration-200 backdrop:bg-[rgba(8,24,16,0.45)] backdrop:backdrop-blur-[3px] motion-reduce:animate-none"
-    >
-      {children}
-    </dialog>
   );
 }
 
@@ -769,6 +738,7 @@ function ModalPanel({ label, onClose, children }: { label: string; onClose: () =
 // ---------------------------------------------------------------------------
 function RiskDialog({
   group,
+  current,
   live,
   decisions,
   issues,
@@ -780,6 +750,7 @@ function RiskDialog({
 }: {
   /** The group as it was when opened: the three cards stay put while you approve one. */
   group: RiskGroup;
+  current: boolean;
   /** The same group from the latest data (for "More details"); gone once nothing is open any more. */
   live: RiskGroup | undefined;
   /** Latest decisions and findings, to know what was decided or authorized since the dialog opened. */
@@ -792,6 +763,21 @@ function RiskDialog({
   renderAction?: (key: string) => ReactNode;
 }) {
   const [more, setMore] = useState(false);
+  const [detail, setDetail] = useState<{ key: string; cardId?: number } | null>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const returnTo = useRef<HTMLButtonElement>(null);
+  const openDetail = (button: HTMLButtonElement, action: { key: string; cardId?: number }) => {
+    returnTo.current = button;
+    setDetail(action);
+  };
+  useLayoutEffect(() => {
+    if (detail) {
+      detailHeading.current?.focus();
+    } else if (returnTo.current) {
+      returnTo.current.focus();
+      returnTo.current = null;
+    }
+  }, [detail]);
   const [approvedHere, setApprovedHere] = useState<Set<number>>(() => new Set());
   // The three cards stay put while the dialog is open, but a queue action follows its physical action to the new card
   // when the Planner superseded the old one (same queue key, new decision id and version), e.g. after a stale refusal.
@@ -799,7 +785,7 @@ function RiskDialog({
     const liveByKey = new Map((live?.actions ?? []).map((a) => [a.key, a]));
     return group.actions.slice(0, 3).map((a) => {
       const cur = liveByKey.get(a.key);
-      return a.version && cur?.card && cur.card.id !== a.card?.id ? cur : a;
+      return a.version && cur?.card && cur.version !== a.version ? cur : a;
     });
   }, [group, live]);
   const blocked = useAlreadyAuthorized(top, decisions, issues);
@@ -808,13 +794,37 @@ function RiskDialog({
     !!card && (approvedHere.has(card.id) || !decisions.some((d) => d.id === card.id && d.status === "proposed"));
   const matrix = setup?.approval_matrix ?? [];
   const lead = group.lead ?? group.findings[0];
-  const evidence = group.findings.flatMap((f) => f.evidence ?? []).slice(0, 6);
+  const evidence = group.findings.flatMap((f) => f.evidence ?? []);
   const num = headline(group);
   const short = group.editions.filter((e) => (e.shortfall ?? 0) > 0);
 
+  const queued = live && renderAction ? live.actions.filter(a => a.key.startsWith("queue:")) : [];
+  const shown = new Set(top.map(a => a.key));
+  const covered = new Set([...queued, ...top].map(a => a.card?.id));
+  const extra = [
+    ...queued.filter(a => !shown.has(a.key)).map(a => ({ key: a.key, label: a.title, cardId: a.card?.id })),
+    ...(live && renderDecision ? live.cards.filter(c => !covered.has(c.id)).map(c => ({ key: `card:${c.id}`, label: c.title, cardId: c.id })) : []),
+  ];
+
   return (
-    <ModalPanel label={group.title} onClose={onClose}>
-      <div className="p-5 sm:p-8">
+    <ModalPanel label={detail ? "Buyer decision" : group.title} onClose={onClose}>
+      {detail && (
+        <div className="p-4 sm:p-6">
+          <div className="sticky top-0 z-10 mb-3 flex items-center justify-between gap-3 border-b border-rule bg-dock py-2">
+            <button type="button" className="flex items-center gap-1 text-sm font-semibold text-act hover:underline" onClick={() => setDetail(null)}>
+              <ArrowLeft aria-hidden className="size-4" /> Back to risk
+            </button>
+            <CloseButton onClose={onClose} />
+          </div>
+          <h2 ref={detailHeading} tabIndex={-1} className="mb-2 text-sm font-semibold text-muted">Buyer decision · {group.title}</h2>
+          {detail.key.startsWith("queue:") ? (renderAction?.(detail.key.slice(6)) ?? <p role="status">This action is no longer in the buyer queue.</p>) :
+            (() => {
+              const card = decisions.find(d => d.id === detail.cardId);
+              return (card && renderDecision?.(card)) || <p role="status">This decision is no longer available.</p>;
+            })()}
+        </div>
+      )}
+      <div hidden={detail !== null} className="p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <SeverityLabel severity={group.severity} className="text-[12.5px]" />
@@ -871,6 +881,8 @@ function RiskDialog({
                 <ActionCard
                   action={a}
                   rank={i}
+                  current={current}
+                  onFollowup={onClose}
                   setup={setup}
                   decided={decided(a.card)}
                   blocked={blocked.has(a.key)}
@@ -880,6 +892,13 @@ function RiskDialog({
                   }}
                   onStale={onChanged}
                 />
+                {((a.key.startsWith("queue:") && renderAction) || (a.card && renderDecision)) && (
+                  <button type="button" className="mt-2 px-1 py-1 text-sm font-semibold text-act hover:underline"
+                    aria-label={`Review evidence and approval for ${a.title}`}
+                    onClick={e => openDetail(e.currentTarget, { key: a.key, cardId: a.card?.id })}>
+                    Evidence &amp; approval <ArrowRight aria-hidden className="inline size-3.5" />
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -891,7 +910,7 @@ function RiskDialog({
           onClick={() => setMore((m) => !m)}
           className="mt-6 inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-act hover:underline"
         >
-          {more ? "Fewer details" : "More details"}
+          {more ? "Hide risk evidence" : "See risk evidence and related findings"}
           <ChevronDown aria-hidden className={cn("size-4 transition-transform", more && "rotate-180")} />
         </button>
 
@@ -901,15 +920,18 @@ function RiskDialog({
               <div className="rounded-2xl border border-rule bg-surface p-4 text-[14px] leading-relaxed">
                 {lead.reason && <p>{lead.reason}</p>}
                 {group.cards[0]?.reasoning && <p className="mt-3 whitespace-pre-line text-[13px] text-muted">{group.cards[0].reasoning}</p>}
-                {evidence.length > 0 && (
-                  <ul className="mt-3 space-y-1 text-[12.5px] text-muted">
-                    {evidence.map((e, i) => (
-                      <li key={i} className="break-words">
-                        <span className="font-medium text-ink">{e.path}</span>
-                        {e.locator && `, ${e.locator}`}
-                      </li>
-                    ))}
-                  </ul>
+                {evidence.length > 0 && <SourceList evidence={evidence} cards={group.cards} />}
+                {group.findings.length > 0 && (
+                  <details className="mt-2 text-sm">
+                    <summary className="cursor-pointer font-semibold text-act">Related findings ({group.findings.length})</summary>
+                    <ul className="mt-2 space-y-2">
+                      {group.findings.map(f => <li key={f.id}>
+                        <Link onClick={onClose} href={findingHref(f.id)} className="text-act underline">
+                          {f.summary || `Finding #${f.id}`}
+                        </Link>
+                      </li>)}
+                    </ul>
+                  </details>
                 )}
               </div>
             )}
@@ -923,17 +945,14 @@ function RiskDialog({
               </Link>
             )}
             <ApprovalPolicy matrix={matrix} buyer={setup?.demo_buyer} rating={group.rating} />
-            {live && (() => {
-              const queued = renderAction ? live.actions.filter((a) => a.key.startsWith("queue:")) : [];
-              const covered = new Set(queued.map((a) => a.card?.id));
-              const cards = renderDecision ? live.cards.filter((c) => !covered.has(c.id)) : [];
-              return queued.length + cards.length > 0 && (
-                <div className="space-y-4">
-                  {queued.map((a) => <div key={a.key}>{renderAction!(a.key.slice("queue:".length))}</div>)}
-                  {cards.map((card) => <div key={card.id}>{renderDecision!(card)}</div>)}
-                </div>
-              );
-            })()}
+            {extra.length > 0 && (
+                <details className="text-sm">
+                  <summary className="cursor-pointer font-semibold text-act">Other decisions ({extra.length})</summary>
+                  <ul className="mt-2 space-y-2">{extra.map(a => <li key={a.key}>
+                    <button type="button" className="text-left text-act underline" onClick={e => openDetail(e.currentTarget, a)}>{a.label}</button>
+                  </li>)}</ul>
+                </details>
+            )}
           </div>
         )}
       </div>
@@ -987,6 +1006,8 @@ const RANK = ["Best", "2nd", "3rd"];
 
 function ActionCard({
   action,
+  current,
+  onFollowup,
   rank,
   setup,
   decided,
@@ -995,6 +1016,8 @@ function ActionCard({
   onStale,
 }: {
   action: RiskAction;
+  current: boolean;
+  onFollowup: () => void;
   rank: number;
   setup: CustomerSetup | null;
   /** Its decision card was approved since the dialog opened (here or elsewhere). */
@@ -1007,6 +1030,7 @@ function ActionCard({
 }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [error, setError] = useState("");
+  const [partial, setPartial] = useState<ActionRun | null>(null);
   // The action moved to a new card (the Planner superseded the old one after a stale refusal): clear the old error so
   // Approve shows again for the new card. An approval made here stays "Approved".
   const [cardId, setCardId] = useState(action.card?.id);
@@ -1021,12 +1045,9 @@ function ActionCard({
   const buyer = setup?.demo_buyer;
   const card = action.card;
   const option = card && action.optionIndex != null ? card.options[action.optionIndex] : undefined;
-  // Same rule as the decision card: the demo seat may decide only cards and options routed to it alone.
-  const recommended = card?.options[card.recommended ?? 0];
-  const ownsCard = !!buyer && recommended?.approvers?.length === 1 && recommended.approvers[0] === buyer;
   const unnamed = option?.assignments?.filter((a) => !a.person).map((a) => a.required_role) ?? [];
   const routedHere =
-    !!option && ownsCard && !unnamed.length && option.approvers?.length === 1 && option.approvers[0] === buyer &&
+    !!option && !!buyer && !unnamed.length && option.approvers?.length === 1 && option.approvers[0] === buyer &&
     option.available !== false;
   const step = option?.actions?.[0];
   const verb = option?.button_label || (step?.type === "human_review" ? "Open review"
@@ -1036,15 +1057,16 @@ function ActionCard({
   const executable = !!option && option.available !== false;
 
   const approve = async () => {
-    if (!canApprove || !card || action.optionIndex == null || !buyer || state === "busy" || state === "done") return;
+    if (!current || !canApprove || !card || action.optionIndex == null || !buyer || state === "busy" || state === "done") return;
     setState("busy");
     setError("");
     try {
-      await postData(`/api/decisions/${card.id}/approve`, {
+      const result = await postData<ActionRun>(`/api/decisions/${card.id}/approve`, {
         by: buyer,
         option: action.optionIndex,
         ...(action.version ? { version: action.version } : {}),
       });
+      setPartial(result.status === "partial" ? result : null);
       setState("done");
       onApproved(card.id);
     } catch (e) {
@@ -1102,8 +1124,8 @@ function ActionCard({
         <dl style={{ transform: "translateZ(16px)" }} className="mt-auto grid grid-cols-2 gap-2 pt-4">
           {(
             [
-              ["Cost", money(action.costEur)],
-              ["Copies gained", action.copiesGained == null ? "–" : fmt(action.copiesGained)],
+              ["Cost", action.costEur == null ? "Unknown" : money(action.costEur)],
+              ["Potential gain", action.copiesGained == null ? "Unknown" : `${fmt(action.copiesGained)} copies`],
             ] as const
           ).map(([label, value]) => (
             <div key={label} className="rounded-lg bg-white/10 px-2.5 py-1.5 ring-1 ring-inset ring-white/15">
@@ -1113,7 +1135,7 @@ function ActionCard({
           ))}
         </dl>
 
-        <p className="mt-2.5 truncate text-[12.5px] text-white/75" title={approver}>
+        <p className="mt-2.5 text-[12.5px] text-white/85" title={approver}>
           {approver ? `Approver: ${approver}` : action.approvalValue == null ? "Not priced yet" : ""}
         </p>
 
@@ -1122,12 +1144,12 @@ function ActionCard({
             <button
               type="button"
               onClick={approve}
-              disabled={state === "busy" || state === "done"}
+              disabled={!current || state === "busy" || state === "done"}
               aria-label={`${verb}: ${action.title}`}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-2.5 text-[14px] font-semibold text-[#3e5143] outline-none transition-[background-color,transform] hover:bg-white/90 focus-visible:ring-[3px] focus-visible:ring-white/60 active:scale-[0.98] disabled:opacity-70"
             >
               {state === "busy" && <Loader2 aria-hidden className="size-4 motion-safe:animate-spin" />}
-              {state === "busy" ? "Sending…" : verb}
+              {state === "busy" ? "Submitting…" : !current ? "Waiting for current data" : verb}
             </button>
           ) : (
             <p className="w-full rounded-lg bg-white/10 py-2.5 text-center text-[13px] font-medium text-white/85 ring-1 ring-inset ring-white/20">
@@ -1138,7 +1160,7 @@ function ActionCard({
                   : executable
                     ? unnamed.length
                       ? `Waiting for a named ${unnamed.join(" + ").toLowerCase()}`
-                      : `Waiting for ${action.roles.join(" + ") || action.people.join(" + ") || "approval"}`
+                      : `Awaiting ${action.people.join(" + ") || action.roles.join(" + ") || "approval"}`
                     : option
                       ? "Waiting for evidence"
                       : OWNER_STEP[action.owner] ?? "Suggested next step"}
@@ -1162,7 +1184,9 @@ function ActionCard({
             <Check aria-hidden className="size-7" strokeWidth={3} />
           </span>
           <p className="text-[16px] font-semibold">Approved</p>
-          <p className="text-[13px] text-white/75">{buyer}</p>
+          <p className="px-4 text-[13px] text-white/85">{partial ? `Follow-up needs attention${partial.failures.length ? " · " + [...new Set(partial.failures.map(f => AGENT_NAME[f.agent] || f.agent))].join(", ") : ""}` : buyer}</p>
+          {card && <Link href={followupHref(card.id)} onClick={onFollowup}
+            className="rounded px-2 py-1 text-sm font-semibold text-white underline">View decision follow-up</Link>}
         </div>
       )}
     </TiltCard>

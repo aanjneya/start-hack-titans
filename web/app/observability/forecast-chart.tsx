@@ -1,6 +1,5 @@
 "use client";
 
-import { Orbit } from "lucide-react";
 import { ago, fmt, parseTs, type Forecast } from "@/lib/api";
 
 /** Chart colours taken from the reference forecast chart (card, rules, bars, deep-sage forecast line). */
@@ -32,12 +31,29 @@ function niceStep(raw: number) {
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
 }
 
+function EditionSummary({ forecast }: { forecast: Forecast }) {
+  const limiting = typeof forecast.details?.limiting_part_name === "string" ? forecast.details.limiting_part_name : forecast.limiting_part;
+  return <div className="px-5 py-4">
+    <h2 className="text-lg font-semibold text-ink">{forecast.edition || forecast.product_id}</h2>
+    <dl className="mt-2 flex flex-wrap gap-x-8 gap-y-2 text-sm">
+      <div><dt className="text-muted">Projected packed by close</dt>
+        <dd className="mt-0.5 text-2xl font-bold tabular">{forecast.projected_packed == null ? "Unknown" : fmt(forecast.projected_packed)}</dd></div>
+      <div><dt className="text-muted">Shortfall</dt>
+        <dd className={`mt-0.5 text-2xl font-bold tabular ${forecast.shortfall ? "text-stop" : "text-ink"}`}>
+          {forecast.shortfall == null ? "Unknown" : fmt(forecast.shortfall)}</dd></div>
+    </dl>
+    {limiting && <p className="mt-2 text-xs text-muted">Limiting part · {limiting}</p>}
+  </div>;
+}
+
 /** Hour by hour until packing closes: copies packed so far (bars), where the forecast flattens when a part runs out,
  *  and the orders still to pack (dotted). Built from the Planner's own hourly forecast, nothing estimated here. */
 export function ForecastChart({ forecast, now }: { forecast: Forecast; now: number }) {
   const hours = (Array.isArray(forecast.details?.hourly) ? forecast.details.hourly : []) as Hour[];
   const projected = forecast.projected_packed;
-  if (!hours.length || projected == null) return null;
+  if (!hours.length || projected == null) {
+    return <section className="rounded-xl border border-rule bg-surface"><EditionSummary forecast={forecast} /></section>;
+  }
 
   const made = hours.reduce((sum, h) => sum + (Number(h.copies) || 0), 0);
   const start = projected - made; // packed when the snapshot was taken
@@ -51,7 +67,8 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
   // The line stops from the first hour after which nothing more gets packed.
   let stop = hours.length;
   while (stop > 0 && !(Number(hours[stop - 1].copies) > 0)) stop -= 1;
-  const stops = stop < hours.length;
+  const stops = stop < hours.length && (forecast.shortfall ?? 0) > 0;
+  if (!stops) stop = hours.length;
   const short = forecast.shortfall ?? 0;
 
   // Geometry (SVG units; the chart scales to its card).
@@ -77,23 +94,16 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
     || (i % labelEvery === 0 && dayStarts.every((d) => Math.abs(i - d) >= gap)));
 
   const stopAt = stops && stop > 0 ? hourLabel(hours[stop - 1].to, true) : stops ? hourLabel(hours[0].from, true) : "";
-  const status = !stops && short <= 0 ? "on track to pack every order"
-    : stops ? `line stops ${stopAt} · ${fmt(short)} short` : `${fmt(short)} short by close`;
+  const status = forecast.shortfall == null ? "Packing plan by hour"
+    : short === 0 ? "On track to pack every order"
+    : stops ? `Packing stops ${stopAt}` : "Packing continues through close";
 
   return (
     <section className="overflow-hidden rounded-xl border bg-surface" style={{ borderColor: C.border }}>
-      <div className="flex items-baseline justify-between gap-3 border-b px-5 py-3.5" style={{ borderColor: C.rule }}>
-        <h3 className="min-w-0 truncate text-[17px] font-semibold" style={{ color: C.title }}>
-          {forecast.edition} edition · packing forecast
-        </h3>
-        <span className="shrink-0 text-sm" style={{ color: C.label }}>copies packed</span>
-      </div>
-      <div className="flex items-center justify-between gap-3 border-b px-5 py-2.5" style={{ borderColor: C.rule }}>
-        <p className="flex min-w-0 items-center gap-2 text-[15px]" style={{ color: C.title }}>
-          <Orbit aria-hidden className="size-4 shrink-0" style={{ color: C.forecast }} />
-          <span className="truncate">Forecast ready: {status}</span>
-        </p>
-        <span className="shrink-0 text-sm tabular" style={{ color: "#a6adba" }}>{ago(forecast.computed_at, now)}</span>
+      <EditionSummary forecast={forecast} />
+      <div className="flex items-center justify-between gap-3 border-y px-5 py-2.5 text-sm" style={{ borderColor: C.rule }}>
+        <p className="font-medium text-ink">{status}</p>
+        <span className="shrink-0 text-xs text-muted">{ago(forecast.computed_at, now)}</span>
       </div>
 
       {/* On a phone the chart keeps a readable size and scrolls sideways inside its card. */}
@@ -130,7 +140,7 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
                 points={[`${x(Math.max(0, stop - 1))},${y(cumulative[Math.max(0, stop - 1)])}`, `${x(hours.length - 1)},${y(projected)}`].join(" ")}
                 fill="none" stroke={C.forecast} strokeWidth="2.4"
               />
-              {[Math.max(0, stop - 1), Math.round((stop + hours.length - 1) / 2), hours.length - 1].map((i) => (
+              {[...new Set([Math.max(0, stop - 1), Math.round((stop + hours.length - 1) / 2), hours.length - 1])].map((i) => (
                 <circle key={i} cx={x(i)} cy={y(cumulative[i])} r="4" fill={C.forecast} />
               ))}
               <line x1={stopX} x2={stopX} y1={T - 6} y2={T + PH} stroke={C.faint} strokeDasharray="3 4" />
@@ -182,7 +192,6 @@ export function ForecastPanel({ forecasts, now }: { forecasts: Forecast[]; now: 
     if (!prev || f.id > prev.id) newest.set(f.product_id, f);
   }
   const rows = [...newest.values()]
-    .filter((f) => Array.isArray(f.details?.hourly) && f.details.hourly.length > 0)
     .sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   if (!rows.length) {
     return (

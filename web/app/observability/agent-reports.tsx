@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
+import { findingHref, mailHref } from "../buyer-links";
 import { useEffect, useMemo, useState } from "react";
 import { AgentRoster } from "@/components/ui/agent-roster";
 import {
   ago, clock, eur, fmt, getData,
   type AgentLogEntry, type Conflict, type Evidence, type ExtendedRiskReason,
-  type Forecast, type ObservabilitySnapshot, type RiskScore,
+  type ObservabilitySnapshot, type RiskScore,
 } from "@/lib/api";
 import {
   AGENT_NAV, TONE_CLASS, agentMeta, entryDetail, humanizeAction, isPlumbingEvent, type AgentId,
@@ -136,12 +138,10 @@ export function OverviewReport({
   snap,
   now,
   online = null,
-  onSelectAgent,
 }: {
   snap: ObservabilitySnapshot;
   now: number;
   online?: boolean | null;
-  onSelectAgent: (id: AgentId) => void;
 }) {
   const agentStats = useMemo(() => {
     const map = new Map<string, { total: number; real: number; errors: number; last?: AgentLogEntry }>();
@@ -163,17 +163,8 @@ export function OverviewReport({
 
   return (
     <div className="space-y-6">
-      {/* What happens next, not how busy the agents were: the Planner's hour-by-hour packing forecast. */}
-      <ForecastPanel forecasts={snap.forecast} now={now} />
-
-      <section aria-label="Agent fleet" className="rounded-xl border border-rule bg-surface p-4 sm:p-5">
-        <AgentRoster
-          agents={roster}
-          title="Agents · pick one to open its report"
-          onSelectedChange={(id) => {
-            if (id) onSelectAgent(id as AgentId);
-          }}
-        />
+      <section aria-label="Agent reports" className="rounded-xl border border-rule bg-surface p-4 sm:p-5">
+        <AgentRoster agents={roster} title="Latest work by agent" />
       </section>
 
       <StackedBar
@@ -443,6 +434,7 @@ export function ReconcilerReport({ snap }: { snap: ObservabilitySnapshot }) {
                       </div>
                     )}
                     <EvidenceList evidence={iss.evidence} />
+                    <Link href={findingHref(iss.id)} className="inline-block font-semibold text-act underline">Open finding</Link>
                   </div>
                 </details>
               ))}
@@ -494,7 +486,7 @@ export function ChaserReport({ snap }: { snap: ObservabilitySnapshot }) {
               <div key={m.id} className="rounded-xl border border-rule bg-surface p-4 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded bg-ink px-2 py-0.5 text-xs font-bold text-white uppercase">{m.language || "EN"}</span>
-                  <span className="font-bold text-ink">{m.subject}</span>
+                  <Link href={mailHref(m.id)} className="font-bold text-act underline decoration-rule underline-offset-2 hover:decoration-current">{m.subject}</Link>
                   <span className="text-xs text-muted">→ {m.supplier_id} ({m.to_email})</span>
                   <span className={`ml-auto rounded px-2 py-0.5 text-xs font-semibold capitalize ${m.status === "replied" ? "bg-ok-soft text-ok" : m.status === "escalated" ? "bg-stop-soft text-stop" : "bg-act-soft text-act"}`}>
                     {m.status}
@@ -521,13 +513,7 @@ export function ChaserReport({ snap }: { snap: ObservabilitySnapshot }) {
 // ---------------------------------------------------------------------------
 // 6. Launch Planner Report
 // ---------------------------------------------------------------------------
-export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
-  const newestEditions = useMemo(() => {
-    const m = new Map<string, Forecast>();
-    for (const f of snap.forecast) if (!m.has(f.edition)) m.set(f.edition, f);
-    return [...m.values()];
-  }, [snap.forecast]);
-
+export function PlannerReport({ snap, now }: { snap: ObservabilitySnapshot; now: number }) {
   const proposed = snap.decisions.filter((d) => d.status === "proposed").length;
   const approved = snap.decisions.filter((d) => d.status === "approved" || d.status === "executed").length;
   const rejected = snap.decisions.filter((d) => d.status === "rejected").length;
@@ -535,6 +521,8 @@ export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
 
   return (
     <div className="space-y-6">
+      <ForecastPanel forecasts={snap.forecast} now={now} />
+
       <KpiGrid
         items={[
           { label: "Waiting for approval", value: fmt(proposed), tone: proposed > 0 ? "warn" : "ok" },
@@ -543,40 +531,6 @@ export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
           { label: "Outdated", value: fmt(outdated), hint: "Replaced after a newer drop", tone: "default" },
         ]}
       />
-
-      {newestEditions.length > 0 && (
-        <section aria-label="Pack forecasts">
-          <h2 className="mb-3 text-lg font-bold">Forecast by edition</h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            {newestEditions.map((f) => {
-              const still = f.still_to_pack ?? 0;
-              const short = f.shortfall ?? 0;
-              const packed = Math.max(0, still - short);
-              const pct = still > 0 ? Math.min(100, Math.round((packed / still) * 100)) : 100;
-              return (
-                <div key={f.edition} className="rounded-xl border border-rule bg-surface p-4">
-                  <div className="flex items-baseline justify-between">
-                    <h3 className="text-base font-bold">{f.edition}</h3>
-                    <span className={`text-sm font-bold tabular ${short > 0 ? "text-stop" : "text-ok"}`}>
-                      {short > 0 ? `${fmt(short)} short` : "On track (0 short)"}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-3 w-full overflow-hidden rounded-full bg-stop-soft">
-                    <div
-                      className={`h-3 rounded-full ${short > 0 ? "bg-act" : "bg-ok"}`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs text-muted tabular">
-                    {fmt(packed)} / {fmt(still)} projected packed before close ({pct}%)
-                    {f.limiting_part ? ` · Limiting part: ${f.limiting_part}` : ""}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
 
       <section aria-label="Decision cards">
         <h2 className="mb-3 text-lg font-bold">Decision cards ({snap.decisions.length})</h2>
@@ -703,9 +657,9 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
 
   return (
     <div className="space-y-6">
-      <section aria-labelledby="risk-ratings" className="space-y-3">
+      <section aria-label="Rated products, parts and suppliers" className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="risk-ratings" className="text-2xl font-bold tracking-tight">Risk ratings</h2>
+          <p className="min-w-0 flex-1 basis-60 text-sm text-muted">Scores run from 0 to 100. Higher scores mean greater exposure to disruption.</p>
           <div role="group" aria-label="Filter ratings" className="flex flex-wrap gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
             {(["product", "part", "supplier", "all"] as const).map(type => (
               <button key={type} type="button" aria-pressed={activeFilter === type} onClick={() => setFilter(type)}
@@ -715,7 +669,6 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
             ))}
           </div>
         </div>
-        <p className="text-sm text-muted">The score measures supply risk from 0 to 100. Higher scores mean greater exposure to disruption.</p>
         {visible.length === 0 ? <EmptyState text="No ratings available for this view." /> : <div className="space-y-2">
           {visible.map(row => <RatingDetails key={`${row.entity_type}/${row.entity_id}`} row={row} names={names} />)}
         </div>}
@@ -730,14 +683,13 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
         </aside>
       </section>
 
-      {Object.keys(extCounts).length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-rule py-3 text-xs text-muted">
-          <span className="font-semibold text-ink">Signals in the latest check</span>
+          <span className="font-semibold text-ink">{Object.keys(extCounts).length ? "Signals in the latest check" : "External risk signals"}</span>
           {Object.entries(extCounts).map(([name, count]) => (
             <span key={name} className="capitalize">{name} <b className="text-ink tabular">{count}</b></span>
           ))}
+          <Link href="/?view=risk" className="ml-auto py-1 text-sm font-semibold text-act hover:underline">Review signal sources</Link>
         </div>
-      )}
       <RiskPlaybook activityVersion={snap.health?.activity_version} />
     </div>
   );

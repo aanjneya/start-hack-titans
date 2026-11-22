@@ -3,6 +3,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   AlertOctagon,
   CheckCircle2,
@@ -20,6 +21,7 @@ type AgentStatus = "working" | "idle" | "waiting" | "blocked" | "offline";
 type RosterAgent = {
   id: string;
   name: string;
+  href?: string;
   /** What it is for, for example "Writes the code". */
   role?: string;
   status: AgentStatus;
@@ -69,7 +71,7 @@ type AgentRosterProps = Omit<
   React.ComponentProps<"section">,
   "onSelect" | "title"
 > & {
-  /** The agents to show. */
+  /** The agents to show. A card with a report href opens that report. */
   agents: RosterAgent[];
   /** The selected agent id. Controlled. */
   selected?: string | null;
@@ -80,6 +82,14 @@ type AgentRosterProps = Omit<
   /** Heading. */
   title?: string;
 };
+
+function RosterControl({ agent, selected, onPick, children, className }: {
+  agent: RosterAgent; selected: boolean; onPick: () => void; children: React.ReactNode; className: string;
+}) {
+  const props = { className, "data-status": agent.status };
+  if (agent.href) return <Link href={agent.href} {...props}>{children}</Link>;
+  return <button type="button" aria-pressed={selected} onClick={onPick} {...props}>{children}</button>;
+}
 
 /**
  * Every agent on a team of agents as a card: who it is, whether it is working, waiting or blocked, what it is doing and how busy it is. Status counts
@@ -170,11 +180,10 @@ function AgentRoster({
           const on = selected === a.id;
           return (
             <li key={a.id}>
-              <button
-                type="button"
-                data-status={a.status}
-                aria-pressed={on}
-                onClick={() => pick(a.id)}
+              <RosterControl
+                agent={a}
+                selected={on}
+                onPick={() => pick(a.id)}
                 className={cn(
                   "flex h-full w-full flex-col gap-3 rounded-xl border bg-card p-4 text-start text-card-foreground outline-none transition-[border-color,background-color] duration-150 hover:bg-accent/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none",
                   on && "border-foreground bg-accent/40",
@@ -258,7 +267,7 @@ function AgentRoster({
                     </span>
                   )}
                 </span>
-              </button>
+              </RosterControl>
             </li>
           );
         })}

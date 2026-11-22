@@ -83,3 +83,5 @@ Branch verification: 79 backend tests passed, including the historical pickup an
 - [x] **T5.32 (jivi branch)** The buyer's run trace includes the originating Watcher event and all six agents, including runs longer than the 200-entry recent-activity view. An explicit row limit still works.
 
 The release check now propagates a failing frontend lint step. An injected lint failure returned exit 1, and the fixed buyer code passed standalone ESLint and the production build. The personal notification preference and exact-card navigation were rechecked in the browser.
+
+- [x] **T5.33 (jivi branch)** Buyers can open the forecast, risk ratings, findings and supplier email directly. A risk links to the selected option’s evidence, approval route and original findings. The browser walkthrough covered direct links, refresh, Back, keyboard navigation and phone-sized findings with the five-drop replay.

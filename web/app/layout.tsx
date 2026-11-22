@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { Suspense } from "react";
+import WorkspaceNav, { NavigationBar } from "./workspace-nav";
 import "./globals.css";
 
 // One family; the width axis gives the condensed "shipping label" numbers.
@@ -16,7 +18,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${archivo.variable} h-full antialiased`}>
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        <Suspense fallback={<NavigationBar />}><WorkspaceNav /></Suspense>
+        <div id="workspace-content" tabIndex={-1}>{children}</div>
+      </body>
     </html>
   );
 }

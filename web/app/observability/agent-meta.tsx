@@ -15,6 +15,7 @@ export interface AgentMeta {
   id: AgentId;
   name: string;
   shortName: string;
+  report: string;
   role: string;
   /** One short line for roster cards. */
   job: string;
@@ -41,6 +42,7 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "overview",
     name: "All agents",
     shortName: "Overview",
+    report: "Agent Team",
     role: "The latest work and decisions across the procurement team",
     job: "Every agent at a glance",
     rosterName: "All agents",
@@ -58,6 +60,7 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "watcher",
     name: "Watcher",
     shortName: "Watcher",
+    report: "Portal changes",
     role: "Spots new, changed and removed files on the supplier portal",
     job: "Watches the supplier portal for new files",
     rosterName: "Watcher",
@@ -74,7 +77,8 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "ingest",
     name: "Ingest & Normalizer",
     shortName: "Ingest",
-    role: "Reads CSVs, spreadsheets, PDFs, scans and replies into one source of truth",
+    report: "Imported records",
+    role: "Reads incoming documents and supplier replies into purchasing records",
     job: "Reads every file, scan and reply into one truth",
     rosterName: "Ingest",
     color: "#1d5fb4",
@@ -90,7 +94,8 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "reconciler",
     name: "Reconciler & Gate",
     shortName: "Reconciler",
-    role: "Checks the sources against each other: wrong revisions, mismatches, fraud",
+    report: "Source checks",
+    role: "Flags conflicting records, blocked revisions and suspicious changes",
     job: "Checks the sources against each other",
     rosterName: "Reconciler",
     color: "#3b6f8f",
@@ -105,6 +110,7 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "chaser",
     name: "Chaser",
     shortName: "Chaser",
+    report: "Supplier follow-ups",
     role: "Emails suppliers in their language and reads the replies",
     job: "Asks suppliers for what is missing",
     rosterName: "Chaser",
@@ -120,7 +126,8 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "planner",
     name: "Launch Planner",
     shortName: "Planner",
-    role: "Forecasts packing hour by hour and proposes decisions in € and copies",
+    report: "Packing forecast",
+    role: "See what can be packed by the deadline and which actions could close the gap",
     job: "Forecasts packing and proposes decisions",
     rosterName: "Launch Planner",
     color: "#127a7a",
@@ -135,7 +142,8 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "risk",
     name: "Risk Rater",
     shortName: "Risk",
-    role: "Rates supply risk using purchasing records and outside signals",
+    report: "Risk ratings",
+    role: "Rates products, parts and suppliers using purchasing records and outside signals",
     job: "Rates suppliers, parts and editions",
     rosterName: "Risk Rater",
     color: "#a86a12",
@@ -151,6 +159,7 @@ export const AGENT_NAV: AgentMeta[] = [
     id: "human",
     name: "Human Audit",
     shortName: "Human",
+    report: "Approval history",
     role: "Who approved, rejected or overrode what",
     job: "Approves or rejects the decision cards",
     rosterName: "Human gate",
@@ -164,6 +173,10 @@ export const AGENT_NAV: AgentMeta[] = [
     ),
   },
 ];
+
+export function reportHref(id: AgentId): string {
+  return id === "overview" ? "/observability" : `/observability?agent=${id}`;
+}
 
 export const agentMeta = (id: string): AgentMeta =>
   AGENT_NAV.find((a) => a.id === id) ?? AGENT_NAV[0];

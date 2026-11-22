@@ -1,7 +1,7 @@
 // Turns the live agent trace into roster cards (components/ui/agent-roster.tsx).
 import type { AgentStatus, RosterAgent } from "@/components/ui/agent-roster";
 import { ago, fmt, parseTs, type AgentLogEntry, type ObservabilitySnapshot } from "@/lib/api";
-import { AGENT_NAV, entryDetail, humanizeAction, isPlumbingEvent, type AgentId } from "./agent-meta";
+import { AGENT_NAV, entryDetail, humanizeAction, reportHref, isPlumbingEvent, type AgentId } from "./agent-meta";
 
 /** An agent counts as working while its last real action is younger than this. */
 const WORKING_MS = 15_000;
@@ -91,6 +91,7 @@ export function buildRosterAgents(
 
     return {
       id: a.id satisfies AgentId,
+      href: reportHref(a.id),
       name: a.rosterName,
       role: a.job,
       status,

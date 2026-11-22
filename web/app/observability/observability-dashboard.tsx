@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  API_URL, EMPTY_OBSERVABILITY, ago, fmt, loadObservabilitySnapshot, parseTs, postData,
+  EMPTY_OBSERVABILITY, loadObservabilitySnapshot, postData,
   type ObservabilitySnapshot,
 } from "@/lib/api";
-import { AGENT_NAV, agentMeta, isPlumbingEvent, type AgentId } from "./agent-meta";
+import { AGENT_NAV, agentMeta, reportHref, type AgentId, type AgentMeta } from "./agent-meta";
 import {
   AgentTimeline, ChaserReport, HumanAuditReport, IngestReport, OverviewReport,
   PlannerReport, ReconcilerReport, RiskRaterReport, WatcherReport,
@@ -19,7 +19,6 @@ const VALID_IDS = new Set<string>(AGENT_NAV.map((a) => a.id));
 
 export default function ObservabilityDashboard() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const rawAgent = searchParams.get("agent") ?? "overview";
   const selectedId: AgentId = VALID_IDS.has(rawAgent) ? (rawAgent as AgentId) : "overview";
 
@@ -28,16 +27,6 @@ export default function ObservabilityDashboard() {
   const [now, setNow] = useState<number>(0);
   const [dropBusy, setDropBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [collapsed, setCollapsed] = useState(false);
-
-  const selectAgent = useCallback(
-    (id: AgentId) => {
-      const qs = id === "overview" ? "" : `?agent=${id}`;
-      router.replace(`/observability${qs}`, { scroll: false });
-    },
-    [router],
-  );
-
   const refresh = useCallback(async () => {
     const { snap: next, online: up } = await loadObservabilitySnapshot();
     setOnline(up);
@@ -80,174 +69,54 @@ export default function ObservabilityDashboard() {
     }
   };
 
-  const sidebarStats = useMemo(() => {
-    const map = new Map<string, { count: number; errors: number; lastTs?: string }>();
-    let totalReal = 0;
-    let totalErrors = 0;
-    for (const e of snap.trace) {
-      if (e.action === "error") totalErrors += 1;
-      const cur = map.get(e.agent) ?? { count: 0, errors: 0 };
-      if (!isPlumbingEvent(e)) {
-        cur.count += 1;
-        totalReal += 1;
-        if (!cur.lastTs) cur.lastTs = e.ts;
-      }
-      if (e.action === "error") cur.errors += 1;
-      map.set(e.agent, cur);
+  const agentErrors = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of snap.trace) {
+      if (entry.action === "error") counts.set(entry.agent, (counts.get(entry.agent) ?? 0) + 1);
     }
-    map.set("overview", { count: totalReal, errors: totalErrors, lastTs: snap.trace[0]?.ts });
-    return map;
+    return counts;
   }, [snap.trace]);
 
   const activeMeta = agentMeta(selectedId);
   const mock = snap.health?.mockMode ?? true;
 
   return (
-    <div className="flex min-h-screen text-ink">
-      {/* Left Agent Icon Sidebar. Phones always get the icon rail, so the report keeps its width. */}
-      <aside
-        aria-label="Agent navigation"
-        className={`sticky top-0 flex h-screen shrink-0 flex-col border-r border-rule bg-surface transition-[width] ${
-          collapsed ? "w-[72px]" : "w-[72px] md:w-[236px]"
-        }`}
-      >
-        <div className="hidden items-center justify-between gap-2 border-b border-rule px-3 py-4 md:flex">
-          {!collapsed && (
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold leading-tight">Agent Team</p>
-              <p className="truncate text-[11px] text-muted">Activity and decisions</p>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => !c)}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="mx-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-rule text-muted hover:bg-dock hover:text-ink"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              {collapsed ? <path d="M9 18l6-6-6-6" /> : <path d="M15 18l-6-6 6-6" />}
-            </svg>
-          </button>
-        </div>
-
-        <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-          {AGENT_NAV.map((a) => {
-            const st = sidebarStats.get(a.id);
-            const active = selectedId === a.id;
-            const ts = parseTs(st?.lastTs);
-            const pulsing = ts && now ? now - ts.getTime() < 15_000 : false;
-            const errs = st?.errors ?? 0;
-            const errText = `${errs} error${errs === 1 ? "" : "s"}`;
-            const statusId = `agent-status-${a.id}`;
-            const statusText = st?.count ? `${fmt(st.count)} · ${ago(st.lastTs, now)}` : "idle";
-            return (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => selectAgent(a.id)}
-                title={`${a.name} — ${a.role}`}
-                aria-label={`${a.shortName}${errs > 0 ? `, ${errText}` : ""}`}
-                aria-describedby={statusId}
-                aria-current={active ? "page" : undefined}
-                className={`relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left text-sm transition ${
-                  active
-                    ? "bg-act-soft font-bold text-ink ring-1 ring-act/30"
-                    : "text-muted hover:bg-dock hover:text-ink"
-                }`}
-              >
-                <span
-                  className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors ${
-                    active ? "bg-primary text-primary-foreground shadow-xs" : "bg-secondary text-ink"
-                  }`}
-                >
-                  {a.icon}
-                  {pulsing && (
-                    <span
-                      className="beat absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface bg-ok"
-                      title="Active recently"
-                    />
-                  )}
-                  {errs > 0 && (
-                    <span
-                      className="absolute -bottom-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-stop px-1 text-[10px] font-bold text-white"
-                      title={errText}
-                    >
-                      {errs}
-                    </span>
-                  )}
-                </span>
-
-                <span id={statusId} className="sr-only">
-                  {pulsing ? `${statusText}, active now` : statusText}
-                </span>
-                {!collapsed && (
-                  <span aria-hidden className="hidden min-w-0 flex-1 md:block">
-                    <span className="block truncate">{a.shortName}</span>
-                    <span className="block truncate text-[11px] font-normal text-muted tabular">{statusText}</span>
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="border-t border-rule p-2">
-          <Link
-            href="/"
-            title="Back to Control Room"
-            className="flex items-center justify-center gap-2 rounded-lg border border-rule bg-dock/60 px-3 py-2 text-xs font-semibold text-ink hover:bg-dock"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M19 12H5" />
-              <path d="M12 19l-7-7 7-7" />
-            </svg>
-            {!collapsed && <span className="hidden md:inline">Control Room</span>}
-          </Link>
-        </div>
+    <div className="mx-auto min-h-[calc(100dvh-var(--workspace-nav-height,0px))] max-w-[1720px] text-ink md:flex">
+      <aside className="sticky hidden w-[205px] shrink-0 self-start overflow-y-auto border-r border-rule bg-surface p-3 md:block lg:w-[225px]"
+        style={{ top: "var(--workspace-nav-height, 0px)", maxHeight: "calc(100dvh - var(--workspace-nav-height, 0px))" }}>
+        <ReportNavigation active={selectedId} errors={agentErrors} />
       </aside>
 
-      {/* Main Visual Report Canvas */}
-      <main className="min-w-0 flex-1 px-4 pb-16 sm:px-8">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-rule py-5">
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              {activeMeta.icon}
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-2xl font-bold leading-tight tracking-tight">{activeMeta.name}</h1>
-              <p className="mt-1 text-sm text-muted">{activeMeta.role}</p>
-            </div>
+      <main className="min-w-0 flex-1 px-4 pb-16 sm:px-6 lg:px-8">
+        <details key={selectedId} className="group mt-3 rounded-lg border border-rule bg-surface md:hidden">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm font-semibold">
+            <span>Browse team reports</span>
+            <span aria-hidden className="text-act group-open:rotate-90">›</span>
+          </summary>
+          <div className="border-t border-rule p-2"><ReportNavigation active={selectedId} errors={agentErrors} /></div>
+        </details>
+        <header className="flex flex-wrap items-end justify-between gap-3 border-b border-rule py-5">
+          <div className="min-w-0">
+            {selectedId !== "overview" && <p className="mb-1 text-xs font-semibold text-act">{activeMeta.name}</p>}
+            <h1 className="text-3xl font-bold leading-tight tracking-tight">{activeMeta.report}</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted">{activeMeta.role}</p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <span
-              title={mock ? "MOCK_MODE=true: offline deterministic mode" : "Live: real external feeds & AI calls"}
-              className={`rounded px-2 py-1 text-xs font-bold ${mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
-            >
-              {mock ? "Mock mode" : "Live"}
-            </span>
-            <span className="flex items-center gap-1.5 text-sm text-muted">
-              <span
-                aria-hidden
-                className={`inline-block h-2 w-2 rounded-full ${
-                  online ? "bg-ok" : online === false ? "bg-stop" : "bg-rule"
-                }`}
-              />
-              {online ? "Backend online" : online === false ? "Backend offline" : "Connecting"}
-            </span>
-            {snap.health?.replayEnabled && <button
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            {selectedId === "chaser" && <Link className="font-semibold text-act underline underline-offset-2" href="/?view=emails">Open supplier email</Link>}
+            {selectedId === "reconciler" && <Link className="font-semibold text-act underline underline-offset-2" href="/?view=findings">Open findings</Link>}
+            {snap.health && <span className="text-muted">{snap.health.replayEnabled ? "Replay data" : mock ? "Offline mode" : "Live data"}</span>}
+            {selectedId === "overview" && snap.health?.replayEnabled && <button
               type="button"
               onClick={nextDrop}
               disabled={dropBusy || !online}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground hover:bg-brand-ink disabled:opacity-50"
             >
               {dropBusy ? "Agents working…" : snap.health.lastDrop?.status === "partial" ? "Retry drop" : "Play next data drop"}
             </button>}
           </div>
         </header>
 
-        <div className="mt-6 space-y-6">
+        <div className="mt-5 space-y-6">
           {notice && (
             <p role="status" className="rounded-lg border border-rule bg-surface px-4 py-2.5 text-sm">
               {notice}
@@ -255,13 +124,12 @@ export default function ObservabilityDashboard() {
           )}
           {online === false && (
             <p role="alert" className="rounded-lg bg-stop-soft px-4 py-3 text-sm text-stop">
-              No answer from the backend at {API_URL}. Start it from the repo root with{" "}
-              <code className="font-semibold">backend/.venv/bin/uvicorn backend.app.main:app --port 8000</code>.
+              The connection is offline. Report updates are paused.
             </p>
           )}
 
           {selectedId === "overview" && (
-            <OverviewReport snap={snap} now={now} online={online} onSelectAgent={selectAgent} />
+            <OverviewReport snap={snap} now={now} online={online} />
           )}
           {selectedId === "watcher" && (
             <>
@@ -277,7 +145,7 @@ export default function ObservabilityDashboard() {
           )}
           {selectedId === "reconciler" && <ReconcilerReport snap={snap} />}
           {selectedId === "chaser" && <ChaserReport snap={snap} />}
-          {selectedId === "planner" && <PlannerReport snap={snap} />}
+          {selectedId === "planner" && <PlannerReport snap={snap} now={now} />}
           {selectedId === "risk" && <RiskRaterReport snap={snap} />}
           {selectedId === "human" && <HumanAuditReport snap={snap} />}
 
@@ -286,4 +154,31 @@ export default function ObservabilityDashboard() {
       </main>
     </div>
   );
+}
+
+
+function ReportNavigation({ active, errors }: { active: AgentId; errors: Map<string, number> }) {
+  function link(agent: AgentMeta) {
+    const count = errors.get(agent.id) ?? 0;
+    return <Link key={agent.id} href={reportHref(agent.id)} aria-current={agent.id === active ? "page" : undefined}
+      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-act ${agent.id === active ? "bg-act-soft text-ink" : "text-muted hover:bg-dock hover:text-ink"}`}>
+      <span aria-hidden className="shrink-0">{agent.icon}</span>
+      <span className="min-w-0">
+        <span className="block font-semibold">{agent.id === "overview" ? "Team activity" : agent.shortName}</span>
+        {agent.id !== "overview" && <span className="block text-xs text-muted">{agent.report}</span>}
+      </span>
+      {count > 0 && <span className="ml-auto rounded bg-stop-soft px-1.5 text-xs font-semibold text-stop" title={`${count} errors`}>
+        {count}<span className="sr-only"> errors</span>
+      </span>}
+    </Link>;
+  }
+
+  return <nav aria-label="Team reports" className="space-y-3">
+    {link(agentMeta("overview"))}
+    <div className="border-t border-rule pt-3">
+      <p className="mb-1 px-3 text-xs font-semibold text-muted">Agent reports</p>
+      {AGENT_NAV.filter(a => a.id !== "overview" && a.id !== "human").map(link)}
+    </div>
+    <div className="border-t border-rule pt-3">{link(agentMeta("human"))}</div>
+  </nav>;
 }

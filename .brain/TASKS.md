@@ -6,6 +6,8 @@
 
 ## Now (Active Sprint)
 
+- [x] @jivi Procurement navigation on `jivi`. Overview, Risk ratings, Packing forecast, Findings, Supplier email and Agent Team share one menu. Findings and supplier threads have direct links. Tested desktop and phone navigation against the replay, including the route from a risk to its evidence and decision.
+
 - [x] @jivi Buyer overview and Agent Team on `jivi`. The home screen leads with actionable risks, packing gaps and recovery decisions. Risk ratings have plain-language reasons, evidence and a grade legend. Product scenarios use published scores and open the exact buyer decision. All five drops completed, 118 backend tests passed, and desktop and mobile walkthroughs passed.
 
 - [x] @daksh 1 Watcher (`backend/agents/watcher.py`) ✅ Sat 19:35

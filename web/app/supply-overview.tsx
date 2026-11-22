@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { actionHref, findingHref, mailHref } from "./buyer-links";
 import { fmt, type Forecast, type InboxMessage, type Issue, type OutboxMessage } from "@/lib/api";
 import type { BuyerActivity, BuyerQueueEntry } from "../../API_CONTRACT";
 
@@ -60,8 +61,8 @@ export function PackingOutlook({ editions, waiting, replayEnabled }: {
   </section>;
 }
 
-export function RecoveryOutlook({ queue, waiting, onAction }: {
-  queue: BuyerQueueEntry[] | null; waiting: boolean; onAction: (key: string) => void;
+export function RecoveryOutlook({ queue, waiting }: {
+  queue: BuyerQueueEntry[] | null; waiting: boolean;
 }) {
   // Follow the Planner's ordering. A second way to release the same shipment is an alternative.
   const shipments = new Set<string>();
@@ -86,23 +87,23 @@ export function RecoveryOutlook({ queue, waiting, onAction }: {
     </div>
     {!waiting && options.length ? <ul className="divide-y divide-rule">
       {options.map(entry => <li key={entry.key} className="first:pt-0 last:pb-0 py-2">
-        <button onClick={() => onAction(entry.key)} className="block w-full text-left text-sm leading-snug hover:underline">
+        <Link href={actionHref(entry.key)} scroll={false} className="block w-full text-left text-sm leading-snug hover:underline">
           <span className="block font-semibold text-act">{entry.option.label}</span>
           <span className="mt-0.5 block text-xs text-muted">Up to {fmt(entry.option.copies_gained)} additional {entry.edition} copies if confirmed</span>
-        </button>
+        </Link>
       </li>)}
     </ul> : <p className="text-sm text-muted">{waiting || queue == null ? "Waiting for current recovery options." :
       "No current option is projected to recover additional copies by close."}</p>}
     {!waiting && future && <div className="mt-3 border-t border-rule pt-2">
       <p className="text-xs text-muted">Future supply · {fmt(futureOrders)} order {futureOrders === 1 ? "line" : "lines"} to review</p>
-      <button onClick={() => onAction(future.key)} className="mt-0.5 text-left text-sm font-semibold leading-snug text-act hover:underline">{future.option.label}</button>
+      <Link href={actionHref(future.key)} scroll={false} className="mt-0.5 text-left text-sm font-semibold leading-snug text-act hover:underline">{future.option.label}</Link>
     </div>}
   </section>;
 }
 
-export function OperationsSummary({ issues, outbox, inbox, deliveries, issuesReady, mailReady, repliesReady, onMail, onTab }: {
+export function OperationsSummary({ issues, outbox, inbox, deliveries, issuesReady, mailReady, repliesReady }: {
   issues: Issue[]; outbox: OutboxMessage[]; inbox: InboxMessage[]; deliveries: Map<number, Delivery>;
-  issuesReady: boolean; mailReady: boolean; repliesReady: boolean; onMail: (id:number) => void; onTab: (tab:"findings"|"emails") => void;
+  issuesReady: boolean; mailReady: boolean; repliesReady: boolean;
 }) {
   const active = issues.filter(i => i.status !== "resolved").sort((a,b) =>
     b.severity-a.severity || b.updated_at.localeCompare(a.updated_at) || b.id-a.id);
@@ -121,26 +122,26 @@ export function OperationsSummary({ issues, outbox, inbox, deliveries, issuesRea
     <section className={panel} aria-labelledby="active-findings">
       <div className={header}>
         <h2 className={title} id="active-findings">Open findings</h2>
-        <a href="#record-tabs" className={linkStyle} onClick={() => onTab("findings")}>See findings</a>
+        <Link href="/?view=findings" className={linkStyle}>See findings</Link>
       </div>
       {issuesReady && active[0] ? <>
         <p className="mb-1 text-sm font-semibold">{fmt(active.length)} open
           {active.some(i => i.severity === 5) && <span className="text-stop"> · {fmt(active.filter(i => i.severity === 5).length)} urgent</span>}</p>
-        <p className="text-sm leading-snug text-muted">{active[0].summary}</p>
+        <Link href={findingHref(active[0].id)} className="block text-sm leading-snug text-act hover:underline">{active[0].summary}</Link>
       </> : <p className="text-sm text-muted">{issuesReady ? "No open findings." : "Waiting for findings."}</p>}
     </section>
     <section className={panel} aria-labelledby="supplier-email">
       <div className={header}>
         <h2 className={title} id="supplier-email">Supplier email</h2>
-        <a href="#record-tabs" className={linkStyle} onClick={() => onTab("emails")}>See emails</a>
+        <Link href="/?view=emails" className={linkStyle}>See emails</Link>
       </div>
       {mailReady && latest ? <>
         <p className="text-sm font-semibold">{counts.filter(([n, label]) => n > 0 || label === "sent").map(([n,label]) =>
           `${fmt(n)} ${label === "draft" && n > 1 ? "drafts" : label}`).join(" · ")}
           {repliesReady && ` · ${fmt(inbox.length)} ${inbox.length === 1 ? "reply" : "replies"}`}</p>
-        <button onClick={() => onMail(latest.id)} className="mt-1 block max-w-full break-words text-left text-sm leading-snug text-act hover:underline">
+        <Link href={mailHref(latest.id)} className="mt-1 block max-w-full break-words text-left text-sm leading-snug text-act hover:underline">
           <span className="text-muted">Latest · </span>{latest.subject || "Open supplier thread"}
-        </button>
+        </Link>
       </> : <p className="text-sm text-muted">{mailReady ? "No outgoing supplier email." : "Waiting for supplier emails."}
         {repliesReady && inbox.length > 0 && ` ${fmt(inbox.length)} incoming ${inbox.length === 1 ? "reply" : "replies"}.`}</p>}
     </section>

@@ -1,11 +1,10 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 import ObservabilityDashboard from "./observability-dashboard";
+import { workspaceMetadata } from "../workspace-location";
 
-export const metadata: Metadata = {
-  title: "Agent Team · Line control",
-  description: "See what each procurement agent found, which records it used and what it did next.",
-};
+export function generateMetadata({ searchParams }: PageProps<"/observability">) {
+  return workspaceMetadata("/observability", searchParams);
+}
 
 export default function ObservabilityPage() {
   return (

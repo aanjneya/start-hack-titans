@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..core.models import Evidence, Issue, Shipment
-from .reconciler_rules import CheckContext, compute_part_impact
+from .reconciler_rules import CheckContext, _usable_stock_for_part, compute_part_impact
 from .risk_signals import ExternalSignal
 
 GRADE_TO_RATING = {
@@ -515,11 +515,11 @@ def rate_parts(
 
         # 3. Stock & hours-to-line-stop buffer (0..28 pts)
         product_id, impact = compute_part_impact(ctx, part_id) if part_id in ctx.launch_parts else ("", {})
-        stock_qty = sum(float(s.quantity or 0) for s in ctx.stock if s.material_id == part_id)
+        stock_qty = _usable_stock_for_part(ctx, part_id)
         hours_buf = impact.get("hours_buffer")
         copies_at_risk = impact.get("copies_at_risk")
         buffer_pts = 0.0
-        if part_id in ctx.launch_parts:
+        if part_id in ctx.launch_parts and part_id not in ctx.embedded:
             if stock_qty <= 0:
                 buffer_pts = 28.0
                 buf_text = f"Zero warehouse stock (0 pcs) for {product_id}; {copies_at_risk or 'all'} copies exposed"

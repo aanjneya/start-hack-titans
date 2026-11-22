@@ -7,9 +7,11 @@ import {
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
+import type { CustomerSetup } from "../../API_CONTRACT";
 import DataDrawer from "./data-drawer";
 
 type Snapshot = {
+  setup: CustomerSetup | null;
   health: HealthCheckResponse | null;
   forecast: Forecast[];
   decisions: DecisionCard[];
@@ -20,7 +22,7 @@ type Snapshot = {
   trace: AgentLogEntry[];
 };
 
-const EMPTY: Snapshot = { health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
+const EMPTY: Snapshot = { setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
 
 const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "watcher", name: "Watcher", job: "Watches the supplier portal for new files", color: "#5a6478" },
@@ -53,21 +55,25 @@ function actionTargets(actions: Record<string, unknown>[] | undefined): string[]
   });
 }
 
-async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
-  const [health, forecast, decisions, issues, outbox, inbox, risk, trace] = await Promise.allSettled([
+async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missing: string[] }> {
+  const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup] = await Promise.allSettled([
     getData<HealthCheckResponse>("/api/health"),
     getData<Forecast[]>("/api/forecast"),
-    getData<DecisionCard[]>("/api/decisions?status=proposed"),
+    getData<DecisionCard[]>("/api/decisions"),
     getData<Issue[]>("/api/issues"),
     getData<OutboxMessage[]>("/api/outbox"),
     getData<InboxMessage[]>("/api/inbox"),
     getData<RiskScore[]>("/api/risk"),
     getData<AgentLogEntry[]>("/api/trace?limit=400"),
+    getData<CustomerSetup>("/api/setup"),
   ]);
   const val = <T,>(r: PromiseSettledResult<T>, fallback: T) => (r.status === "fulfilled" ? r.value : fallback);
   return {
+    missing: Object.entries({forecast, decisions, issues, outbox, inbox, risk, trace, setup})
+      .filter(([, response]) => response.status === "rejected").map(([name]) => name),
     online: health.status === "fulfilled",
     snap: {
+      setup: val(setup, null),
       health: val(health, null),
       forecast: val(forecast, []),
       decisions: val(decisions, []),
@@ -82,6 +88,7 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean }> {
 
 export default function ControlRoom() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY);
+  const [missing, setMissing] = useState<string[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [now, setNow] = useState<number>(0);
   const [dropBusy, setDropBusy] = useState(false);
@@ -91,9 +98,11 @@ export default function ControlRoom() {
   const closeData = useCallback(() => setShowData(false), []);
 
   const refresh = useCallback(async () => {
-    const { snap: next, online: up } = await loadSnapshot();
+    const { snap: next, online: up, missing: failed } = await loadSnapshot();
     setOnline(up);
-    if (up) setSnap(next);
+    setMissing(failed);
+    if (up) setSnap(previous => ({...next, ...Object.fromEntries(
+      failed.map(name => [name, previous[name as keyof Snapshot]]))}));
     setNow(Date.now());
   }, []);
 
@@ -137,12 +146,12 @@ export default function ControlRoom() {
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
-  // Cards that recommend the very same step (same headline AND same action, supplier, PO line) are shown once
-  // (the newest), with a count. Same headline but another PO stays a card of its own.
+  // Only collapse cards when every option and its approval route agree. Same headline but another PO stays a card of its own.
   const decisionGroups = useMemo(() => {
     const groups = new Map<string, DecisionCard[]>();
     for (const d of snap.decisions) {
-      const key = `${d.summary || d.title}|${actionTargets(d.options[d.recommended ?? -1]?.actions).join(";")}`;
+      if (d.status !== "proposed") continue;
+      const key = JSON.stringify([d.summary || d.title, d.recommended, d.options]);
       groups.set(key, [...(groups.get(key) ?? []), d]);
     }
     return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
@@ -154,6 +163,7 @@ export default function ControlRoom() {
   return (
     <div className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
+        setup={snap.setup}
         online={online}
         mock={mock}
         deadline={deadline}
@@ -173,7 +183,11 @@ export default function ControlRoom() {
         </p>
       )}
 
-      <Hero editions={editions} />
+      {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
+        Update unavailable for {missing.join(", ")}. Showing the last available data.
+      </p>}
+      {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} />}
+      <CaseUpdates snap={snap} />
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_400px]">
         <section aria-labelledby="decide">
@@ -182,18 +196,18 @@ export default function ControlRoom() {
               Decide now
             </h2>
             <span className="text-sm text-muted tabular">
-              {snap.decisions.length} open {snap.decisions.length === 1 ? "card" : "cards"}
+              {snap.decisions.filter(d => d.status === "proposed").length} open
             </span>
           </div>
           {decisionGroups.length === 0 ? (
             <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">
-              Nothing waits for a decision. When a data drop arrives, the Planner puts its proposals here.
+              {missing.includes("decisions") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
             </p>
           ) : (
             <ol className="space-y-4">
               {decisionGroups.map(({ card, similar }) => (
                 <li key={card.id}>
-                  <DecisionView card={card} similar={similar} onDone={refresh} />
+                  <DecisionView setup={snap.setup} card={card} similar={similar} onDone={refresh} />
                 </li>
               ))}
             </ol>
@@ -237,7 +251,54 @@ export default function ControlRoom() {
   );
 }
 
+type InboundEvidence = { eligible?: boolean; dock_released?: boolean; evidence?: {path: string}[] };
+
+function forecastAfterReply(reply: InboxMessage, forecasts: Forecast[], edition: string) {
+  if (!reply.result?.confirmed_delivery) return "";
+  const history = forecasts.filter(f => f.edition === edition).sort((a, b) => a.id - b.id);
+  for (const [index, f] of history.entries()) {
+    const inbound = f.details.inbound;
+    if (!Array.isArray(inbound)) continue;
+    const arrival = (inbound as InboundEvidence[]).find(row => row.evidence?.some(e => e.path === `inbox/${reply.id}`));
+    if (!arrival) continue;
+    if (!arrival.dock_released) return "Waiting for the site to release a dock slot.";
+    const previous = history[index - 1];
+    if (f.projected_packed == null || f.shortfall == null || previous?.projected_packed == null) return "";
+    const change = f.projected_packed - previous.projected_packed;
+    return `${edition} forecast at confirmation: ${fmt(f.projected_packed)} by close (${change > 0 ? "+" : ""}${fmt(change)}), ${fmt(f.shortfall)} short.`;
+  }
+  return "";
+}
+
+function CaseUpdates({ snap }: { snap: Snapshot }) {
+  const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed"].includes(d.status)))
+    .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id).slice(0, 3);
+  if (!decided.length) return null;
+  return <section aria-label="Decision follow-up" className="mt-6 rounded-lg border border-rule bg-surface p-5">
+    <h2 className="font-bold">Decision follow-up</h2>
+    <ul className="mt-3 space-y-3">{decided.map(d => {
+      const option = d.options[d.chosen_option!];
+      const sent = snap.outbox.find(o => o.decision_id === d.id);
+      const reply = sent && snap.inbox.filter(i => i.outbox_id === sent.id).sort((a,b) => b.id - a.id)[0];
+      const state = d.status === "rejected" ? "Rejected" : reply ? replyOutcome(reply)
+        : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
+        : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
+        : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
+          ? "Simulated request sent. Waiting for a test reply." : "Chaser sent the request. Waiting for the supplier.")
+        : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
+        : option?.actions.some(a => a.type === "human_review") ? "Assigned to the buyer for internal review."
+        : "Approved. Waiting for the handoff.";
+      const edition = snap.forecast.find(f => d.title.startsWith(f.edition + " ·"))?.edition;
+      const outcome = reply && edition ? forecastAfterReply(reply, snap.forecast, edition) : "";
+      return <li key={d.id}><strong>{option?.label ?? d.title}</strong>
+        <span className="ml-2 text-sm text-muted">#{d.id} · {d.decided_by}</span>
+        <p className="text-sm">{state}</p>{outcome && <p className="text-sm font-semibold">{outcome}</p>}</li>;
+    })}</ul>
+  </section>;
+}
+
 function TopBar(props: {
+  setup: CustomerSetup | null;
   online: boolean | null;
   mock: boolean;
   deadline: string | null;
@@ -259,9 +320,16 @@ function TopBar(props: {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       <div>
+        {props.setup?.demo_buyer && (
+          <p className="text-sm font-semibold">
+            Demo view · {props.setup.demo_buyer} · Procurement buyer
+          </p>
+        )}
         <h1 className="text-2xl font-bold leading-tight">Grand Heist 6 launch</h1>
         <p className="text-sm text-muted">
           Soony packing line, Hamburg
+          {props.setup && (props.setup.autonomy.mode === "control" ? " · Control mode" :
+            ` · Auto below ${approvalCurrency.format(props.setup.autonomy.auto_execute_below_eur)}`)}
           {countdown && (
             <>
               {", "}
@@ -322,14 +390,14 @@ function Hero({ editions }: { editions: Forecast[] }) {
         return (
           <div key={f.edition} className="bg-surface px-6 py-6">
             <p className={`figure text-[clamp(64px,10vw,124px)] ${short ? "text-stop" : "text-ok"}`}>
-              {short ? fmt(f.shortfall) : "0"}
+              {f.shortfall == null ? "—" : fmt(f.shortfall)}
             </p>
             <p className="mt-2 text-lg font-semibold">
-              {f.edition} copies {short ? "will be missing at close" : "short: on track"}
+              {f.edition} copies {f.shortfall == null ? "awaiting forecast" : short ? "projected short by close" : "short · on track"}
             </p>
             <p className="mt-1 text-sm text-muted tabular">
               {fmt(f.still_to_pack)} still to pack
-              {f.still_to_pack != null && `, ${fmt(Math.max(0, f.still_to_pack - (f.shortfall ?? 0)))} of them by close`}
+              {f.still_to_pack != null && f.shortfall != null && `, ${fmt(Math.max(0, f.still_to_pack - (f.shortfall ?? 0)))} of them by close`}
               {f.limiting_part && (
                 <>
                   , held up by <span className="font-semibold text-ink">{f.limiting_part}</span>
@@ -343,21 +411,39 @@ function Hero({ editions }: { editions: Forecast[] }) {
   );
 }
 
-function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
+const approvalCurrency = new Intl.NumberFormat("en-IE", {
+  style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2,
+});
+
+function DecisionView({ setup, card, similar, onDone }: { setup: CustomerSetup | null; card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
   const [choice, setChoice] = useState<number>(card.recommended ?? 0);
   const [why, setWhy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const option = card.options[choice];
-  const approvers = option?.approvers?.length ? option.approvers : [card.approver || "Demo user"];
+  const buyer = setup?.demo_buyer;
+  const assigned = option?.approvers ?? [];
+  const recommended = card.options[card.recommended ?? 0];
+  const ownsCard = !!buyer && recommended?.approvers?.length === 1 && recommended.approvers[0] === buyer;
+  const canDecide = ownsCard && assigned.length === 1 && assigned[0] === buyer && option?.available !== false;
+  const value = option?.approval_value_eur;
+  const matrix = setup?.approval_matrix ?? [];
+  const band = value == null ? -1 : matrix.findIndex(rule => rule.below_eur == null || value < rule.below_eur);
+  const rule = matrix[band];
+  const lower = matrix[band - 1]?.below_eur ?? 0;
+  const roles = option?.approval_roles ?? rule?.approvers ?? [];
+  const roleLabel = roles.join(" + ");
+  const awaiting = roleLabel || assigned.join(" + ") || "approval routing";
+  const people = assigned.filter(name => !roles.includes(name));
+  const quoted = option?.actions.some(action => action.quote_inbox_id != null);
 
   const decide = async (verb: "approve" | "reject") => {
+    if (!canDecide || !buyer) return;
     setBusy(true);
     setError("");
     try {
       await postData(`/api/decisions/${card.id}/${verb}`, {
-        by: approvers[0],
-        approvals: verb === "approve" ? approvers.slice(1) : [],
+        by: buyer,
         option: verb === "approve" ? choice : undefined,
       });
       onDone();
@@ -381,7 +467,7 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
       <fieldset className="mt-3 border-t border-rule">
         <legend className="sr-only">Options</legend>
         {card.options.map((o, i) => {
-          const off = o.available === false;
+          const off = o.available === false || !ownsCard;
           return (
             <label
               key={i}
@@ -420,20 +506,24 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
       </fieldset>
 
       <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3">
-        <button
-          onClick={() => decide("approve")}
-          disabled={busy || !option || option.available === false}
-          className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50"
-        >
-          Approve as {approvers.join(" + ")}
-        </button>
-        <button
-          onClick={() => decide("reject")}
-          disabled={busy}
-          className="rounded-md border border-rule px-4 py-2 text-sm font-semibold hover:bg-dock disabled:opacity-50"
-        >
-          Reject
-        </button>
+        <dl className="flex w-full flex-wrap gap-x-8 gap-y-2 text-sm">
+          {quoted && <div><dt className="text-muted">Extra charge</dt><dd>{option.cost_eur == null ? "Unknown" : approvalCurrency.format(option.cost_eur)}</dd></div>}
+          <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
+          <div><dt className="text-muted">Required role</dt><dd>{roleLabel || "Pending"}</dd></div>
+          <div><dt className="text-muted">Assigned to</dt><dd>{people.join(" + ") || "Pending assignment"}</dd></div>
+        </dl>
+        {canDecide ? (
+          <>
+            <button onClick={() => decide("approve")} disabled={busy}
+              className="rounded-md bg-act px-4 py-2 text-sm font-semibold text-white hover:bg-ink disabled:opacity-50">
+              Approve
+            </button>
+            <button onClick={() => decide("reject")} disabled={busy}
+              className="rounded-md border border-rule px-4 py-2 text-sm font-semibold hover:bg-dock disabled:opacity-50">
+              Reject
+            </button>
+          </>
+        ) : <span className="text-sm font-semibold">Awaiting {awaiting}</span>}
         <button
           onClick={() => setWhy((w) => !w)}
           aria-expanded={why}
@@ -445,6 +535,14 @@ function DecisionView({ card, similar, onDone }: { card: DecisionCard; similar: 
       {error && <p className="px-5 pb-3 text-sm text-stop">{error}</p>}
       {why && (
         <div className="border-t border-rule bg-dock/60 px-5 py-4 text-sm">
+          {rule && value != null && (
+            <p>Approval policy routes {approvalCurrency.format(value)} to {rule.approvers.join(" + ")}
+              {" "}for amounts from {approvalCurrency.format(lower)}
+              {rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
+              {quoted &&
+                " The approval value includes the original PO and the extra quoted charge."}
+            </p>
+          )}
           {card.problem && <p className="font-semibold">{card.problem}</p>}
           {card.reasoning && <p className="mt-2 whitespace-pre-line">{card.reasoning}</p>}
           {option?.risk_note && <p className="mt-2 text-muted">Risk of this option: {option.risk_note}</p>}
@@ -627,7 +725,7 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const status = m.status === "sent" && mock ? "simulated" : m.status;
+  const status = m.status === "sent" && mock && m.sent_copy_pending == null ? "simulated" : m.status;
 
   const reply = async () => {
     setBusy(true);
@@ -706,7 +804,9 @@ function replyOutcome(r: InboxMessage): string {
     const when = parseTs(String(advice.arrival))?.toLocaleString("en-GB", {
       weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
     });
-    return `Bound to our request by Ingest: ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, arrives ${when}.`;
+    return res.supplier_quote
+      ? `Ingest recorded a quote for ${fmt(Number(advice.quantity))} pcs. The Planner can now compare the offer.`
+      : `Ingest confirmed ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, due ${when} Berlin time. The Planner checks dock release and packing time.`;
   }
   const fields = Array.isArray(res.fields) ? (res.fields as string[]) : [];
   return fields.length

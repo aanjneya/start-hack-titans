@@ -95,11 +95,62 @@ def run(client, scratch):
             "trace_run": receipt["run_id"]}
 
 
+def sleeve_card(client):
+    response = client.get("/api/decisions?status=proposed")
+    response.raise_for_status()
+    return next(c for c in response.json()["data"] if "rev blocked" in c["title"]
+                and c["title"].endswith("CMP-GAM-004"))
+
+
+def prepare_quote_request(client, scratch):
+    """Simulate the site recount and release, then approve the buyer's supplier inquiry."""
+    from . import system
+    from .agents.planner_inputs import load_plan
+    from .core import store
+    from .core.models import OutboxMessage, StockLot
+
+    # Controlled variant: a recount makes sleeves the binding constraint.
+    lot = store.find_rows(StockLot, batch="5000413060")[0]
+    store.update_row(StockLot, lot.id, {"quantity": 40000}, source="site/recount", agent="ingest",
+                     reason="simulated physical count", on_conflict="overwrite")
+    arrival = load_plan().as_of + timedelta(hours=2)
+    directory = scratch / "site"
+    directory.mkdir()
+    release = directory / "slot.csv"
+    release.write_text("receiving_site,delivery_reference,approved_revision,dock_released_at\n"
+                       f"DC-HAM,SHP-2026-04313,C,{arrival.isoformat()}\n")
+    system.process_drop(added=["site/slot.csv"], data_root=scratch)
+    card = sleeve_card(client)
+    client.post(f"/api/decisions/{card['id']}/approve", json={"by": "Paul Winter"}).raise_for_status()
+    ask_id = card["id"]
+    msg, = store.find_rows(OutboxMessage, decision_id=ask_id)
+    reply = {"outbox_id": msg.id, "issue_id": msg.issue_id, "supplier_id": msg.supplier_id, "body": "[MOCK]"}
+    fact = {"shipment_id": "SHP-2026-04313", "po_number": "4500318775", "po_line": 2, "revision": "C",
+            "quantity": 20000, "arrival": arrival.isoformat()}
+    return ask_id, reply, fact
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--serve-pickup", action="store_true", help="serve the simulated €500 quote for the buyer UI")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
     with TemporaryDirectory(prefix="launch-planner-") as temp:
         scratch = Path(temp)
         os.environ.update(MOCK_MODE="true", DB_PATH=str(scratch / "demo.db"), REPLAY_DIR=str(scratch / "replay"))
         from fastapi.testclient import TestClient
         from .app.main import app
         with TestClient(app) as client:
-            print(json.dumps(run(client, scratch), indent=2))
+            if args.serve_pickup:
+                for _ in range(sleeve_scenario_steps()):
+                    client.post("/api/replay/step").raise_for_status()
+                _, reply, fact = prepare_quote_request(client, scratch)
+                quote = {**fact, "mode": "pickup", "incremental_cost_eur": 500, "valid_until": fact["arrival"]}
+                client.post("/api/inbox", json={**reply, "body": "[MOCK] Pickup quote", "quote": quote}).raise_for_status()
+            else:
+                print(json.dumps(run(client, scratch), indent=2))
+        if args.serve_pickup:
+            import uvicorn
+            uvicorn.run(app, host="127.0.0.1", port=args.port)

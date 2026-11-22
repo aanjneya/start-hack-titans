@@ -101,6 +101,7 @@ export interface DecisionOption {
   remaining_shortfall?: number | null;
   approval_value_eur?: number | null;
   approvers?: string[];
+  approval_roles?: string[];
   needs_approval?: boolean;
   available?: boolean;
   evidence?: Evidence[];
@@ -177,11 +178,13 @@ export interface OutboxMessage {
   status: 'draft' | 'approved' | 'sent' | 'replied' | 'failed' | 'escalated';
   created_at: string;
   sent_at: string | null;
+  sent_copy_pending?: boolean | null; // Live SMTP accepted, awaiting IMAP Sent filing when true
   message_id: string; // Message-ID we sent; replies are matched by In-Reply-To
   run_id: string;
 }
 
 export interface CustomerSetup {
+  demo_buyer?: string;
   customer: string;
   autonomy: { mode: 'control' | 'auto'; auto_execute_below_eur: number };
   approval_matrix: { below_eur: number | null; approvers: string[] }[];

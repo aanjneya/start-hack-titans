@@ -13,7 +13,7 @@ from backend.core import events
 from backend.core.replay import list_drops
 from backend.core.models import AgentLog, DecisionCard, Document, Forecast, InboxMessage, Issue, LaunchStatus, OutboxMessage
 from backend.core.store import all_rows
-from backend.planner_demo import SLEEVE_SCENARIO_COMMIT, run, sleeve_scenario_steps
+from backend.planner_demo import SLEEVE_SCENARIO_COMMIT, prepare_quote_request, run, sleeve_card, sleeve_scenario_steps
 
 
 def _decision_mails(decision_id=None):
@@ -71,7 +71,13 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
         inspection.text = "Replacement inspection: lot released."
         s.add(inspection)
         s.commit()
-    assert simulate(load_plan())["FG-GH6-CE"].shortfall < rows["FG-GH6-CE"].shortfall
+    released = load_plan()
+    held_parts = {lot["part"] for lot in p.lots if lot["status"] == "Quality hold"}
+    assert any(released.stock[part] > p.stock[part] for part in held_parts)
+    # Isolate Quality: when the art books are covered, releasing the inspected lot gains copies.
+    for scenario in (p, released):
+        scenario.stock["CMP-GAM-008"] += 8000
+    assert simulate(released)["FG-GH6-CE"].shortfall < simulate(p)["FG-GH6-CE"].shortfall
     # Repeated approvals and replies do not send another email or count the same units again.
     assert client.post(f"/api/decisions/{result['decision_id']}/approve", json={}).status_code == 409
     system.emit(events.DECISION_APPROVED, {"decision_id": result["decision_id"]})
@@ -108,43 +114,27 @@ def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
 
 @pytest.mark.parametrize("mode", ["pickup", "air"])
 def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monkeypatch, mode, sleeve_snapshot):
-    from backend.core import store
-    from backend.core.models import StockLot
-
     client = TestClient(app)
-    # Controlled variant: a recount makes sleeves the binding constraint.
-    lot = store.find_rows(StockLot, batch="5000413060")[0]
-    store.update_row(StockLot, lot.id, {"quantity": 40000}, source="site/recount", agent="ingest",
-                     reason="simulated physical count", on_conflict="overwrite")
-    p = load_plan()
-    arrival = p.as_of + timedelta(hours=2)
-    directory = tmp_path / "site"
-    directory.mkdir()
-    release = directory / "slot.csv"
-    release.write_text("receiving_site,delivery_reference,approved_revision,dock_released_at\n"
-                       f"DC-HAM,SHP-2026-04313,C,{arrival.isoformat()}\n")
-    system.process_drop(added=["site/slot.csv"], data_root=tmp_path)
-    def current():
-        return next(c for c in client.get("/api/decisions?status=proposed").json()["data"]
-                    if "rev blocked" in c["title"] and c["title"].endswith("CMP-GAM-004"))
-    card = current()
-    assert client.post(f"/api/decisions/{card['id']}/approve", json={"by": "Paul Winter"}).status_code == 200
-    ask_id = card["id"]
-    msg, = _decision_mails(ask_id)
-    reply = {"outbox_id": msg.id, "issue_id": msg.issue_id, "supplier_id": msg.supplier_id, "body": "[MOCK]"}
-    fact = {"shipment_id": "SHP-2026-04313", "po_number": "4500318775", "po_line": 2, "revision": "C",
-            "quantity": 20000, "arrival": arrival.isoformat()}
+    ask_id, reply, fact = prepare_quote_request(client, tmp_path)
+    arrival = datetime.fromisoformat(fact["arrival"])
     if mode == "air":
         # Simulate a generous auto-spend limit for this quote. PP-07 still requires sign-off.
         monkeypatch.setattr("backend.core.policy.needs_approval", lambda amount: amount == 0)
     quote = {**fact, "mode": mode, "incremental_cost_eur": 500, "valid_until": arrival.isoformat()}
     before = simulate(load_plan())["FG-GH6-STD"].projected_packed
-    client.post("/api/inbox", json={**reply, "quote": quote}).raise_for_status()
-    card = current()
+    if mode == "pickup":
+        text = (f"Pickup quote. PO {fact['po_number']}/{fact['po_line']}, {fact['shipment_id']}, "
+                f"{fact['quantity']} units, rev {fact['revision']}, arrival {fact['arrival']}, "
+                f"incremental cost EUR 500, valid until {arrival.isoformat()}.")
+        client.post("/api/inbox", json={**reply, "body": text}).raise_for_status()
+    else:
+        client.post("/api/inbox", json={**reply, "quote": quote}).raise_for_status()
+    card = sleeve_card(client)
     option = card["options"][card["recommended"]]
     assert option["description"] == mode and option["copies_gained"] > 0
     assert option["cost_eur"] == 500 and option["approval_value_eur"] > 50000
     signers = ["Sofia Marchetti", "Jonas Lindqvist"] if mode == "air" else ["Sofia Marchetti"]
+    assert option["approval_roles"] == (["Category lead", "CPO"] if mode == "air" else ["Category lead"])
     assert option["approvers"] == signers and option["needs_approval"]
     assert card["status"] == "proposed" and len(_decision_mails(ask_id)) == 1 and not _decision_mails(card["id"])
     url = f"/api/decisions/{card['id']}/approve"
@@ -176,8 +166,9 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
             transport.setattr(chaser, "get_settings", lambda: settings)
             transport.setattr(chaser, "llm", SimpleNamespace(is_mock=lambda: False))
             transport.setattr(chaser.mailbox, "is_configured", lambda: True)
-            transport.setattr(chaser.mailbox, "fetch_unseen", lambda: [mail])
+            transport.setattr(chaser.mailbox, "fetch_replies", lambda ids, contacts: [mail] if spend.message_id in ids else [])
             assert _chaser().poll_inbox()["matched"] == 1
+            assert _chaser().poll_inbox()["matched"] == 0
         system.bus().run_until_idle()
         inbound, = [m for m in all_rows(InboxMessage) if m.outbox_id == spend.id]
         assert inbound.processed and inbound.issue_id == spend.issue_id
@@ -230,7 +221,25 @@ def test_latest_replay_retires_received_sleeve_request():
             assert plan.as_of.isoformat().startswith("2026-11-21T20:50")
             assert editions["FG-GH6-STD"].still_to_pack == 38000
             assert editions["FG-GH6-CE"].still_to_pack == 11700
-            assert plan.stock["CMP-GAM-003"] <= 6000
+            assert plan.stock["CMP-GAM-003"] == 6000 and plan.stock["CMP-GAM-001"] == 42900
+            assert plan.stock["CMP-GAM-008"] == 5800
+            balance = next(i for i in plan.inbound if i["shipment_id"] == "SHP-2026-04311"
+                           and i["part"] == "CMP-GAM-001")
+            assert balance["quantity"] == 20000 and balance["eta"] == "2026-11-24" and not balance["eligible"]
+            sleeve = next(lot for lot in plan.lots if lot["batch"] == "5000413071")
+            assert sleeve["quantity"] == 16000
+            forecast = simulate(plan)
+            assert forecast["FG-GH6-STD"].shortfall == 32000
+            assert forecast["FG-GH6-CE"].shortfall == 5900
+            proposed = [c.options[c.recommended] for c in cards if c.status == "proposed" and c.recommended is not None]
+            concession = next(o for c in cards if c.status == "proposed" for o in c.options
+                              if o["description"] == "quality concession review")
+            assert concession["approvers"] == ["Daniel Okafor", "Dr. Maren Vogt"]
+            assert concession["needs_approval"] and concession["copies_gained"] == 0
+            books = next(o for o in proposed if o["description"] == "supplier stock offer")
+            assert books["cost_eur"] == 16800 and books["copies_gained"] == 2500
+            pickup = next(o for o in proposed if o["description"] == "port pickup")
+            assert pickup["cost_eur"] is None and pickup["copies_gained"] > 0
             assert next(c.status for c in cards if c.id == historical_id) == "outdated"
             for c in cards:
                 if c.status == "proposed" and c.recommended is not None:
@@ -269,7 +278,7 @@ def test_received_sleeves_route_review_and_repair_persisted_cards():
     review = sleeve.options[sleeve.recommended]
     assert review["description"] == "human review" and review["available"] and review["needs_approval"]
     assert review["actions"][0]["part"] == simulate(load_plan())["FG-GH6-STD"].limiting_part
-    assert review["remaining_shortfall"] == 34800
+    assert review["remaining_shortfall"] == 32000
     rush, = [o for o in sleeve.options if o["label"] == "Order a fresh rush print"]
     assert rush["cost_eur"] == 1215 and rush["copies_gained"] == 0 and not rush["available"]
     client = TestClient(app)
@@ -281,5 +290,5 @@ def test_received_sleeves_route_review_and_repair_persisted_cards():
     system.emit(events.DECISION_APPROVED, {"decision_id": sleeve.id})
     followup, = [i for i in all_rows(Issue) if i.type == "recovery_review"]
     assert followup.kind == "human_check" and followup.part_id == review["actions"][0]["part"]
-    assert followup.impact["copies_at_risk"] == 34800
+    assert followup.impact["copies_at_risk"] == 32000
     assert not _decision_mails(sleeve.id)

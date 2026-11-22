@@ -89,7 +89,8 @@ class ReconcilerGate(Agent):
                     risk_by_part.get(issue.part_id, 0),
                     risk_by_supplier.get(issue.supplier_id, 0),
                 )
-                if grade >= 6 and issue.severity < 5:
+                if (grade >= 6 and issue.severity < 5
+                        and (issue.impact or {}).get("copies_at_risk") != 0):
                     issue.severity = 5
                     issue.updated_at = utcnow()
                     s.add(issue)

@@ -22,3 +22,7 @@ Open http://localhost:3000 and press **Play next data drop**: each click sends t
 - In mock mode nothing leaves the laptop: emails show as **Simulated**, the AI answers are canned.
 - "Send test reply" under an email feeds a supplier answer into the loop (inbox → Ingest → Reconciler/Planner).
 - `./scripts/verify.sh` lints and builds this folder, so run `npm --prefix web install` once after pulling.
+
+## Buyer approval demo
+
+Run `backend/.venv/bin/python -m backend.planner_demo --serve-pickup` from the repository root, then start the frontend with `npm --prefix web run dev`. This mock backend uses its own temporary database. It replays the 17:23 snapshot, simulates a site recount and dock release, and records a €500 pickup quote. In the control room, Paul Winter can see the quote's extra charge, amended PO value and category lead. Open **Why?** for the approval band. Paul can approve his own proposals. The demo seat simulates identity without employee login.

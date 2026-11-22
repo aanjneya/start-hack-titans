@@ -562,6 +562,7 @@ class InboxMessage(SQLModel, table=True):
     body: str = ""
     body_en: str = ""
     language: str = ""
+    transport_message_id: Optional[str] = None
     received_at: datetime = Field(default_factory=utcnow)
     processed: bool = Field(default=False, index=True)  # set by Ingest once applied
     result: dict = _json(dict)  # what Ingest did: {"changes": n, "conflicts": n, "note": ...}
@@ -582,6 +583,7 @@ class OutboxMessage(SQLModel, table=True):
     message_id: str = ""  # RFC 5322 Message-ID we sent; replies are matched by In-Reply-To
     run_id: str = ""  # agent run that wrote it (trace drawer)
     created_at: datetime = Field(default_factory=utcnow)
+    sent_copy_pending: Optional[bool] = None
     sent_at: Optional[datetime] = None
 
 

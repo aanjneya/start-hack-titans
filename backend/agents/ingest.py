@@ -559,7 +559,11 @@ class IngestNormalizer(Agent):
         extra: dict = {"from_file_name": scan_info(rel), "sha256": sha, "ocr_version": OCR_VERSION}
         ocr = None
         cached = self._cached(rel, sha, "ocr", version=OCR_VERSION)
-        if cached:
+        recording = Path(__file__).resolve().parents[1] / "fixtures" / "scans" / f"{sha}.json"
+        if llm.is_mock() and recording.is_file():
+            ocr = ScanExtraction.model_validate_json(recording.read_text())
+            extra["ocr_source"] = "recorded transcription of matching scan"
+        elif cached:
             ocr = ScanExtraction.model_validate(cached)
         else:
             try:

@@ -141,10 +141,11 @@ class RiskRater(Agent):
                 }
             ]
             reason_lines = " | ".join(f"{r.text} (+{r.points:.0f}pts)" for r in comp.reasons[:3])
+            embedded = comp.entity_type == "part" and comp.part_id in ctx.embedded
             issue = self.raise_issue(
                 type="high_risk_rating",
-                kind=IssueKind.COPIES_AT_RISK,
-                severity=Severity.LINE_STOP if comp.grade >= 6 else Severity.HIGH,
+                kind=IssueKind.HUMAN_CHECK if embedded else IssueKind.COPIES_AT_RISK,
+                severity=Severity.LINE_STOP if comp.grade >= 6 and not embedded else Severity.HIGH,
                 key=f"{comp.entity_type}/{comp.entity_id}",
                 summary=_truncate(
                     f"Risk {comp.rating} ({comp.grade}/6) on {comp.entity_name}: {comp.reasons[0].text}"

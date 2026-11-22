@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import email
 import imaplib
+import re
 import smtplib
 import ssl
+from contextlib import contextmanager
 from dataclasses import dataclass
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import make_msgid, parseaddr
+
+import certifi
 
 from .config import get_settings
 
@@ -42,11 +46,8 @@ def new_message_id() -> str:
     return make_msgid(idstring="chaser", domain=domain)
 
 
-def send(to: str, subject: str, body: str, *, message_id: str, in_reply_to: str = "") -> None:
-    """Send one plain-text mail. Raises MailError on any SMTP problem."""
+def _message(to, subject, body, message_id, in_reply_to=""):
     s = get_settings()
-    if not is_configured():
-        raise MailError("mailbox not configured (MAIL_ADDRESS / MAIL_PASSWORD / SMTP_HOST / IMAP_HOST)")
     msg = EmailMessage()
     msg["From"] = s.mail_address
     msg["To"] = to
@@ -56,7 +57,21 @@ def send(to: str, subject: str, body: str, *, message_id: str, in_reply_to: str 
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = in_reply_to
     msg.set_content(body)
+    return msg
+
+
+def _tls():
     ctx = ssl.create_default_context()
+    ctx.load_verify_locations(certifi.where())
+    return ctx
+
+
+def send(to: str, subject: str, body: str, *, message_id: str, in_reply_to: str = "") -> None:
+    s = get_settings()
+    if not is_configured():
+        raise MailError("mailbox not configured")
+    msg = _message(to, subject, body, message_id, in_reply_to)
+    ctx = _tls()
     try:
         if s.smtp_security == "ssl":
             with smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, context=ctx, timeout=30) as smtp:
@@ -100,35 +115,83 @@ def _header(msg, name: str) -> str:
         return str(value)
 
 
-def fetch_unseen(mark_seen: bool = True) -> list[IncomingMail]:
-    """All unread mails in INBOX. Marks them seen so the next poll doesn't return them again."""
+@contextmanager
+def _connection():
     s = get_settings()
-    if not is_configured():
-        raise MailError("mailbox not configured")
-    out: list[IncomingMail] = []
     try:
-        box = imaplib.IMAP4_SSL(s.imap_host, s.imap_port, ssl_context=ssl.create_default_context(), timeout=30)
-        box.login(s.mail_address, s.mail_password)
-        box.select("INBOX", readonly=not mark_seen)
-        typ, data = box.uid("search", None, "UNSEEN")
-        uids = data[0].split() if typ == "OK" and data and data[0] else []
-        for uid in uids:
-            typ, parts = box.uid("fetch", uid, "(RFC822)")
-            if typ != "OK" or not parts or not isinstance(parts[0], tuple):
-                continue
-            msg = email.message_from_bytes(parts[0][1])
-            out.append(IncomingMail(
-                uid=uid.decode(),
-                message_id=_header(msg, "Message-ID").strip(),
-                in_reply_to=_header(msg, "In-Reply-To").strip(),
-                references=_header(msg, "References").strip(),
-                from_email=parseaddr(_header(msg, "From"))[1].lower(),
-                subject=_header(msg, "Subject"),
-                body=_text(msg).strip(),
-            ))
-            if mark_seen:
-                box.uid("store", uid, "+FLAGS", "(\\Seen)")
-        box.logout()
+        with imaplib.IMAP4_SSL(s.imap_host, s.imap_port, ssl_context=_tls(), timeout=30) as box:
+            box.login(s.mail_address, s.mail_password)
+            yield box
     except (imaplib.IMAP4.error, OSError) as exc:
         raise MailError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def _special_folder(box, flag):
+    status, rows = box.list()
+    for row in rows if status == "OK" else ():
+        if not isinstance(row, bytes):
+            continue
+        match = re.match(rb'^\(([^)]*)\)\s+(?:"[^"]*"|NIL)\s+(.+)$', row)
+        if match and flag.lower() in match[1].lower().split():
+            return match[2]
+    return None
+
+
+def file_sent(to, subject, body, message_id):
+    """File an accepted SMTP message once, including on providers that auto-file it."""
+    with _connection() as box:
+        folder = _special_folder(box, b"\\Sent")
+        if not folder or box.select(folder, readonly=True)[0] != "OK":
+            raise MailError("Sent folder unavailable")
+        status, ids = box.uid("search", None, "HEADER", "Message-ID", message_id)
+        if status != "OK":
+            raise MailError("Sent folder search failed")
+        if not ids[0]:
+            from email.policy import SMTP
+            msg = _message(to, subject, body, message_id)
+            if box.append(folder, r"(\Seen)", None, msg.as_bytes(policy=SMTP))[0] != "OK":
+                raise MailError("Could not file Sent copy")
+
+
+def fetch_replies(message_ids: list[str], contacts: set[str]) -> list[IncomingMail]:
+    """Read only messages referencing our outbox. Works even if the buyer read them first."""
+    if not message_ids:
+        return []
+    out = []
+    with _connection() as box:
+        for folder in filter(None, [b"INBOX", _special_folder(box, b"\\Junk")]):
+            if box.select(folder, readonly=True)[0] != "OK":
+                raise MailError("Could not open reply folder")
+            uids = set()
+            for mid in message_ids:
+                status, data = box.uid("search", None, "OR", "HEADER", "In-Reply-To", mid,
+                                       "HEADER", "References", mid)
+                if status != "OK":
+                    raise MailError("Reply search failed")
+                uids.update(data[0].split())
+            # Some providers index Message-ID for arbitrary HEADER searches. FROM supplies
+            # candidates there. Verify the actual thread headers before opening any body.
+            for address in contacts:
+                if not re.fullmatch(r"[a-zA-Z0-9_.+@-]+", address):
+                    continue
+                status, data = box.uid("search", None, "FROM", address)
+                if status != "OK":
+                    raise MailError("Contact search failed")
+                uids.update(data[0].split())
+            for uid in sorted(uids, key=int):
+                status, headers = box.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])")
+                if status != "OK" or not headers or not isinstance(headers[0], tuple):
+                    continue
+                header = email.message_from_bytes(headers[0][1])
+                parents = _header(header, "In-Reply-To").split() or _header(header, "References").split()[-1:]
+                if _header(header, "Message-ID").strip() in message_ids or not set(parents).intersection(message_ids):
+                    continue
+                status, parts = box.uid("fetch", uid, "(BODY.PEEK[])")
+                if status != "OK" or not parts or not isinstance(parts[0], tuple):
+                    raise MailError("Could not fetch matched reply")
+                msg = email.message_from_bytes(parts[0][1])
+                out.append(IncomingMail(uid.decode(), _header(msg, "Message-ID").strip(),
+                                        _header(msg, "In-Reply-To").strip(), _header(msg, "References").strip(),
+                                        parseaddr(_header(msg, "From"))[1].lower(), _header(msg, "Subject"),
+                                        _text(msg).strip()))
     return out

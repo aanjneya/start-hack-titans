@@ -13,6 +13,8 @@
 
 **If a judge asks what changed by evening**, show the 21:38 receipt for SHP-2026-04313. The old sleeve request is outdated. The forecast projects 34,800 Standard copies short by Sunday. The card recommends reviewing game-card availability (CMP-GAM-001). Approving it opens one internal buyer review.
 
+**Buyer approval demo.** Start `backend/.venv/bin/python -m backend.planner_demo --serve-pickup` and open the control room as Paul Winter. The simulated €500 pickup quote raises the PO value to €53,150. Open **Why?** to show the €50,000 threshold and **Awaiting Category lead**, assigned to Sofia Marchetti. Paul can approve his own €0 supplier inquiry. The demo uses an isolated mock database.
+
 ## 3. Backup Plan
 - **Layer 1 (Primary)**: Live deployed cloud URL from `main` (no single-laptop/HDMI failure point).
 - **Layer 2 (Wi-Fi / API drop)**: Flip `MOCK_MODE=true` instantly via runtime toggle (`?mock=1` or UI hotkey with subtle `MOCK` indicator badge).

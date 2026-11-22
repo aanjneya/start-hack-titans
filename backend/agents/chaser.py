@@ -222,7 +222,8 @@ class Chaser(Agent):
         if live:
             try:
                 mailbox.send(msg.to_email, subject, body, message_id=msg.message_id)
-                self._set_outbox(msg.id, status="sent", sent_at=utcnow())
+                self._set_outbox(msg.id, status="sent", sent_at=utcnow(), sent_copy_pending=True)
+                self._file_sent(msg)
                 self.log("send_email", f"#{msg.id} to {supplier_id} ({msg.language}): {subject}", evidence,
                          data={"outbox_id": msg.id, "issue_id": ctx["issue_id"]})
             except mailbox.MailError as exc:
@@ -387,13 +388,27 @@ class Chaser(Agent):
         return out
 
     # -- replies, escalation ----------------------------------------------------
+    def _file_sent(self, row):
+        try:
+            mailbox.file_sent(row.to_email, row.subject, row.body, row.message_id)
+        except mailbox.MailError as exc:
+            self.log("sent_copy_pending", str(exc), data={"outbox_id": row.id})
+        else:
+            self._set_outbox(row.id, sent_copy_pending=False)
+
     def poll_inbox(self) -> dict:
         """Read new mails from the shared mailbox and hand them to Ingest. Only on the CHASER_SEND instance."""
         settings = get_settings()
         if llm.is_mock() or not settings.chaser_send or not mailbox.is_configured():
             return {"polled": False, "reason": "mock mode, CHASER_SEND off, or mailbox not configured"}
         try:
-            mails = mailbox.fetch_unseen()
+            with session() as s:
+                pending = s.exec(select(OutboxMessage).where(OutboxMessage.sent_copy_pending == True)).all()
+                sent = s.exec(select(OutboxMessage.message_id, OutboxMessage.to_email).where(
+                    OutboxMessage.sent_at.is_not(None), OutboxMessage.message_id != "")).all()
+            for row in pending:
+                self._file_sent(row)
+            mails = mailbox.fetch_replies([mid for mid, _ in sent], {address for _, address in sent})
         except mailbox.MailError as exc:
             self.log("error", f"inbox poll failed: {exc}")
             return {"polled": False, "error": str(exc)}
@@ -403,31 +418,42 @@ class Chaser(Agent):
             if row is None:
                 self.log("unmatched_mail", f"from {m.from_email}: {m.subject}", data={"uid": m.uid})
                 continue
+            if not m.message_id:
+                self.log("unmatched_mail", "Reply has no Message-ID", data={"uid": m.uid})
+                continue
+            with session() as s:
+                existing = s.exec(select(InboxMessage).where(
+                    InboxMessage.transport_message_id == m.message_id)).first()
+            if existing:
+                if not existing.processed:
+                    self._set_outbox(row.id, status="replied")
+                    self.emit(events.REPLY_RECEIVED, {"inbox_id": existing.id, "supplier_id": row.supplier_id,
+                                                      "issue_id": row.issue_id})
+                continue
             self._deliver_reply(row.id, row.supplier_id, m.body, subject=m.subject, from_email=m.from_email,
-                                note="mailbox")
+                                note="mailbox", transport_message_id=m.message_id)
             matched += 1
         escalated = self.check_silence()
         return {"polled": True, "new": len(mails), "matched": matched, "escalated": escalated}
 
     def _match(self, m: mailbox.IncomingMail) -> Optional[OutboxMessage]:
-        refs = {r.strip() for r in f"{m.in_reply_to} {m.references}".split() if r.strip()}
+        parents = m.in_reply_to.split() or m.references.split()[-1:]
         with session() as s:
-            if refs:
-                row = s.exec(select(OutboxMessage).where(OutboxMessage.message_id.in_(refs))).first()
-                if row:
-                    return row
-            return s.exec(select(OutboxMessage).where(OutboxMessage.to_email == m.from_email)
-                          .where(OutboxMessage.status.in_(OPEN_STATUSES)).order_by(OutboxMessage.id.desc())).first()
+            if s.exec(select(OutboxMessage.id).where(OutboxMessage.message_id == m.message_id)).first():
+                return None
+            rows = s.exec(select(OutboxMessage).where(OutboxMessage.message_id.in_(parents))).all()
+            return rows[0] if len(rows) == 1 else None
 
     def _deliver_reply(self, outbox_id: int, supplier_id: str, body: str, *, subject: str = "",
-                       from_email: str = "", note: str = "") -> None:
+                       from_email: str = "", note: str = "", transport_message_id=None) -> None:
         from .. import system
 
         with session() as s:
             row = s.get(OutboxMessage, outbox_id)
             issue_id, language = (row.issue_id, row.language) if row else (None, "")
         msg = system.store_reply(supplier_id=supplier_id, body=body, issue_id=issue_id, outbox_id=outbox_id,
-                                 from_email=from_email, subject=subject, language=language, source=self.name)
+                                 from_email=from_email, subject=subject, language=language, source=self.name,
+                                 transport_message_id=transport_message_id)
         self._set_outbox(outbox_id, status="replied")
         self.log("reply_received", f"#{outbox_id} answered by {supplier_id} ({note})",
                  data={"outbox_id": outbox_id, "inbox_id": msg.id, "issue_id": issue_id})

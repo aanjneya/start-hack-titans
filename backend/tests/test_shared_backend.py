@@ -110,6 +110,10 @@ def test_approval_matrix_and_autonomy_from_setup(tmp_path, monkeypatch):
     assert policy.approver_for(1_500_000) == "Head of procurement"
     assert policy.approver_for(4_000_000) == "CPO"
     assert policy.approver_for(9_000_000) == "CPO + CFO"
+    assert policy.approvers_for(50_000) == ["Category lead"]
+    assert policy.approvers_for(500_000) == ["Head of procurement"]
+    assert policy.approvers_for(2_000_000) == ["CPO"]
+    assert policy.approvers_for(5_000_000) == ["CPO", "CFO"]
     assert policy.needs_approval(10) is True  # Soony default: control
 
     custom = tmp_path / "acme.json"
@@ -119,6 +123,7 @@ def test_approval_matrix_and_autonomy_from_setup(tmp_path, monkeypatch):
     config.reset_settings()
     policy.reset_cache()
     assert policy.approver_for(5) == "Boss"
+    assert policy.needs_approval(1000) is True
     assert policy.needs_approval(500) is False and policy.needs_approval(5000) is True
     monkeypatch.delenv("CUSTOMER_SETUP")
     config.reset_settings()

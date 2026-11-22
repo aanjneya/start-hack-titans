@@ -31,3 +31,11 @@ def test_ambiguous_reply_is_saved_for_review_without_changing_orders():
     assert result.status_code == 200
     assert all_rows(InboxMessage)[0].result["review"]
     assert all(not row.revision for row in all_rows(OrderConfirmation))
+
+def test_quoted_history_or_negative_answer_cannot_confirm_delivery():
+    from backend.agents.planner_delivery import _text_confirmation
+    line = "PO 4500318775/2, SHP-2026-04313, 20,000 units, rev C, arrival 2026-11-21T19:00+01:00"
+    assert _text_confirmation("We cannot confirm " + line) is None
+    assert _text_confirmation("Can you confirm " + line + "?") is None
+    assert _text_confirmation("Thanks.\n> Confirmed " + line) is None
+    assert _text_confirmation("Confirmed " + line + "\n> Quote requested").quantity == 20000

@@ -10,7 +10,7 @@ from datetime import timedelta
 from ..core import models as m
 from ..core.parsing import parse_datetime
 from ..core.store import all_rows
-from .planner_counts import site_counts
+from .planner_counts import fitted_components, receiving_corrections, site_counts
 from .planner_forecast import Plan
 
 
@@ -71,7 +71,7 @@ def load_plan():
     packed_updates = []
     for title, note, quantities in counts:
         at = clock(title, launch_day)
-        if (title.lower().startswith("packed copies") and at and at > as_of
+        if (title.lower().startswith("packed copies") and at and at >= as_of
                 and all(r.product_id in quantities and r.day_one_demand is not None for r in editions)):
             packed_updates.append((at, note, quantities))
     if packed_updates:
@@ -105,16 +105,11 @@ def load_plan():
             bom[row.parent_id][row.child_id] = row.qty_per
             if row.parent_id in {e.product_id for e in editions}:
                 ev.append(evidence(row.source, f"{row.parent_id}/{row.child_id}"))
-    for part in all_rows(m.SupplierPartMap):
-        texts = [part.note] + [c.old_value or "" for c in history if c.table_name == "supplier_part_map"
-                                and c.row_id == part.id and c.field == "note"]
-        for note in texts:
-            fitted = re.search(r"fitted by supplier into ([\w-]+)", note, re.I)
-            if fitted:
-                for parts in bom.values():
-                    if fitted[1] in parts and part.component_id in parts:
-                        parts.pop(part.component_id)
-                        ev.append(evidence(part.source, part.component_id, note))
+    for part, assembly, note in fitted_components(all_rows(m.SupplierPartMap), history):
+        for parts in bom.values():
+            if assembly in parts and part.component_id in parts:
+                parts.pop(part.component_id)
+                ev.append(evidence(part.source, part.component_id, note))
     plan = Plan(as_of, deadline, shifts, editions, dict(bom), Counter(), evidence=ev)
     changes = {}
     for row in sorted(all_rows(m.EngineeringChange), key=lambda c: (c.effective_from or as_of.date(), c.id)):
@@ -122,6 +117,9 @@ def load_plan():
             changes[row.child_id] = row
             ev.append(evidence(row.source, row.change_id, row.reason))
     receipts = list(all_rows(m.GoodsReceipt))
+    reductions = receiving_corrections(documents, receipts)
+    book_at_snapshot = {part for title, note, balances in counts if packed_updates and "book stock" in title.lower()
+                        and note.path.partition("#")[0] == status_doc.path.partition("#")[0] for part in balances}
     by_batch = {r.gr_number: r for r in receipts}
     confirmations = defaultdict(list)
     for row in all_rows(m.OrderConfirmation):
@@ -133,7 +131,8 @@ def load_plan():
     # show them as uncertain until a dated count or a timed receiving record can establish availability.
     for receipt in receipts:
         snap = dates_by_part.get(receipt.material_id)
-        if (receipt.plant == site and snap and receipt.gr_date and snap < receipt.gr_date < as_of.date()
+        if (receipt.plant == site and snap and receipt.gr_date and snap < receipt.gr_date and
+                (receipt.gr_date < as_of.date() or receipt.gr_date == as_of.date() and receipt.material_id in book_at_snapshot)
                 and receipt.qty_received and not any(l.batch == receipt.gr_number for l in lots)):
             lots.append(m.StockLot(snapshot_date=snap, site=site, material_id=receipt.material_id,
                                    batch=receipt.gr_number, quantity=receipt.qty_received, source=receipt.source))
@@ -157,9 +156,14 @@ def load_plan():
             if lot.batch and lot.batch in doc.text:
                 reason = "Quality hold"
                 proof.append(evidence(doc.path, f"page 1, receipt {lot.batch}"))
+        quantity = lot.quantity or 0
+        if lot.batch in reductions:
+            qty, path, detail = reductions[lot.batch]
+            quantity = max(0, quantity - qty)
+            proof.append(evidence(path, f"{lot.batch}: exclude {qty:g} units", detail))
         if not reason:
-            plan.stock[part] += lot.quantity or 0
-        plan.lots.append({"part": part, "batch": lot.batch, "revision": revision, "quantity": lot.quantity,
+            plan.stock[part] += quantity
+        plan.lots.append({"part": part, "batch": lot.batch, "revision": revision, "quantity": quantity,
                           "status": reason or "eligible", "evidence": proof})
     plan.assumptions.append("Date-only inbound is pending until a timed site delivery and a released dock slot "
                             "can be matched to the shipment and revision.")
@@ -193,7 +197,9 @@ def load_plan():
             if ("book stock" in title.lower() and note.path.partition("#")[0] == status_doc.path.partition("#")[0]):
                 for part, qty in quantities.items():
                     if part in plan.stock:
-                        plan.stock[part] = min(plan.stock[part], qty)
+                        adjustment = sum(reductions[l["batch"]][0] for l in plan.lots
+                                         if l["part"] == part and l["batch"] in reductions)
+                        plan.stock[part] = min(plan.stock[part], max(0, qty - adjustment))
                         ev.append(evidence(note.path, f"{site}/{part}", f"Book stock upper bound: {qty}"))
                 plan.assumptions.append("Site book quantities cap remaining lot-backed stock. Unverified receipts "
                                         "and differences between physical and book counts remain unresolved.")
@@ -226,6 +232,7 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
         fact = (msg.result or {}).get("confirmed_delivery")
         if msg.processed and fact:
             advice[(msg.supplier_id, fact["po_number"], fact["po_line"], fact["shipment_id"])] = (fact, msg.id)
+    shipping_advices = [d for d in documents if d.kind == "shipping_advice"]
     visited = set()
     for ship in sorted(all_rows(m.Shipment), key=lambda s: (s.id or 0)):
         if ship.shipment_id in visited or ship.dest_site != site:
@@ -249,6 +256,17 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             slot, dock_proof = slots.get((ship.shipment_id, rev), (None, None))
             eta = parse_datetime(fact.get("arrival"))
             proof = [evidence(ship.source, ship.shipment_id), evidence(oc.source, f"page 1, PO {po}/{line}")]
+            reported_eta = str(ship.eta) if ship.eta else None
+            for doc in shipping_advices:
+                facts = doc.extracted.get("facts", {})
+                if (doc.supplier_id != supplier or po not in facts.get("po_numbers", [])
+                        or part not in facts.get("parts", []) or not ship.reference or ship.reference not in doc.text):
+                    continue
+                balance = re.search(r"Balance ([\d,]+) pcs:.*?delivery to [^\n]+? (\d{4}-\d{2}-\d{2})",
+                                    doc.text, re.I)
+                if balance and int(balance[1].replace(",", "")) == outstanding:
+                    reported_eta = balance[2]
+                    proof.append(evidence(doc.path, f"page 1, unshipped balance {po}/{line}", balance[0]))
             if inbox_id:
                 proof.append(evidence(f"inbox/{inbox_id}", f"confirmed delivery {po}/{line}"))
             if dock_proof:
@@ -261,6 +279,6 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
                 plan.arrivals[key] = (max(slot, eta), part, max(0, min(qty, outstanding - prior)))
             plan.inbound.append({"part": part, "supplier_id": supplier, "po_number": po, "po_line": line,
                                  "shipment_id": ship.shipment_id, "revision": rev, "quantity": qty,
-                                 "eta": fact.get("arrival") or (str(ship.eta) if ship.eta else None),
+                                 "eta": fact.get("arrival") or reported_eta,
                                  "dock_released": bool(slot), "dock_at": slot.isoformat() if slot else None, "eligible": key in plan.arrivals,
                                  "revision_blocked": blocked, "evidence": proof})

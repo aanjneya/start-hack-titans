@@ -130,6 +130,10 @@ def test_watcher_live_diff_with_fake_portal(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Watcher, "list_portal", lambda self: listing())
     monkeypatch.setattr(Watcher, "_get", lambda self, url: portal[url])
+    with monkeypatch.context() as broken:
+        broken.setattr(Watcher, "_get", lambda self, url: b"partial transfer")
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            system.watch_once()
     first = system.watch_once()
     assert first["added"] == 2 and (tmp_path / "mirror" / "soony/erp/packout_log.csv").exists()
     assert system.watch_once() == {"added": 0, "changed": 0, "removed": 0}

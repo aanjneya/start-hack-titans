@@ -93,6 +93,16 @@ def decision_history(db, card, index):
                 traces.setdefault((key, row.data[key], row.action), row)
 
     history = []
+    for log in rows:
+        if log.action != "error":
+            continue
+        for key, group in (("inbox", replies), ("outbox", mails), ("decision", cards)):
+            record_id = log.data.get(f"{key}_id")
+            if record_id in group:
+                history.append(_event(log.ts, log.agent, "Agent step needs review",
+                                      f"{log.agent} reported an error on {log.data.get('event') or 'this action'}. "
+                                      "Open the trace for the recorded error.", key, record_id, log))
+                break
     if (option.get("exposure") or {}).get("last_grade_change"):
         supplier = next((a["supplier_id"] for a in option.get("actions", []) if a.get("supplier_id")), None)
         rating = db.exec(select(AgentLog).where(AgentLog.agent == "risk", AgentLog.action == "grade_changed",

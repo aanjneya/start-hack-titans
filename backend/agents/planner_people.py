@@ -100,7 +100,9 @@ def approval_assignments(roles, category, on, documents, buyer=""):
     for role in roles:
         assignment = dict(required_role=role, signing_role=role, person=None, org_source=chart.path if chart else None,
                           basis="A named signer needs confirmation against the effective org chart.")
-        if chart:
+        if _fold(role) == "buyer" and buyer is None:
+            assignment["basis"] = "The purchasing records name different buyers. Confirm who owns this action."
+        elif chart:
             matches, vacancy = _candidates(chart, role, on, category, buyer)
             if len(matches) == 1:
                 assignment.update(person=matches[0], basis="Named PO buyer and effective org chart." if

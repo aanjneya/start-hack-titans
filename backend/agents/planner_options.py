@@ -74,6 +74,14 @@ def amended_po_basis(orders, fee):
                        for n, (part, qty, unit) in sorted(lines.items())])
 
 
+def order_buyer(orders, part, supplier, po, line=None):
+    buyers = {o.buyer for o in orders if o.buyer and o.material_id == part and o.po_number == po
+              and (not supplier or o.supplier_id == supplier) and (line is None or o.po_line == line)}
+    if len(buyers) > 1:
+        return None
+    return next(iter(buyers), "")
+
+
 def useful_until(plan, row, quantity):
     if not row.rate_per_hour or not quantity:
         return plan.deadline
@@ -121,7 +129,7 @@ def options_for(issue, plan, forecast, row):
     docs = list(all_rows(m.Document))
     material = next((r for r in all_rows(m.Material) if r.component_id == part), None)
     category = material.category if material else ""
-    buyer = next((o.buyer for o in all_rows(m.PurchaseOrder) if o.po_number == issue.po_number and o.material_id == part), "")
+    purchase_orders = all_rows(m.PurchaseOrder)
     choices = []
     due = parse_datetime((issue.impact or {}).get("due_by")) or plan.deadline
     priority = next(i for i, edition in enumerate(plan.editions) if edition.product_id == pid)
@@ -136,6 +144,9 @@ def options_for(issue, plan, forecast, row):
                 from ..core.parsing import parse_number
                 monthly = parse_number(amounts[0])
         roles = required_roles or approval_roles(value, docs, air=air, monthly_spend=monthly, freight_eur=cost)
+        action = actions[0] if actions else {}
+        buyer = order_buyer(purchase_orders, part, action.get("supplier_id") or issue.supplier_id,
+                            action.get("po_number") or issue.po_number, action.get("po_line"))
         assignments = approval_assignments(roles, category, plan.as_of.date(), docs, buyer)
         signers = signer_names(assignments)
         policy_proof = [evidence(d.path, "page 1, approval routing") for d in docs if d.kind == "policy"]
@@ -200,7 +211,7 @@ def options_for(issue, plan, forecast, row):
             qty = min(candidate["quantity"], quote["quantity"])
             alternative = simulate(plan, {key: (usable_at, part, qty)})[pid]
             gain = alternative.projected_packed - forecast.projected_packed if forecast.projected_packed is not None else None
-            orders = [o for o in all_rows(m.PurchaseOrder) if o.po_number == quote["po_number"] and o.supplier_id == msg.supplier_id]
+            orders = [o for o in purchase_orders if o.po_number == quote["po_number"] and o.supplier_id == msg.supplier_id]
             extra = quote["incremental_cost_eur"]
             basis = amended_po_basis(orders, extra)
             gross = basis["total_eur"] if basis else None

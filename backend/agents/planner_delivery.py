@@ -8,7 +8,7 @@ from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import select
 
 from ..core import trace
-from ..core.models import DecisionCard, InboxMessage, Issue, OrderConfirmation, OutboxMessage
+from ..core.models import DecisionCard, InboxMessage, Issue, OrderConfirmation, OutboxMessage, Shipment
 from ..core.store import session
 from .base import issue_fingerprint
 from .ingest import IngestNormalizer
@@ -75,36 +75,44 @@ class PlanningReplyIngest(IngestNormalizer):
             super().on_reply(event)
 
 
-def _text_confirmation(body):
+def _text_confirmation(body, shipment_ids):
     # Without an explicit positive, unambiguous answer keep the raw message for review.
     body = re.split(r"(?im)^\s*(?:>|On .+wrote:|-----Original Message-----)", body, maxsplit=1)[0]
     if "?" in body or re.search(r"\b(?:not|cannot|unable|unconfirmed|estimate[d]?|tentative|if|pending|"
-                                r"cancelled|canceled|unless|provisional|would|might|subject to)\b|n['’]t\b", body, re.I):
+                                r"cancelled|canceled|unless|provisional|would|might|may|expected|no longer|subject to)\b|n['’]t\b", body, re.I):
         return None
     is_quote = bool(re.search(r"\b(?:quote|offer)\b", body, re.I))
     if not is_quote and not re.search(r"\b(?:confirmed|we confirm|I confirm)\b", body, re.I):
         return None
-    po_lines = re.findall(r"\bPO\s+(\d+)/(\d+)\b", body, re.I)
-    shipments = re.findall(r"\bSHP-[\w-]+", body)
+    identifier = r"[\w]+(?:[.:-][\w]+)*"
+    po_lines = re.findall(r"\bPO\s+(" + identifier + r")/(\d+)\b", body, re.I)
+    tokens = set(re.findall(identifier, body))
+    shipments = tokens.intersection(shipment_ids)
+    explicit = set(re.findall(r"\bshipment(?:\s+ID)?\s*[:#]?\s+(" + identifier + r")", body, re.I))
+    explicit.update(t for t in tokens if t.startswith("SHP-"))
+    if not explicit.issubset(shipments):
+        return None
     units = re.findall(r"(?<![\d,.])\b((?:\d{1,3}(?:,\d{3})+|\d+)) (?:pcs|units|pieces)\b", body, re.I)
-    rev = re.findall(r"\brev(?:ision)?[. ]+([A-Z])\b", body, re.I)
+    rev = re.findall(r"\brev(?:ision)?[. :=]+(" + identifier + r")", body, re.I)
     timestamp = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})"
     times = re.findall(timestamp, body)
     if not all(len(x) == 1 for x in (po_lines, shipments, units, rev)):
         return None
-    fields = dict(po_number=po_lines[0][0], po_line=int(po_lines[0][1]), shipment_id=shipments[0],
-                  revision=rev[0].upper(), quantity=int(units[0].replace(",", "")))
+    arrival = re.findall(r"\b(?:arrival|arrives?|delivery|ETA)\s*(?:at\s+|by\s+)?[:=]?\s*(" + timestamp + ")", body, re.I)
+    if len(arrival) != 1:
+        return None
+    fields = dict(po_number=po_lines[0][0], po_line=int(po_lines[0][1]), shipment_id=next(iter(shipments)),
+                  revision=rev[0], quantity=int(units[0].replace(",", "")), arrival=arrival[0])
     try:
         if is_quote:
-            arrival = re.findall(r"arrival\s*[:=]?\s*(" + timestamp + ")", body, re.I)
             expiry = re.findall(r"valid until\s*[:=]?\s*(" + timestamp + ")", body, re.I)
             modes = re.findall(r"\b(pickup|air|expedite)\b", body, re.I)
             prices = re.findall(r"\b(?:incremental cost|additional fee)\s*[:=]?\s*(?:EUR\s*|€)(\d+(?:\.\d{2})?)(?!\d|[.,]\d)", body, re.I)
-            if len(times) == 2 and all(len(x) == 1 for x in (arrival, expiry, modes, prices)):
+            if len(times) == 2 and all(len(x) == 1 for x in (expiry, modes, prices)):
                 return SupplierQuote(**fields, mode=modes[0].lower(), incremental_cost_eur=float(prices[0]),
-                                     arrival=arrival[0], valid_until=expiry[0])
+                                     valid_until=expiry[0])
         elif len(times) == 1:
-            return DeliveryAdvice(**fields, arrival=times[0])
+            return DeliveryAdvice(**fields)
     except ValueError:
         pass
     return None
@@ -134,13 +142,20 @@ def ingest_reply(msg, delivery, agent, *, quote=None):
                 query = query.where(OrderConfirmation.po_number == issue.po_number)
             if len(s.exec(query).all()) <= 1:
                 return False
-        advice = delivery or quote or (_text_confirmation(msg.body) if line else None)
+        advice = delivery or quote
+        if advice is None and line:
+            shipment_ids = set(s.exec(select(Shipment.shipment_id).where(Shipment.supplier_id == msg.supplier_id)))
+            if line.get("shipment_id"):
+                shipment_ids.add(line["shipment_id"])
+            advice = _text_confirmation(msg.body, shipment_ids)
         quote = advice if isinstance(advice, SupplierQuote) else None
         fact = advice.model_dump(mode="json") if advice else {}
         field = "supplier_quote" if quote else "confirmed_delivery"
         reason = ""
         if not line or not out or msg.supplier_id != out.supplier_id or msg.issue_id not in (None, out.issue_id):
             reason = "A unique approved request, supplier and issue must match."
+        elif card.status not in {"approved", "executed"} or out.status not in {"sent", "replied", "escalated"}:
+            reason = "This order thread has no approved, dispatched supplier request."
         elif not fact or any(fact[k] != line.get(k) for k in ("po_number", "po_line", "shipment_id")):
             reason = "Confirm quantity, revision and site arrival against the requested shipment and PO line."
         else:
@@ -150,8 +165,10 @@ def ingest_reply(msg, delivery, agent, *, quote=None):
             if len(confirmations) != 1:
                 reason = "Order-line evidence is ambiguous."
             elif (confirmations[0].quantity is None or fact["quantity"] > confirmations[0].quantity
-                  or (confirmations[0].revision and fact["revision"] != confirmations[0].revision)):
+                  or (confirmations[0].revision and fact["revision"].casefold() != confirmations[0].revision.casefold())):
                 reason = "Supplier advice conflicts with the confirmed order quantity or revision."
+            elif confirmations[0].revision:
+                fact["revision"] = confirmations[0].revision
         if not reason:
             prior = []
             for row in s.exec(select(InboxMessage).where(InboxMessage.supplier_id == msg.supplier_id)

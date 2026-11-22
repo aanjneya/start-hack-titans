@@ -43,6 +43,27 @@ def test_partial_late_and_repeated_deliveries_use_remaining_line_capacity():
     assert simulate(p, {key: (end, "shared", 50)})["other"].shortfall == 20
 
 
+def test_split_shipments_share_the_po_balance_in_arrival_order_for_every_option():
+    at = datetime(2026, 1, 1, 8, tzinfo=timezone.utc)
+    end = at + timedelta(hours=2)
+    row = LaunchStatus(product_id="edition", still_to_pack=300, packed=0, rate_per_hour=300)
+    p = Plan(at, end, [(at, end)], [row], {"edition": {"carton": 1}}, Counter())
+    line = ("vendor", "order", 2)
+    early, late = (*line, "van"), (*line, "truck")
+    p.line_balances = {line: 100, ("vendor", "order", 3): 20}
+    p.arrivals = {late: (end, "carton", 100), early: (at, "carton", 80),
+                  ("vendor", "order", 3, "van"): (at, "carton", 20)}
+    def packed(overrides=None):
+        return simulate(p, overrides)["edition"].projected_packed
+    assert packed() == 100
+    assert packed({late: (at + timedelta(minutes=30), "carton", 100)}) == 120
+    assert packed({late: (at - timedelta(minutes=30), "carton", 100)}) == 120
+    assert packed({late: (at, "carton", 10)}) == 110
+    assert packed() == 100
+    p.arrivals = dict(reversed(p.arrivals.items()))
+    assert packed() == 100
+
+
 def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
     client = TestClient(app)
     result = run(client, tmp_path)

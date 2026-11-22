@@ -18,7 +18,7 @@ from .agents.base import REGISTRY, Agent
 from .core import events, trace
 from .core.config import get_settings
 from .core.coordinator import Coordinator
-from .core.models import AgentLog, DropRecord, Issue
+from .core.models import AgentLog, DropRecord, InboxMessage, Issue
 from .core.store import init_db, reset_db, session
 
 _bus: Coordinator | None = None
@@ -32,6 +32,12 @@ def bus() -> Coordinator:
         init_db()
         _bus = Coordinator()
         _agents = [cls(_bus) for cls in REGISTRY]
+        # A saved reply can outlive the process or the handler that was applying it.
+        with session() as db:
+            pending = db.exec(select(InboxMessage).where(InboxMessage.processed == False).order_by(InboxMessage.id)).all()
+        for msg in pending:
+            _bus.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": msg.supplier_id,
+                                             "issue_id": msg.issue_id}, source="inbox_recovery")
     return _bus
 
 
@@ -70,6 +76,15 @@ def process_drop(
                              mode=mode, git_commit=git_commit, retries=retries)
 
 
+def _complete_run(b, run_id, *, record_retries=False):
+    steps = b.run_until_idle(record_retries=record_retries)
+    with session() as db:
+        errors = db.exec(select(AgentLog).where(AgentLog.run_id == run_id, AgentLog.action == "error")
+                         .order_by(AgentLog.id)).all()
+    failures = [dict(agent=e.agent, event=e.data.get("event", "handler"), trace_id=e.id) for e in errors]
+    return dict(run_id=run_id, steps=steps, status="partial" if failures else "completed", failures=failures)
+
+
 def _process_drop(*, added, changed, removed, label, data_root, mode, git_commit, retries) -> dict:
     b = bus()
     root = Path(data_root or get_settings().data_root)
@@ -93,18 +108,14 @@ def _process_drop(*, added, changed, removed, label, data_root, mode, git_commit
     else:
         b.emit(events.FILES_CHANGED, {"added": added, "changed": changed, "removed": removed,
                                       "label": label, "data_root": str(root), "drop_id": rec.id}, source="coordinator")
-    steps = b.run_until_idle(record_retries=mode == "replay")
+    result = _complete_run(b, run_id, record_retries=mode == "replay")
     with session() as s:
-        errors = s.exec(select(AgentLog).where(AgentLog.run_id == run_id, AgentLog.action == "error")
-                        .order_by(AgentLog.id)).all()
-        failures = [dict(agent=e.agent, event=e.data.get("event", "drop"), trace_id=e.id) for e in errors]
-        status = "partial" if failures else "completed"
         saved = s.get(DropRecord, rec.id)
-        saved.status, saved.failures = status, failures
+        saved.status, saved.failures = result["status"], result["failures"]
         s.add(saved)
         s.commit()
         open_issues = s.exec(select(func.count()).select_from(Issue).where(Issue.status != "resolved")).one()
-    return {"status": status, "failures": failures, "run_id": run_id, "drop_id": rec.id, "label": label, "steps": steps,
+    return {**result, "drop_id": rec.id, "label": label,
             "added": len(added), "changed": len(changed), "removed": len(removed), "open_issues": open_issues}
 
 
@@ -120,15 +131,13 @@ def emit(event_name: str, payload: dict, source: str = "api") -> dict:
         run_id = trace.new_run_id()
         b = bus()
         b.emit(event_name, payload, source=source)
-        return {"run_id": run_id, "steps": b.run_until_idle()}
+        return _complete_run(b, run_id)
 
 
 def store_reply(*, supplier_id: str, body: str, issue_id: int | None = None, outbox_id: int | None = None,
                 from_email: str = "", subject: str = "", language: str = "", source: str = "chaser", transport_message_id=None, delivery=None, quote=None):
     """Save a supplier/carrier reply in the inbox (no event). Inside an agent, follow with
     self.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": ..., "issue_id": ...})."""
-    from .core.models import InboxMessage
-
     with session() as s:
         msg = InboxMessage(transport_message_id=transport_message_id, supplier_id=supplier_id, body=body, issue_id=issue_id, outbox_id=outbox_id,
                            from_email=from_email, subject=subject, language=language,
@@ -147,11 +156,11 @@ def receive_reply(*, source: str = "api", delivery=None, quote=None, **fields) -
     (inbox -> Ingest applies it -> truth.updated -> Reconciler re-checks)."""
     with _lock:
         run_id = trace.new_run_id()
-        msg = store_reply(source=source, delivery=delivery, quote=quote, **fields)
         b = bus()
+        msg = store_reply(source=source, delivery=delivery, quote=quote, **fields)
         b.emit(events.REPLY_RECEIVED, {"inbox_id": msg.id, "supplier_id": msg.supplier_id,
                                        "issue_id": msg.issue_id}, source=source)
-        return {"inbox_id": msg.id, "run_id": run_id, "steps": b.run_until_idle()}
+        return {"inbox_id": msg.id, **_complete_run(b, run_id)}
 
 
 def watch_once() -> dict:

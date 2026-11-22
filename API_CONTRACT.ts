@@ -373,13 +373,16 @@ export interface ReplyRequest {
   language?: string;
 }
 
-export interface RunResult {
+export interface ActionRun {
   status: 'completed' | 'partial';
   failures: {agent: string; event: string; trace_id: number}[];
   run_id: string;
+  steps: number;
+}
+
+export interface RunResult extends ActionRun {
   drop_id: number;
   label: string;
-  steps: number;
   added: number;
   changed: number;
   removed: number;

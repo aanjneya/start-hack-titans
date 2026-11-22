@@ -14,6 +14,8 @@ from typing import Any, Callable
 
 from . import trace
 
+RECORD_IDS = ("decision_id", "inbox_id", "outbox_id")
+
 
 @dataclass
 class Event:
@@ -21,6 +23,7 @@ class Event:
     payload: dict[str, Any] = field(default_factory=dict)
     source: str = ""  # agent that emitted it
     target: str = ""  # retry a failed subscriber without repeating successful siblings
+    cause: dict = field(default_factory=dict)
 
 
 Handler = Callable[[Event], None]
@@ -46,7 +49,9 @@ class Coordinator:
         return [s.agent for s in self._subs.get(event_name, [])]
 
     def emit(self, name: str, payload: dict[str, Any] | None = None, source: str = "", *, target: str = "") -> None:
-        self._queue.append(Event(name, payload or {}, source, target))
+        parent = trace.event_context.get()
+        cause = {key: parent[key] for key in RECORD_IDS if key in parent}
+        self._queue.append(Event(name, payload or {}, source, target, cause))
 
     def pending(self) -> int:
         return len(self._queue)
@@ -71,7 +76,9 @@ class Coordinator:
                 trace.log("coordinator", "unhandled", event.name, data={"source": event.source})
             for sub in subs:
                 steps += 1
-                context = {"event": event.name}
+                context = {"event": event.name, **event.cause}
+                context.update({key: event.payload[key] for key in RECORD_IDS
+                                if event.payload.get(key) is not None})
                 if record_retries:
                     context["retry"] = dict(name=event.name, payload=event.payload, source=event.source, target=sub.agent)
                 token = trace.event_context.set(context)

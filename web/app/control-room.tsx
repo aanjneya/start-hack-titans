@@ -7,7 +7,7 @@ import {
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
-import type { BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
+import type { ActionRun, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
 import DataDrawer from "./data-drawer";
 import History from "./decision-history";
@@ -40,6 +40,12 @@ const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "human", name: "You", job: "Approve or reject", color: "#16213a" },
 ];
 const agentColor = (id: string) => AGENTS.find((a) => a.id === id)?.color ?? "#5a6478";
+
+function runWarning(run: ActionRun) {
+  if (run.status !== "partial") return "";
+  const steps = [...new Set(run.failures.map(f => `${f.agent} on ${f.event}`))].join(", ");
+  return `Agent work needs review (${steps}). Open the decision history for the trace.`;
+}
 
 const SEVERITY: Record<number, { label: string; cls: string }> = {
   5: { label: "Critical", cls: "bg-stop text-white" },
@@ -228,7 +234,8 @@ export default function ControlRoom() {
       {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
         Update unavailable for {missing.join(", ")}. Showing the last available data.
       </p>}
-      {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} />}
+      {(!missing.includes("forecast") || editions.length > 0) &&
+        <Hero editions={editions} replayEnabled={!!snap.health?.replayEnabled} ready={online === true} />}
 
       <div className="mt-6 space-y-6">
         <section aria-labelledby="decide">
@@ -343,6 +350,9 @@ function CaseUpdates({ snap, openMail, refresh, current }: {
       const sent = snap.outbox.find(o => o.decision_id === d.id);
       const reply = sent && snap.inbox.filter(i => i.outbox_id === sent.id).sort((a,b) => b.id - a.id)[0];
       const review = snap.issues.find(i => i.type === "recovery_review" && i.evidence.some(e => e.path === `decisions/${d.id}`));
+      const problem = snap.trace.find(log => log.action === "error" &&
+        ((d.status === "approved" && !review && sent?.status !== "sent" && !reply && log.data?.decision_id === d.id)
+          || (reply && !reply.processed && log.data?.inbox_id === reply.id)));
       const state = d.status === "rejected" ? "Rejected" : d.status === "outdated" ? "The earlier authorization is outdated. Open its history to see what changed." : reply ? replyOutcome(reply)
         : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
         : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
@@ -362,7 +372,9 @@ function CaseUpdates({ snap, openMail, refresh, current }: {
       const priced = reply && reply.result?.supplier_quote ? snap.queue.find(e => e.option.actions.some(a => a.quote_inbox_id === reply.id)) : undefined;
       return <li key={d.id} id={`followup-${d.id}`} tabIndex={-1} className="scroll-mt-4"><strong>{option?.label ?? d.title}</strong>
         <span className="ml-2 text-sm text-muted">#{d.id} · {d.decided_by}</span>
-        <p className="text-sm">{state}</p>{outcome && <p className="text-sm font-semibold">{outcome}</p>}
+        <p className="text-sm">{problem ? `Recorded. ${problem.agent} reported an error on ${String(problem.data.event)}.` : state}</p>
+        {problem && <a className="text-sm font-semibold text-warn underline" href={API_URL + "/api/trace?trace_id=" + problem.id}>Read the agent error</a>}
+        {outcome && <p className="text-sm font-semibold">{outcome}</p>}
         <History decision={d.id} activity={snap.health?.activity_version} />
         {review && <details className="text-sm" data-assigned-review><summary className="cursor-pointer text-act">Open assigned review #{review.id}</summary>
           <p className="mt-1 font-semibold">{review.impact.note}</p><p>{review.reason}</p><p>Review status · {review.status}</p>
@@ -398,9 +410,10 @@ function SampleInquiry({ entry, buyer, current, refresh }: {
     setBusy(true);
     setError("");
     try {
-      await postData(`/api/decisions/${entry.decision_id}/approve`, {
+      const result = await postData<ActionRun>(`/api/decisions/${entry.decision_id}/approve`, {
         by: buyer, option: entry.option_index, version: entry.version,
       });
+      setError(runWarning(result));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -509,11 +522,13 @@ function TopBar(props: {
   );
 }
 
-function Hero({ editions }: { editions: Forecast[] }) {
+function Hero({ editions, replayEnabled, ready }: { editions: Forecast[]; replayEnabled: boolean; ready: boolean }) {
   if (editions.length === 0) {
     return (
       <section className="rounded-xl bg-surface px-6 py-10 text-muted">
-        No forecast yet. Press <strong className="text-ink">Play next data drop</strong> to load the first drop.
+        {!ready ? "Waiting for the latest packing forecast." : replayEnabled
+          ? <>No forecast yet. Press <strong className="text-ink">Play next data drop</strong> to load the next snapshot.</>
+          : "A packing forecast needs a dated launch snapshot and shift calendar. Supplier reviews can proceed independently."}
       </section>
     );
   }
@@ -533,7 +548,8 @@ function Hero({ editions }: { editions: Forecast[] }) {
               <strong className="text-ink">{fmt(f.projected_packed)}</strong> total projected packed by close
               {f.limiting_part && (
                 <>
-                  , held up by <span className="font-semibold text-ink">{f.limiting_part}</span>
+                  , held up by <span className="font-semibold text-ink" title={f.limiting_part}>
+                    {typeof f.details.limiting_part_name === "string" ? f.details.limiting_part_name : f.limiting_part}</span>
                 </>
               )}
             </p>
@@ -582,13 +598,13 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
     setBusy(true);
     onNotice("");
     try {
-      await postData(`/api/decisions/${entry.decision_id}/${verb}`, {
+      const result = await postData<ActionRun>(`/api/decisions/${entry.decision_id}/${verb}`, {
         by: buyer, option: entry.option_index, version: entry.version,
       });
       onDecided(entry.decision_id);
-      onNotice(verb === "reject" ? "Decision rejected." : action?.type === "human_review"
+      onNotice(runWarning(result) || (verb === "reject" ? "Decision rejected." : action?.type === "human_review"
         ? `Internal review authorized. See decision follow-up for the owner and record.`
-        : "Supplier request authorized. See decision follow-up for delivery status.");
+        : "Supplier request authorized. See decision follow-up for delivery status."));
     } catch (e) {
       onNotice(e instanceof ApiHttpError && e.status === 409
         ? `${e.message.replace(/[.!]$/, "")}. Check the current buyer queue before acting again.` : (e as Error).message);
@@ -886,11 +902,12 @@ function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: Out
     setBusy(true);
     setError("");
     try {
-      await postData("/api/inbox", {
+      const result = await postData<ActionRun>("/api/inbox", {
         supplier_id: m.supplier_id, body: text, issue_id: m.issue_id ?? undefined, outbox_id: m.id,
         subject: `Re: ${m.subject}`,
       });
       setText("");
+      setError(runWarning(result));
       onSent();
     } catch (e) {
       setError((e as Error).message);
@@ -925,7 +942,7 @@ function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: Out
             </div>
           ))}
           <label className="mt-4 block text-xs font-semibold text-muted" htmlFor={`reply-${m.id}`}>
-            Test: answer as the supplier
+            {mock ? "Test: answer as the supplier" : "Record a reply received from the supplier"}
           </label>
           <textarea
             id={`reply-${m.id}`}
@@ -940,7 +957,7 @@ function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: Out
             disabled={busy || !text.trim()}
             className="mt-2 rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-white hover:bg-act disabled:opacity-50"
           >
-            Send test reply
+            {mock ? "Send test reply" : "Record supplier reply"}
           </button>
           {error && <p className="mt-2 text-stop">{error}</p>}
         </div>

@@ -248,7 +248,7 @@ def regulatory_option(issue, plan=None):
         nodes.extend(("product", pid, products[pid]) for pid in pids)
     roles = policy.approvers_for(0)
     buyers = {po.buyer for po in (pos or verify) if po.buyer}
-    buyer = next(iter(buyers)) if len(buyers) == 1 else ""
+    buyer = next(iter(buyers), "") if len(buyers) <= 1 else None
     assignments = approval_assignments(roles, material.category if material else "", dated,
                                        documents.values(), buyer=buyer)
     owners = signer_names(assignments)

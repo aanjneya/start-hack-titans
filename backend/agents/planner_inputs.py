@@ -131,6 +131,8 @@ def load_plan():
                 parts.pop(part.component_id)
                 ev.append(evidence(part.source, part.component_id, note))
     plan = Plan(as_of, deadline, shifts, editions, dict(bom), Counter(), evidence=ev)
+    plan.material_names = {material.component_id: material.description
+                           for material in latest_by(all_rows(m.Material), "component_id") if material.description}
     changes = {}
     for row in sorted(all_rows(m.EngineeringChange), key=lambda c: (c.effective_from or as_of.date(), c.id)):
         if row.effective_from and row.effective_from <= as_of.date():
@@ -272,6 +274,7 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             if not outstanding:
                 continue
             key = (supplier, po, line, ship.shipment_id)
+            plan.line_balances[key[:3]] = outstanding
             fact, inbox_id = advice.get(key, ({}, None))
             rev = fact.get("revision", oc.revision)
             qty = min(outstanding, fact.get("quantity", outstanding))
@@ -296,9 +299,7 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             change = changes.get(part)
             blocked = bool(change and not change.use_up_old_rev and rev != change.rev_new)
             if slot and eta and not blocked:
-                # A PO line shared by multiple shipments never contributes more than the unreceived balance.
-                prior = sum(v[2] for k, v in plan.arrivals.items() if k[:3] == key[:3])
-                plan.arrivals[key] = (max(slot, eta), part, max(0, min(qty, outstanding - prior)))
+                plan.arrivals[key] = (max(slot, eta), part, qty)
             plan.inbound.append({"part": part, "supplier_id": supplier, "po_number": po, "po_line": line,
                                  "shipment_id": ship.shipment_id, "revision": rev, "quantity": qty,
                                  "eta": fact.get("arrival") or reported_eta,

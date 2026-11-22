@@ -203,6 +203,11 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
         assert _decision_mails(card["id"])[0].status == "replied"
         assert not [log.detail for log in all_rows(AgentLog) if log.action == "error"]
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before + option["copies_gained"]
+    inbox = client.get("/api/inbox?with_forecast=true").json()["data"]
+    advice = next(msg for msg in inbox if msg["outbox_id"] == spend.id and msg["result"].get("confirmed_delivery"))
+    outcome = next(f for f in advice["forecast_at_confirmation"] if f["product_id"] == "FG-GH6-STD")
+    assert outcome["change_from_previous"] == 5200 and outcome["joint_confirmations"] == 1
+    assert outcome["dock_released"] and outcome["projected_packed"] == 605200
     history = client.get(f"/api/decisions/{card['id']}/history").json()["data"]["events"]
     titles = [e["title"] for e in history]
     assert titles.count("Supplier quote matched") == titles.count("Delivery confirmation matched") == 1

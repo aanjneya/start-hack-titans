@@ -56,6 +56,7 @@ def signal_source(item, documents, observation):
     else:
         origin = "Collection mode unknown"
     return dict(evidence=dict(item, source_kind=kind), origin=origin, provider=provider,
+                market=observation.get("market"),
                 title=observation.get("title") or (doc.title if doc else ""), scope=observation.get("scope", ""),
                 observed_at=observation.get("observed_at"),
                 published=observation.get("published") or (doc.published_at.date().isoformat() if doc and doc.published_at else None))

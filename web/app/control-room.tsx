@@ -4,10 +4,10 @@ import Link from "next/link";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ago, API_URL, ApiHttpError, clock, fmt, getData, parseTs, postData,
-  type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
+  type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
-import type { ActionRun, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
+import type { ActionRun, BuyerActivity, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
 import DataDrawer from "./data-drawer";
 import History from "./decision-history";
@@ -25,7 +25,7 @@ type Snapshot = {
   outbox: OutboxMessage[];
   inbox: InboxMessage[];
   risk: RiskScore[];
-  trace: AgentLogEntry[];
+  trace: BuyerActivity[];
 };
 
 const EMPTY: Snapshot = { queue: [], setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
@@ -47,6 +47,13 @@ function runWarning(run: ActionRun) {
   return `Agent work needs review (${steps}). Open the decision history for the trace.`;
 }
 
+function focusAction(key: string) {
+  const entry = document.getElementById("action-" + key);
+  const group = entry?.closest("details");
+  if (group) group.open = true;
+  entry?.focus();
+}
+
 const SEVERITY: Record<number, { label: string; cls: string }> = {
   5: { label: "Critical", cls: "bg-stop text-white" },
   4: { label: "Copies at risk", cls: "bg-stop-soft text-stop" },
@@ -57,13 +64,13 @@ const SEVERITY: Record<number, { label: string; cls: string }> = {
 
 async function loadSnapshot(health: HealthCheckResponse): Promise<{ snap: Snapshot; missing: string[] }> {
   const [forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue] = await Promise.allSettled([
-    getData<Forecast[]>("/api/forecast"),
-    getData<DecisionCard[]>("/api/decisions"),
+    getData<Forecast[]>("/api/forecast?current=true"),
+    getData<DecisionCard[]>("/api/decisions?for_buyer=true"),
     getData<Issue[]>("/api/issues"),
     getData<OutboxMessage[]>("/api/outbox"),
-    getData<InboxMessage[]>("/api/inbox"),
+    getData<InboxMessage[]>("/api/inbox?with_forecast=true"),
     getData<RiskScore[]>("/api/risk?current=true"),
-    getData<AgentLogEntry[]>("/api/trace?limit=400"),
+    getData<BuyerActivity[]>("/api/buyer-activity"),
     getData<CustomerSetup>("/api/setup"),
     getData<BuyerQueueEntry[]>("/api/buyer-queue"),
   ]);
@@ -93,6 +100,11 @@ export default function ControlRoom() {
   const [now, setNow] = useState<number>(0);
   const [dropBusy, setDropBusy] = useState(false);
   const [notice, setNotice] = useState<string>("");
+  const [playedRun, setPlayedRun] = useState("");
+  const announceAction = useCallback((message: string) => {
+    setPlayedRun("");
+    setNotice(message);
+  }, []);
   const [tab, setTab] = useState<"findings" | "emails" | "risk">("findings");
   const [activeMail, setActiveMail] = useState<number | null>(null);
   const [showData, setShowData] = useState(false);
@@ -161,8 +173,10 @@ export default function ControlRoom() {
   const nextDrop = async () => {
     setDropBusy(true);
     setNotice("");
+    setPlayedRun("");
     try {
       const r = await postData<RunResult & {done?: boolean; step: number; of: number; drops?: number}>("/api/replay/step");
+      if (r.status === "completed") setPlayedRun(r.run_id);
       setNotice(
         r.done
           ? `All ${r.drops} recorded drops are in.`
@@ -177,19 +191,20 @@ export default function ControlRoom() {
     }
   };
 
-  // Newest forecast per edition.
+  // Product IDs also distinguish two customers' SKUs with the same edition label.
   const editions = useMemo(() => {
     const seen = new Map<string, Forecast>();
-    for (const f of snap.forecast) if (!seen.has(f.edition)) seen.set(f.edition, f);
+    for (const f of snap.forecast) if (!seen.has(f.product_id)) seen.set(f.product_id, f);
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
   const recovery = snap.queue.filter(entry => entry.on_time_recovery);
   const future = snap.queue.filter(entry => entry.option.horizon === "future" && !entry.option.followup_for);
+  const updated = future.find(entry => playedRun && entry.latest_grade_change?.run_id === playedRun);
   const other = snap.queue.filter(entry => !entry.on_time_recovery && entry.option.horizon !== "future");
   const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
     {entries.map(entry => <li id={`action-${entry.key}`} tabIndex={-1} key={entry.key}>
-      <DecisionView entry={entry} snap={snap} onDone={refresh} onNotice={setNotice} onDecided={followDecision}
+      <DecisionView entry={entry} snap={snap} onDone={refresh} onNotice={announceAction} onDecided={followDecision}
         current={online === true && !dropBusy && !missing.includes("queue") && !missing.includes("setup")} />
     </li>)}
   </ol>;
@@ -221,7 +236,9 @@ export default function ControlRoom() {
       </p>}
       {notice && (
         <p role="status" className="mb-4 rounded-md border border-rule bg-surface px-4 py-2 text-sm">
-          {notice} {notice.includes("decision follow-up") && <a className="font-semibold text-act underline" href="#decision-follow-up">View follow-up</a>}
+          {updated?.latest_grade_change ? <>{updated.latest_grade_change.supplier} moved from {updated.latest_grade_change.previous} to {updated.latest_grade_change.current} in this drop.
+            {" "}<button className="font-semibold text-act underline" onClick={() => focusAction(updated.key)}>See buyer decision ↓</button>
+            </> : notice} {notice.includes("decision follow-up") && <a className="font-semibold text-act underline" href="#decision-follow-up">View follow-up</a>}
         </p>
       )}
       {online === false && (
@@ -317,23 +334,15 @@ export default function ControlRoom() {
   );
 }
 
-type InboundEvidence = { eligible?: boolean; dock_released?: boolean; evidence?: {path: string}[] };
-
-function forecastAfterReply(reply: InboxMessage, forecasts: Forecast[], edition: string) {
-  if (!reply.result?.confirmed_delivery) return "";
-  const history = forecasts.filter(f => f.edition === edition).sort((a, b) => a.id - b.id);
-  for (const [index, f] of history.entries()) {
-    const inbound = f.details.inbound;
-    if (!Array.isArray(inbound)) continue;
-    const arrival = (inbound as InboundEvidence[]).find(row => row.evidence?.some(e => e.path === `inbox/${reply.id}`));
-    if (!arrival) continue;
-    if (!arrival.dock_released) return "Waiting for the site to release a dock slot.";
-    const previous = history[index - 1];
-    if (f.projected_packed == null || f.shortfall == null || previous?.projected_packed == null) return "";
-    const change = f.projected_packed - previous.projected_packed;
-    return `${edition} forecast at confirmation: ${fmt(f.projected_packed)} by close (${change > 0 ? "+" : ""}${fmt(change)}), ${fmt(f.shortfall)} short.`;
-  }
-  return "";
+function forecastAfterReply(reply: InboxMessage, product?: string) {
+  const outcome = reply.forecast_at_confirmation?.find(f => f.product_id === product);
+  if (!outcome) return "";
+  if (outcome.dock_released === false) return "Waiting for the site to release a dock slot.";
+  const change = outcome.change_from_previous;
+  if (outcome.projected_packed == null || outcome.shortfall == null) return "Waiting for enough evidence for a packing projection.";
+  const delta = change == null ? "" : ` (${change > 0 ? "+" : ""}${fmt(change)})`;
+  const shared = outcome.joint_confirmations > 1 ? ` This projection includes ${outcome.joint_confirmations} confirmations together.` : "";
+  return `${outcome.edition} forecast at confirmation: ${fmt(outcome.projected_packed)} by close${delta}, ${fmt(outcome.shortfall)} short.${shared}`;
 }
 
 function CaseUpdates({ snap, openMail, refresh, current }: {
@@ -361,9 +370,8 @@ function CaseUpdates({ snap, openMail, refresh, current }: {
         : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
         : review ? `Assigned to ${d.approver || "the buyer"} for internal review.`
         : "Approved. Waiting for the handoff.";
-      const edition = snap.forecast.find(f => f.product_id === option?.product_id)?.edition;
       const accepted = sent && snap.inbox.find(i => i.outbox_id === sent.id && i.result?.confirmed_delivery);
-      const outcome = accepted && edition ? forecastAfterReply(accepted, snap.forecast, edition) : "";
+      const outcome = accepted ? forecastAfterReply(accepted, option?.product_id) : "";
       const pendingInquiry = snap.queue.find(e => e.option.followup_for === d.id);
       const child = snap.decisions.find(c => c.chosen_option != null && c.options[c.chosen_option].followup_for === d.id);
       const lastInquiry = snap.decisions.find(c => c.options.some(o => o.followup_for === d.id));
@@ -386,12 +394,7 @@ function CaseUpdates({ snap, openMail, refresh, current }: {
             "Sample inquiry recorded in the supplier thread."}
             {" "}<a className="text-act underline" href={`#mail-${inquiryMail.id}`} onClick={() => openMail(inquiryMail.id)}>Open sample correspondence</a></p>}
           <a className="text-act underline" href={API_URL + "/api/issues/" + review.id}>View review record</a></details>}
-        {priced && <button className="mr-4 text-sm font-semibold text-act underline" onClick={() => {
-          const target = document.getElementById("action-" + priced.key);
-          const container = target?.closest("details");
-          if (container) container.open = true;
-          target?.focus();
-        }}>Review priced offer</button>}
+        {priced && <button className="mr-4 text-sm font-semibold text-act underline" onClick={() => focusAction(priced.key)}>Review priced offer</button>}
         {sent && <a className="text-sm text-act underline" href={`#mail-${sent.id}`} onClick={() => openMail(sent.id)}>Open supplier thread</a>}
       </li>;
     })}</ul>
@@ -537,12 +540,13 @@ function Hero({ editions, replayEnabled, ready }: { editions: Forecast[]; replay
       {editions.map((f) => {
         const short = (f.shortfall ?? 0) > 0;
         return (
-          <div key={f.edition} className="bg-surface px-5 py-4">
+          <div key={f.product_id} className="bg-surface px-5 py-4">
             <p className={`figure text-[clamp(40px,5vw,64px)] ${short ? "text-stop" : "text-ok"}`}>
               {f.shortfall == null ? "—" : fmt(f.shortfall)}
             </p>
             <p className="mt-2 text-lg font-semibold">
-              {f.edition} copies {f.shortfall == null ? "awaiting forecast" : short ? "projected short by close" : "short · on track"}
+              {f.edition}{editions.some(other => other.product_id !== f.product_id && other.edition === f.edition) && ` (${f.product_id})`}
+              {" "}copies {f.shortfall == null ? "awaiting forecast" : short ? "projected short by close" : "short · on track"}
             </p>
             <p className="mt-1 text-sm text-muted tabular">
               <strong className="text-ink">{fmt(f.projected_packed)}</strong> total projected packed by close
@@ -737,9 +741,9 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
   </article>;
 });
 
-function AgentLanes({ trace, now, onOpenData }: { trace: AgentLogEntry[]; now: number; onOpenData: () => void }) {
+function AgentLanes({ trace, now, onOpenData }: { trace: BuyerActivity[]; now: number; onOpenData: () => void }) {
   const stats = useMemo(() => {
-    const out = new Map<string, { last?: AgentLogEntry; count: number; errors: number }>();
+    const out = new Map<string, { last?: BuyerActivity; count: number; errors: number }>();
     for (const e of trace) {
       const s = out.get(e.agent) ?? { count: 0, errors: 0 };
       // Show the newest real step, not the internal "handle:<event>" hand-off lines.
@@ -811,7 +815,7 @@ function AgentLanes({ trace, now, onOpenData }: { trace: AgentLogEntry[]; now: n
   );
 }
 
-function LiveLog({ trace }: { trace: AgentLogEntry[] }) {
+function LiveLog({ trace }: { trace: BuyerActivity[] }) {
   const rows = trace.filter((e) => !e.action.startsWith("handle:") && e.action !== "unhandled").slice(0, 40);
   return (
     <section aria-labelledby="log" className="min-w-0">

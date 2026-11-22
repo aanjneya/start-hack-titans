@@ -10,7 +10,7 @@ import re
 from sqlmodel import func, select
 
 from ..core import policy
-from ..core.models import DecisionCard, Issue, RiskScore
+from ..core.models import AgentLog, DecisionCard, DropRecord, Issue, RiskScore
 from ..core.parsing import parse_datetime
 from .planner_options import paid_window_open
 
@@ -172,8 +172,35 @@ def link_shipment_signals(db, entries):
                                             selected_for_rating=signal["selected_for_rating"])
 
 
+def link_latest_grade_change(db, entries):
+    """A drop can change many grades. Highlight only a transition tied to a current decision from that run."""
+    from .risk_scoring import GRADE_TO_RATING
+
+    drop = db.exec(select(DropRecord).order_by(DropRecord.id.desc()).limit(1)).first()
+    if not drop or drop.status != "completed" or not drop.run_id:
+        return
+    logs = db.exec(select(AgentLog).where(AgentLog.run_id == drop.run_id,
+                   AgentLog.action.in_(["decision_created", "grade_changed"])).order_by(AgentLog.id)).all()
+    new_cards = {r.data.get("decision_id") for r in logs if r.agent == "planner" and r.action == "decision_created"}
+    changed = {r.data["entity_id"]: r for r in logs if r.agent == "risk" and r.action == "grade_changed"
+               and r.data.get("entity_type") == "supplier" and r.data.get("entity_id")}
+    for entry in entries:
+        option = entry["option"]
+        exposure = option.get("exposure")
+        if not exposure or not any(s["decision_id"] in new_cards for s in entry["sources"] if not s["related_review"]):
+            continue
+        log = changed.get(option["actions"][0].get("supplier_id"))
+        if log:
+            previous = GRADE_TO_RATING.get(log.data.get("old_grade"))
+            current = GRADE_TO_RATING.get(log.data.get("new_grade"))
+            if previous and current == exposure.get("supplier_rating") and current != previous:
+                entry["latest_grade_change"] = dict(run_id=drop.run_id, trace_id=log.id, previous=previous,
+                                                    current=current, supplier=exposure["supplier"])
+
+
 def buyer_queue(db):
-    cards = db.exec(select(DecisionCard).where(DecisionCard.created_by == "planner")
+    cards = db.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
+                    DecisionCard.status.in_(["proposed", "approved", "executed"]))
                     .order_by(DecisionCard.id.desc())).all()
     authorized = [(c, c.options[c.chosen_option]) for c in cards
                   if c.status in ("approved", "executed") and c.chosen_option is not None]
@@ -237,6 +264,7 @@ def buyer_queue(db):
         entry["evidence"] = list({digest(e): e for e in entry["evidence"]}.values())
     compare_freight(groups.values())
     link_shipment_signals(db, groups.values())
+    link_latest_grade_change(db, groups.values())
     return sorted(groups.values(), key=_rank)
 
 

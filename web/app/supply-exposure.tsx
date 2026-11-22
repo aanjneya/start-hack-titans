@@ -16,7 +16,7 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
   const headline = exposure.signals.find(signal => signal.factor === "trade_news")?.sources.find(source => source.title);
   const marketSignal = exposure.signals.find(signal => signal.sources.some(s => s.evidence.locator?.startsWith("polymarket:")));
   const market = marketSignal?.sources.find(s => s.evidence.locator?.startsWith("polymarket:"));
-  const odds = market?.evidence.quote?.match(/^Yes=([\d.]+%)/)?.[1];
+  const odds = market?.market ? `${market.market.yes_pct}%` : market?.evidence.quote?.match(/^Yes=([\d.]+%)/)?.[1];
   return <div className="mt-3 space-y-2">
     {exposure.supplier_rating && <p className="text-sm font-semibold text-warn">
       {exposure.supplier} · Supplier grade {exposure.last_grade_change && `${exposure.last_grade_change.previous} → `}{exposure.supplier_rating}
@@ -32,7 +32,9 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
     {exposure.signals.length > 0 && <details className="text-sm text-muted"><summary className="cursor-pointer">
       {exposure.signals.length} signal {exposure.signals.length === 1 ? "type" : "types"}
       {market && <> · Polymarket · {odds && `${odds} yes · `}{market.origin.toLowerCase()}</>}</summary>
-      {market && <p className="mt-1 pl-3">{market.title || marketSignal?.text}</p>}
+      {market && <div className="mt-1 pl-3"><p>{market.title || marketSignal?.text}</p>
+        {market.market?.disruption_outcome === "No" && <p>The question asks about recovery. The rating uses its No side.</p>}
+        <p className="text-xs">The price describes this market question. Supplier evidence establishes which orders need review.</p></div>}
       <ul className="mt-1 space-y-1 pl-3">{exposure.signals.map(s => <li key={s.factor}>
         <strong>{factorNames[s.factor] || s.factor}</strong>{s.sources[0]?.scope && ` · ${s.sources[0].scope}`}
       </li>)}</ul></details>}
@@ -72,12 +74,13 @@ export function ExposureEvidence({ exposure: x }: { exposure: SupplyExposure }) 
         <p>{signal.text}</p>
         {x.last_grade_change?.drivers.some(d => d.factor === signal.factor && d.before === d.after && d.after === signal.points)
           && <p className="text-xs text-muted">Contribution at the grade change · {signal.points} points, unchanged</p>}
-        {signal.sources.map(({ evidence, origin, published, title, scope, observed_at }, i) => <div key={i} className="mt-1 text-xs text-muted">
+        {signal.sources.map(({ evidence, origin, published, title, scope, observed_at, market }, i) => <div key={i} className="mt-1 text-xs text-muted">
           <p>{origin}{scope && ` · ${scope}`} · {published ? `Published ${published}` : observed_at ? `Source updated ${observed_at}` : "Source date unknown"}</p>
           {origin !== "Offline example" && /^https?:\/\//i.test(evidence.path)
             ? <a className="text-act underline" href={evidence.path} target="_blank" rel="noreferrer">{title || evidence.source_kind || "Source"} ↗</a>
             : <p>{title || evidence.path.split("/").pop()}</p>}
           {evidence.quote && <p className="mt-1">{evidence.quote}</p>}
+          {market?.scope_basis && <p>{market.scope_basis}{market.closes_at && ` · Market closes ${market.closes_at.slice(0, 10)}`}</p>}
         </div>)}
       </li>)}</ul>
       {!!x.other_drivers?.length && <p className="mt-2 text-sm text-muted">

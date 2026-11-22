@@ -88,6 +88,10 @@ def test_real_magnets_open_one_future_review():
     entry, = [q for q in future(client) if q["option"]["button_label"] == "Start qualification review"]
     assert "63 to 105 days" in entry["next_step"] and "2026-12-01" in entry["next_step"]
     assert entry["part"] == "CMP-GAM-007" and entry["option"]["copies_gained"] is None
+    change = entry["latest_grade_change"]
+    assert (change["run_id"], change["previous"], change["current"]) == (res["run_id"], "A", "CCC")
+    proof = client.get("/api/trace", params={"trace_id":change["trace_id"]}).json()["data"]
+    assert proof[0]["agent"] == "risk" and proof[0]["data"]["entity_id"] == "SUP-0029"
     exposure = entry["option"]["exposure"]
     assert exposure["order_value"] == {"amount": 1870260, "currency": "CNY"}
     assert exposure["effective_after"] == "2026-12-01"

@@ -2,7 +2,8 @@
 from sqlalchemy import or_
 from sqlmodel import select
 
-from ..core.models import AgentLog, DecisionCard, Forecast, InboxMessage, Issue, OutboxMessage
+from ..core.models import AgentLog, DecisionCard, InboxMessage, Issue, OutboxMessage
+from .planner_outcomes import confirmation_forecasts
 
 
 def _quote_thread(db, option):
@@ -14,32 +15,23 @@ def _quote_thread(db, option):
 
 
 def _forecast_events(db, rows):
-    """A forecast belongs here only when the reply run recalculated it and the snapshot cites that reply."""
-    accepted = {}
-    for row in rows:
-        if row.action == "confirmed_delivery" and row.run_id:
-            accepted.setdefault(row.run_id, set()).add(f"inbox/{row.data['inbox_id']}")
-    if not accepted:
-        return []
-    result = []
-    logs = db.exec(select(AgentLog).where(AgentLog.agent == "planner", AgentLog.action == "forecast",
-                                         AgentLog.run_id.in_(accepted))).all()
-    for log in logs:
-        for forecast in db.exec(select(Forecast).where(Forecast.id.in_(log.data.get("forecast_ids", [])))):
-            paths = {e.get("path") for item in forecast.details.get("inbound", []) for e in item.get("evidence", [])}
-            if not paths.intersection(accepted[log.run_id]):
-                continue
-            if forecast.projected_packed is None or forecast.shortfall is None:
-                detail = f"{forecast.edition} is awaiting sufficient evidence for a projection."
+    ids = {row.data["inbox_id"] for row in rows if row.action == "confirmed_delivery" and row.data.get("inbox_id")}
+    snapshots = confirmation_forecasts(db, ids)
+    events = {}
+    for outcomes in snapshots.values():
+        for f in outcomes:
+            if f["projected_packed"] is None or f["shortfall"] is None:
+                detail = f"{f['edition']} is awaiting sufficient evidence for a projection."
             else:
-                previous = db.exec(select(Forecast).where(Forecast.product_id == forecast.product_id,
-                                   Forecast.id < forecast.id).order_by(Forecast.id.desc()).limit(1)).first()
-                detail = f"{forecast.projected_packed:,} projected by close, {forecast.shortfall:,} short."
-                if previous and previous.projected_packed is not None:
-                    detail += f" Change from the preceding projection: {forecast.projected_packed - previous.projected_packed:+,}."
-            result.append(_event(log.ts, "Planner", f"{forecast.edition} forecast recalculated", detail,
-                                 "forecast", forecast.id, log))
-    return result
+                detail = f"{f['projected_packed']:,} projected by close, {f['shortfall']:,} short."
+                if f["change_from_previous"] is not None:
+                    detail += f" Change from the preceding projection: {f['change_from_previous']:+,}."
+                if f["joint_confirmations"] > 1:
+                    detail += f" This update incorporated {f['joint_confirmations']} confirmations together."
+            events[f["forecast_id"]] = dict(at=f["recorded_at"], actor="Planner",
+                title=f"{f['edition']} forecast recalculated", detail=detail,
+                record=dict(type="forecast", id=f["forecast_id"]), trace_id=f["trace_id"], run_id=f["run_id"])
+    return list(events.values())
 
 
 def _event(stamp, actor, title, detail, record_type, record_id, log=None):

@@ -212,3 +212,36 @@ def test_handler_failure_is_visible_on_approval_and_inbox_with_one_dispatch(monk
     saved, = all_rows(InboxMessage)
     assert saved.id == result["inbox_id"] and saved.processed and saved.result["review"]
     assert len(all_rows(OutboxMessage)) == 1
+
+
+def test_buyer_summaries_keep_the_correct_history_when_multiple_replies_reach_one_forecast():
+    from backend.core import trace
+    from backend.core.models import Forecast
+    client = TestClient(app)
+    a, b = add_all([InboxMessage(processed=True, result={"confirmed_delivery":{ "quantity":5}}),
+                    InboxMessage(processed=True, result={"confirmed_delivery":{ "quantity":7}})])
+    old, = add_all([Forecast(product_id="P", edition="First", projected_packed=50)])
+    trace.new_run_id()
+    for msg in (a,b):
+        trace.log("ingest", "confirmed_delivery", data={"inbox_id":msg.id})
+    joint, = add_all([Forecast(product_id="P", edition="First", projected_packed=62, shortfall=8, details={"inbound":[
+        {"dock_released":True, "evidence":[{"path":f"inbox/{msg.id}"}]} for msg in (a,b)]})])
+    event = trace.log("planner", "forecast", data={"forecast_ids":[joint.id]})
+    late, = add_all([Forecast(product_id="Q", edition="First", projected_packed=100, details={"large": "archive value"})])
+    add_all([Forecast(product_id="P", edition="First", projected_packed=i) for i in range(60)])
+    condensed = client.get("/api/forecast?current=true").json()["data"]
+    assert {f["product_id"] for f in condensed} == {"P","Q"} and all("large" not in f["details"] for f in condensed)
+    assert old.id not in {f["id"] for f in client.get("/api/forecast").json()["data"]}
+    rows = client.get("/api/inbox?with_forecast=true").json()["data"]
+    for row in rows:
+        f, = row["forecast_at_confirmation"]
+        assert (f["forecast_id"], f["change_from_previous"], f["joint_confirmations"], f["trace_id"]) == (joint.id,12,2,event.id)
+    log = trace.log("chaser", "error", "isolated test", [{"path":"large-file"}],
+                    {"decision_id":2,"event":"email.requested","traceback":"detail only"})
+    activity = client.get("/api/buyer-activity").json()["data"][0]
+    assert activity["id"] == log.id and activity["data"] == {"decision_id":2,"event":"email.requested"}
+    assert "evidence" not in activity and client.get(f"/api/trace?trace_id={log.id}").json()["data"][0]["evidence"]
+    old_card, current_card, past_action = add_all([DecisionCard(status="outdated"), DecisionCard(),
+        DecisionCard(status="outdated", decided_at=late.computed_at, chosen_option=0, options=[{}])])
+    buyer_ids = {card["id"] for card in client.get("/api/decisions?for_buyer=true").json()["data"]}
+    assert buyer_ids == {current_card.id, past_action.id} and client.get(f"/api/decisions/{old_card.id}").status_code == 200

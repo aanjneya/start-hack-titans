@@ -10,8 +10,9 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlmodel import func, select
 
 from ..agents.planner_history import decision_history
@@ -76,6 +77,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="start-hack-titans backend", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1200, compresslevel=4)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -180,13 +182,29 @@ def conflicts() -> dict:
 
 
 @app.get("/api/forecast")
-def forecast() -> dict:
+def forecast(current: bool = False) -> dict:
+    if current:
+        newest = select(func.max(Forecast.id)).group_by(Forecast.product_id)
+        with session() as db:
+            summaries = []
+            for f in db.exec(select(Forecast).where(Forecast.id.in_(newest)).order_by(Forecast.id.desc())):
+                row = f.model_dump(mode="json", exclude={"details"})
+                row["details"] = {k: f.details[k] for k in ("as_of", "working_hours", "limiting_part_name") if k in f.details}
+                summaries.append(row)
+            return ok(summaries)
     return ok(_rows(Forecast, order=Forecast.id.desc(), limit=50))
 
 
 @app.get("/api/decisions")
-def decisions(status: Optional[str] = None) -> dict:
+def decisions(status: Optional[str] = None, for_buyer: bool = False) -> dict:
     where = DecisionCard.status == status if status else None
+    if for_buyer:
+        relevant = or_(DecisionCard.status != "outdated", DecisionCard.decided_at.is_not(None),
+                       DecisionCard.options[0]["followup_for"].as_integer().is_not(None))
+        where = relevant if where is None else where & relevant
+        with session() as db:
+            rows = db.exec(select(DecisionCard).where(where).order_by(DecisionCard.id.desc())).all()
+            return ok([r.model_dump(mode="json") for r in rows])
     return ok(_rows(DecisionCard, order=DecisionCard.id.desc(), where=where))
 
 
@@ -355,6 +373,18 @@ def get_trace(limit: int = 200, agent: Optional[str] = None, run_id: Optional[st
     return ok([e.model_dump(mode="json") for e in trace.recent(limit=limit, agent=agent, run_id=run_id)])
 
 
+@app.get("/api/buyer-activity")
+def buyer_activity() -> dict:
+    with session() as db:
+        columns = (AgentLog.id, AgentLog.run_id, AgentLog.ts, AgentLog.agent, AgentLog.action, AgentLog.detail)
+        fields = ("decision_id", "inbox_id", "outbox_id", "event")
+        refs = [AgentLog.data[k].as_integer().label(k) for k in fields[:3]]
+        refs.append(AgentLog.data["event"].as_string().label("event"))
+        rows = db.exec(select(*columns, *refs).order_by(AgentLog.id.desc()).limit(400)).mappings()
+        return ok([dict(id=r["id"], run_id=r["run_id"], ts=r["ts"], agent=r["agent"], action=r["action"],
+                        detail=r["detail"], data={k: r[k] for k in fields if r[k] is not None}) for r in rows])
+
+
 @app.get("/api/risk")
 def risk(current: bool = False) -> dict:
     if current:
@@ -379,8 +409,17 @@ def changes(table: Optional[str] = None, limit: int = 500) -> dict:
 
 
 @app.get("/api/inbox")
-def inbox() -> dict:
-    return ok(_rows(InboxMessage, order=InboxMessage.id.desc()))
+def inbox(with_forecast: bool = False) -> dict:
+    rows = _rows(InboxMessage, order=InboxMessage.id.desc())
+    if with_forecast:
+        from ..agents.planner_outcomes import confirmation_forecasts
+
+        with session() as db:
+            outcomes = confirmation_forecasts(db, {r["id"] for r in rows if r["result"].get("confirmed_delivery")})
+        for r in rows:
+            if r["id"] in outcomes:
+                r["forecast_at_confirmation"] = outcomes[r["id"]]
+    return ok(rows)
 
 
 class ReplyRequest(BaseModel):

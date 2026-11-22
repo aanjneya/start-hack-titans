@@ -9,8 +9,8 @@ and deterministic MOCK_MODE=true snapshots for offline/stage demo reliability):
                               read from `soony/master/ports.csv` and `open_shipments.csv`.
 3. PoliticalNewsProvider    — Portal news drops (`soony/news/*.json` in `documents`) + live Google
                               News RSS country-level political/trade headlines.
-4. TelemetryProvider        — Pluggable satellite/AIS telemetry interface grounded in live shipment
-                              GPS coordinates (`last_lat`, `last_lon`), port dwell, and feed silence.
+4. TelemetryProvider        — Customer shipment records, port status and age of the last update.
+5. RegulationChangeProvider — Regulatory publications and country-specific news searches.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Optional, Protocol
 
 import httpx
+from iso3166 import countries as iso_countries
 
 from ..core import llm
 from ..core.config import get_settings
@@ -59,6 +60,7 @@ class ExternalSignal:
     live: bool = False  # True if fetched live over HTTP (or real portal drop), False if offline snapshot
     published: str | None = None
     observed_at: str | None = None
+    market: dict | None = None
 
     def as_evidence(self) -> Evidence:
         return Evidence(
@@ -78,9 +80,12 @@ class ExternalSignal:
             scope = "Country watch · " + country
         else:
             scope = "General trade watch"
-        return dict(provider=self.provider, title=self.title, summary=self.summary, evidence=self.as_evidence().model_dump(),
+        record = dict(provider=self.provider, title=self.title, summary=self.summary, evidence=self.as_evidence().model_dump(),
                     live=self.live, scope=scope, published=self.published, observed_at=self.observed_at,
                     shipment_ids=matched_ships)
+        if self.market:
+            record["market"] = self.market
+        return record
 
 
 class SignalProvider(Protocol):
@@ -196,6 +201,9 @@ _RELIEF_PHRASES = (
 # Skip domestic election/candidate markets that aren't supply-chain disruptions
 _SKIP_PHRASES = ("election", "prime minister", "president", "win the most", "governor", "mayor", "parliament")
 
+_TRADE_TOPICS = ("export", "import", "tariff", "trade", "customs", "sanction", "freight", "shipping", "ship ",
+                 "port strike", "blockade", "ceasefire", "invade", "invasion", "strait", "suez", "red sea", "houthi")
+
 # Deterministic offline fallback snapshots (used when MOCK_MODE=true or when offline)
 _MOCK_POLYMARKET_MARKETS: list[dict[str, Any]] = [
     {
@@ -236,29 +244,89 @@ _MOCK_POLYMARKET_MARKETS: list[dict[str, Any]] = [
 ]
 
 
+def _market_list(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    return value if isinstance(value, list) else []
+
+
 def _extract_yes_prob(market: dict[str, Any]) -> Optional[float]:
-    prices = market.get("outcomePrices")
-    if isinstance(prices, str):
+    labels = [str(v).strip().casefold() for v in _market_list(market.get("outcomes"))]
+    prices = _market_list(market.get("outcomePrices"))
+    if len(prices) != 2 or sorted(labels) != ["no", "yes"]:
+        return None
+    try:
+        yes = float(prices[labels.index("yes")])
+    except (TypeError, ValueError):
+        return None
+    return yes if 0 <= yes <= 1 else None
+
+
+def country_name(code):
+    country = iso_countries.get(code, None)
+    return _COUNTRY_NAMES.get(code) or (country.apolitical_name if country else None)
+
+
+def named_countries(title, codes):
+    result = []
+    for code in sorted(codes):
+        name = country_name(code)
+        if ((name and re.search(r"\b" + re.escape(name) + r"\b", title, re.I))
+                or re.search(r"\(" + re.escape(code) + r"\)", title)):
+            result.append(code)
+    return result
+
+
+def _market_signal(market, event, countries, reference_now):
+    if market.get("closed") or market.get("archived") or market.get("active") is False:
+        return None
+    end = market.get("endDate")
+    if end:
         try:
-            prices = json.loads(prices)
-        except Exception:
-            prices = None
-    if isinstance(prices, list) and prices:
-        try:
-            p = float(prices[0])
-            if 0.0 <= p <= 1.0:
-                return p
+            # Only a dated instant can establish that a market has expired.
+            dt = datetime.fromisoformat(end)
+            if dt.tzinfo and dt <= reference_now:
+                return None
         except (TypeError, ValueError):
-            pass
-    for key in ("lastTradePrice", "bestBid", "prob"):
-        if market.get(key) is not None:
-            try:
-                p = float(market[key])
-                if 0.0 <= p <= 1.0:
-                    return p
-            except (TypeError, ValueError):
-                pass
-    return None
+            return None
+    question = str(market.get("question") or "").strip()
+    yes = _extract_yes_prob(market)
+    q = question.casefold()
+    if yes is None or any(word in q for word in _SKIP_PHRASES) or not any(term in q for term in _TRADE_TOPICS):
+        return None
+    relief = any(phrase in q for phrase in _RELIEF_PHRASES)
+    severity = 1 - yes if relief else yes
+    if severity < 0.10:
+        return None
+    direct = named_countries(question, countries)
+    for terms, area, tags in _POLYMARKET_RULES:
+        if any(term in q for term in terms):
+            if not direct and "maritime" not in tags and named_countries(question, (c.alpha2 for c in iso_countries)):
+                continue
+            scope = direct or sorted(set(area).intersection(countries))
+            if scope:
+                break
+    else:
+        if not direct:
+            return None
+        scope, tags = direct, ["trade"]
+    slug = event.get("slug")
+    if not slug:
+        return None
+    question_id = market.get("conditionId") or market.get("id")
+    return ExternalSignal(provider="polymarket", category="external_politics", title=question, countries=scope,
+        tags=list(tags), score_0_100=round(severity * 100, 1), live=True,
+        summary=(f"Polymarket prices Yes at {yes:.0%} on “{question}”."
+                 + (f" The rating uses the {severity:.0%} No side of this recovery question." if relief else "")),
+        source_url=f"https://polymarket.com/event/{slug}",
+        quote=f"Yes={yes:.1%}, risk_implied={severity:.1%} (live Polymarket Gamma API)",
+        observed_at=market.get("updatedAt") or None,
+        market=dict(yes_pct=round(yes * 100, 1), disruption_outcome="No" if relief else "Yes",
+                    scope_basis="Country named in the question" if direct else "Regional exposure rule",
+                    question_id=str(question_id) if question_id else None, closes_at=end or None))
 
 
 class PolymarketProvider:
@@ -267,85 +335,36 @@ class PolymarketProvider:
     def fetch(self, *, countries: set[str], ports: dict[str, dict[str, Any]],
               shipments: list[Shipment], documents: list[Document],
               reference_now: datetime) -> list[ExternalSignal]:
-        if not llm.is_mock():
-            live_signals = self._fetch_live(countries)
-            if live_signals:
-                return live_signals
-        return self._mock_signals(countries)
+        if llm.is_mock():
+            return self._mock_signals(countries)
+        # A real search can return no relevant market. Offline examples belong to a replay.
+        return self._fetch_live(countries, reference_now)
 
-    def _fetch_live(self, countries: set[str]) -> list[ExternalSignal]:
-        signals: list[ExternalSignal] = []
-        seen_slugs: set[str] = set()
+    def _fetch_live(self, countries: set[str], reference_now: datetime) -> list[ExternalSignal]:
+        signals = []
+        seen = set()
         for tag in ("geopolitics", "economy"):
-            events_data = _cached_get_json(
-                POLYMARKET_EVENTS_URL,
-                {
-                    "active": "true",
-                    "closed": "false",
-                    "tag_slug": tag,
-                    "limit": 20,
-                    "order": "volume24hr",
-                    "ascending": "false",
-                },
-            )
-            if not isinstance(events_data, list):
+            events = _cached_get_json(POLYMARKET_EVENTS_URL, {
+                "active": "true", "closed": "false", "tag_slug": tag,
+                "limit": 20, "order": "volume24hr", "ascending": "false",
+            })
+            if not isinstance(events, list):
                 continue
-            for ev in events_data:
-                if not isinstance(ev, dict):
+            for event in events:
+                if not isinstance(event, dict) or not event.get("slug") or event["slug"] in seen:
                     continue
-                slug = str(ev.get("slug") or ev.get("id") or "")
-                if not slug or slug in seen_slugs:
-                    continue
-                markets = [m for m in (ev.get("markets") or []) if isinstance(m, dict) and not m.get("closed")]
-                if not markets:
-                    # Support flat market objects as well (e.g. unit tests)
-                    if ev.get("question"):
-                        markets = [ev]
-                    else:
+                # A group can include closed or non-binary questions. One relevant question per event
+                # keeps correlated dates and thresholds from filling both scoring slots.
+                for market in event.get("markets") or [event]:
+                    if not isinstance(market, dict):
                         continue
-                mkt = markets[0]
-                question = str(mkt.get("question") or ev.get("title") or "").strip()
-                if not question:
-                    continue
-                yes_prob = _extract_yes_prob(mkt)
-                if yes_prob is None:
-                    continue
-                q_low = question.lower()
-                if any(sk in q_low for sk in _SKIP_PHRASES):
-                    continue
-                is_relief = any(ph in q_low for ph in _RELIEF_PHRASES)
-                risk_prob = (1.0 - yes_prob) if is_relief else yes_prob
-                if risk_prob < 0.10:
-                    continue
-                for keywords, rule_countries, tags in _POLYMARKET_RULES:
-                    hit_countries = [c for c in rule_countries if not countries or c in countries]
-                    if not hit_countries:
-                        continue
-                    if any(kw in q_low for kw in keywords):
-                        seen_slugs.add(slug)
-                        if is_relief:
-                            summary = (
-                                f"Polymarket {risk_prob * 100:.0f}% odds disruption persists "
-                                f"(only {yes_prob * 100:.0f}% chance of recovery): {question}"
-                            )
-                        else:
-                            summary = f"Polymarket odds {risk_prob * 100:.0f}%: {question}"
-                        signals.append(ExternalSignal(
-                            provider=self.name,
-                            category="external_politics",
-                            title=question,
-                            score_0_100=round(risk_prob * 100.0, 1),
-                            summary=summary,
-                            countries=hit_countries,
-                            tags=list(tags),
-                            source_url=f"https://polymarket.com/event/{slug}",
-                            quote=f"Yes={yes_prob * 100:.1f}%, risk_implied={risk_prob * 100:.1f}% (live Polymarket Gamma API)",
-                            observed_at=mkt.get("updatedAt") or None,
-                            live=True,
-                        ))
+                    signal = _market_signal(market, event, countries, reference_now)
+                    if signal:
+                        seen.add(event["slug"])
+                        signals.append(signal)
                         break
                 if len(signals) >= 12:
-                    break
+                    return signals
         return signals
 
     def _mock_signals(self, countries: set[str]) -> list[ExternalSignal]:
@@ -365,6 +384,7 @@ class PolymarketProvider:
                 tags=list(m["tags"]),
                 source_url=f"https://polymarket.com/event/{m['slug']}",
                 quote=f"Yes={prob * 100:.0f}% (offline Polymarket snapshot)",
+                market=dict(yes_pct=round(prob * 100, 1), disruption_outcome="Yes", question_id=None, closes_at=None),
                 live=False,
             ))
         return signals
@@ -563,7 +583,7 @@ class PoliticalNewsProvider:
     def _fetch_google_news(self, countries: set[str]) -> list[ExternalSignal]:
         signals: list[ExternalSignal] = []
         for code in sorted(countries):
-            cname = _COUNTRY_NAMES.get(code)
+            cname = country_name(code)
             if not cname:
                 continue
             query = f'"{cname}" (tariffs OR "export controls" OR "port strike" OR sanctions OR "supply chain")'
@@ -885,12 +905,7 @@ class RegulationChangeProvider:
                     if not title:
                         continue
                     # Match any supplier country mentioned in the WTO notice
-                    matched_codes = []
-                    for c in sorted(countries or _COUNTRY_REGULATORS):
-                        name = _COUNTRY_REGULATORS.get(c, (_COUNTRY_NAMES.get(c), ""))[0]
-                        if ((name and re.search(r"\b" + re.escape(name) + r"\b", title, re.I))
-                                or re.search(r"\(" + re.escape(c) + r"\)", title)):
-                            matched_codes.append(c)
+                    matched_codes = named_countries(title, countries or _COUNTRY_REGULATORS)
                     if matched_codes or any(k in t_low for k in ("tariff", "anti-dumping", "export", "trade barrier", "dispute")):
                         signals.append(ExternalSignal(
                             provider=self.name,
@@ -913,7 +928,7 @@ class RegulationChangeProvider:
         # 5d. Dynamic per-country regulatory watch for EVERY active supplier country (CN, KR, IN, PL, DE, US, or any new country)
         for code in sorted(countries):
             cname, reg_terms = _COUNTRY_REGULATORS.get(
-                code, (code, '"export control" OR "customs tariff" OR "trade regulation" OR "import restriction"')
+                code, (country_name(code) or code, '"export control" OR "customs tariff" OR "trade regulation" OR "import restriction"')
             )
             query = f'"{cname}" ({reg_terms})'
             rss_xml = _cached_get_text(

@@ -115,6 +115,10 @@ export interface SampleWindow {
   days_between: number; source: string;
 }
 
+export interface MarketObservation {
+  yes_pct: number; disruption_outcome: 'Yes' | 'No'; question_id: string | null; closes_at: string | null; scope_basis?: string;
+}
+
 export interface SupplyExposure {
   supplier: string;
   /** Last stored grades for the named supplier, sourced material and products connected by the effective BOM. */
@@ -148,7 +152,7 @@ export interface SupplyExposure {
   other_drivers?: {factor: string; points: number}[];
   signals: {factor: string; text: string; points: number; sources: {
     evidence: Evidence; origin: string; title?: string; published: string | null;
-    provider?: string; scope?: string; observed_at?: string | null;
+    provider?: string; scope?: string; observed_at?: string | null; market?: MarketObservation | null;
   }[]}[];
 }
 
@@ -207,6 +211,7 @@ export interface DecisionCard {
 
 /** A ranked, actionable option and every source card supporting it. */
 export interface BuyerQueueEntry {
+  latest_grade_change?: {supplier: string; previous: string; current: string; run_id: string; trace_id: number};
   tracking_signal?: {supplier_rating: string; title: string; text: string; observed_at: string | null;
     evidence: Evidence; same_shipment_source: boolean; selected_for_rating: boolean};
   freight_comparison?: {
@@ -255,7 +260,7 @@ export interface RiskScore {
     shipment_ids: string[]; title: string; summary: string; evidence: Evidence; observed_at: string | null; selected_for_rating: boolean;
   }[]; signal_inputs?: Record<string, {
     provider: string; title: string; summary: string; evidence: Evidence; live: boolean; scope: string;
-    published: string | null; observed_at: string | null; shipment_ids?: string[];
+    published: string | null; observed_at: string | null; shipment_ids?: string[]; market?: MarketObservation;
   }[]> }[];
   computed_at: string;
 }
@@ -280,6 +285,9 @@ export interface AgentLogEntry {
   evidence: Evidence[];
   data: Record<string, unknown>;
 }
+
+/** Values used in the buyer's activity lanes. Full evidence remains at /api/trace?trace_id=. */
+export type BuyerActivity = Pick<AgentLogEntry, 'id' | 'run_id' | 'ts' | 'agent' | 'action' | 'detail' | 'data'>;
 
 export interface OutboxMessage {
   id: number;
@@ -328,6 +336,12 @@ export interface FieldChange {
 }
 
 export interface InboxMessage {
+  /** First projection in the acceptance run that cites this message, by product. */
+  forecast_at_confirmation?: {
+    product_id: string; edition: string; forecast_id: number; projected_packed: number | null; shortfall: number | null;
+    change_from_previous: number | null; joint_confirmations: number; dock_released: boolean | null;
+    recorded_at: string; trace_id: number; run_id: string;
+  }[];
   id: number;
   supplier_id: string;
   outbox_id: number | null;
@@ -423,23 +437,24 @@ export const API_ROUTES = {
   DROPS: '/api/drops', // GET
   ISSUES: '/api/issues', // GET ?status= -> Issue[]
   CONFLICTS: '/api/conflicts', // GET
-  FORECAST: '/api/forecast', // GET -> Forecast[]
+  FORECAST: '/api/forecast', // GET -> Forecast[]; ?current=true -> compact latest projection per product
   ISSUE: '/api/issues/:id', // GET -> Issue
   DECISION: '/api/decisions/:id', // GET -> DecisionCard
   SAMPLE_WINDOW: '/api/decisions/:id/sample-window', // GET ?requested_on=YYYY-MM-DD&option= -> SampleWindow, read-only comparison
   DECISION_HISTORY: '/api/decisions/:id/history', // GET ?option= -> DecisionHistory, including the request that supplied a priced quote
   DECISION_SOURCE: '/api/decisions/:id/evidence/:index', // GET -> DecisionSource, index in the stored card evidence
   BUYER_QUEUE: '/api/buyer-queue', // GET -> BuyerQueueEntry[] in execution priority order
-  DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
+  DECISIONS: '/api/decisions', // GET ?status= or ?for_buyer=true (current decisions and follow-up records)
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
   DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest, an assigned signer can decline the recommendation
   TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]
+  BUYER_ACTIVITY: '/api/buyer-activity', // GET -> BuyerActivity[]; latest 400 steps without document payloads
   RISK: '/api/risk', // GET -> RiskScore[]; ?current=true selects the latest grade per entity before ranking
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)
   CHANGES: '/api/changes', // GET ?table= -> FieldChange[] (change log of the source of truth)
-  INBOX: '/api/inbox', // GET -> InboxMessage[]; POST ReplyRequest -> feeds a supplier reply into the loop
+  INBOX: '/api/inbox', // GET ?with_forecast=true adds linked historical outcomes; POST records a supplier reply
   TRUTH: '/api/truth', // GET -> TruthTableInfo[] (clean data tables built by Watcher + Ingest, with row counts)
   TRUTH_ROWS: '/api/truth/:table', // GET ?limit=&q= -> rows of one data table (source = first file, last_source = file that changed it last)
 } as const;

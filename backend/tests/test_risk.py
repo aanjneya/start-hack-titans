@@ -146,6 +146,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
                         "slug": "strait-of-hormuz-traffic-returns-to-normal",
                         "markets": [{
                             "question": "Strait of Hormuz traffic returns to normal by December 31?",
+                            "outcomes": '["Yes","No"]',
                             "outcomePrices": '["0.03", "0.97"]',
                             "closed": False,
                         }],
@@ -154,7 +155,8 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
                         "slug": "will-china-invade-taiwan-before-2027",
                         "markets": [{
                             "question": "Will China invade Taiwan by end of 2026?",
-                            "outcomePrices": '["0.02", "0.98"]',
+                            "outcomes": ["No", "Yes"],
+                            "outcomePrices": '["0.98", "0.02"]',
                             "closed": False,
                         }],
                     },
@@ -162,6 +164,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
                         "slug": "us-china-rare-earth-tariff-escalation",
                         "markets": [{
                             "question": "Will China restrict rare earth exports to EU/US in 2026?",
+                            "outcomes": ["Yes", "No"],
                             "outcomePrices": '["0.81", "0.19"]',
                             "closed": False,
                         }],
@@ -202,6 +205,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
     by_title = {s.title: s for s in poly_sigs}
     # Relief question inverted: 3% Yes -> 97% disruption score
     assert by_title["Strait of Hormuz traffic returns to normal by December 31?"].score_0_100 == 97.0
+    assert by_title["Strait of Hormuz traffic returns to normal by December 31?"].market["disruption_outcome"] == "No"
     # Disruption question NOT inverted: 81% Yes -> 81% risk score; 2% invasion filtered out (<10%)
     assert by_title["Will China restrict rare earth exports to EU/US in 2026?"].score_0_100 == 81.0
     assert "Will China invade Taiwan by end of 2026?" not in by_title
@@ -366,3 +370,42 @@ def test_current_ratings_survive_more_than_one_page_of_older_alerts():
     current = TestClient(app).get("/api/risk?current=true").json()["data"]
     assert [(r["entity_type"], r["entity_id"], r["rating"]) for r in current] == [
         ("part", "S", "BBB"), ("supplier", "S", "AA")]
+
+
+def test_live_market_binds_named_outcome_country_and_active_question(monkeypatch):
+    monkeypatch.setattr(risk_signals.llm, "is_mock", lambda: False)
+    now = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    market = dict(question="Will Canada increase export tariffs?", outcomes='["No","Yes"]',
+                  outcomePrices='["0.19","0.81"]', id="Q-7", endDate="2026-12-02T10:00:00Z")
+    rows = [dict(slug="group", markets=[
+        dict(market, question="Who won the football match?", outcomes=["Red", "Blue"]),
+        dict(market, endDate="2026-11-20T10:00:00Z"), market, dict(market, id="later-threshold")])]
+    monkeypatch.setattr(risk_signals, "_cached_get_json", lambda *a, **k: rows)
+    def collect(countries):
+        return PolymarketProvider().fetch(countries=countries, ports={}, shipments=[], documents=[], reference_now=now)
+    signal, = collect({"CA", "CN"})
+    assert signal.countries == ["CA"] and signal.score_0_100 == 81
+    assert signal.market == dict(yes_pct=81.0, disruption_outcome="Yes", question_id="Q-7",
+                                 closes_at=market["endDate"], scope_basis="Country named in the question")
+    assert signal.rating_input("CA", set(), set())["market"] == signal.market
+    assert collect({"CN"}) == []
+    for invalid in [dict(market, outcomes=None), dict(market, outcomes=["No", "No"]),
+                    dict(market, outcomePrices=None, bestBid=.9), dict(market, closed=True),
+                    dict(market, outcomePrices='["0","nan"]')]:
+        rows[0]["markets"] = [invalid]
+        assert collect({"CA"}) == []
+    rows.clear()
+    assert not collect({"CA"})
+
+
+def test_new_supplier_country_is_used_by_name_in_public_news_search(monkeypatch):
+    queries = []
+    def search(url, params=None):
+        if params and "q" in params:
+            queries.append(params["q"])
+        return "<rss><channel/></rss>"
+    monkeypatch.setattr(risk_signals, "_cached_get_text", search)
+    monkeypatch.setattr(risk_signals, "_cached_get_json", lambda *a, **k: {})
+    PoliticalNewsProvider()._fetch_google_news({"PT"})
+    RegulationChangeProvider()._fetch_live({"PT"})
+    assert len(queries) == 2 and all('"Portugal"' in q for q in queries)

@@ -139,7 +139,7 @@ function AgentRoster({
                 className={cn(
                   "h-8 rounded-full border px-3 text-xs font-medium outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none",
                   filter === k
-                    ? "border-foreground bg-foreground text-background"
+                    ? "border-primary bg-primary text-primary-foreground"
                     : "hover:bg-accent",
                 )}
               >
@@ -238,10 +238,10 @@ function AgentRoster({
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-valuenow={Math.round(a.load)}
-                        className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary"
+                        className="h-1.5 flex-1 overflow-hidden rounded-full bg-border"
                       >
                         <span
-                          className="block h-full rounded-full bg-foreground"
+                          className="block h-full rounded-full bg-primary"
                           style={{
                             width: `${Math.min(100, Math.max(0, a.load))}%`,
                           }}

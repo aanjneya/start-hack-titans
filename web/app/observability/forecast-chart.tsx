@@ -24,7 +24,7 @@ const hourLabel = (ts: string, withDay: boolean) =>
   parseTs(ts)?.toLocaleString("en-GB", {
     ...(withDay ? { weekday: "short" as const } : {}), hour: "2-digit", minute: "2-digit", timeZone: TZ,
   }) ?? "";
-const compact = (v: number) => (Math.abs(v) >= 1000 ? `${fmt(Math.round(v / 1000))}k` : fmt(v));
+const textW = (text: string, size: number) => text.length * size * 0.56; // rough width of a label in SVG units
 
 function niceStep(raw: number) {
   const p = 10 ** Math.floor(Math.log10(Math.max(raw, 1)));
@@ -48,52 +48,74 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
     cumulative.push(next);
     return next;
   }, start);
-  // The line stops from the first hour after which nothing more gets packed.
+  const short = forecast.shortfall ?? 0;
+  // Packing ends after the last hour that still packs. That is a stop only while orders are left: an edition that
+  // finishes early also ends in empty hours.
   let stop = hours.length;
   while (stop > 0 && !(Number(hours[stop - 1].copies) > 0)) stop -= 1;
-  const stops = stop < hours.length;
-  const short = forecast.shortfall ?? 0;
+  const stops = stop < hours.length && short > 0;
+  const lastAt = stop > 0 ? hourLabel(hours[stop - 1].to, true) : "";
 
   // Geometry (SVG units; the chart scales to its card).
-  const W = 560, H = 250, L = 44, R = 12, T = 30, B = 28;
+  const W = 560, H = 256, L = 46, R = 12, T = 30, B = 30;
   const PW = W - L - R, PH = H - T - B;
   const top = Math.max(target ?? 0, projected);
-  const step = niceStep((top - start) / 2);
+  const step = niceStep(Math.max((top - start) / 2, top * 0.02, 1));
   const y0 = Math.floor(start / step) * step;
   const y1 = Math.max(Math.ceil(top / step) * step, y0 + step);
   const ticks: number[] = [];
   for (let v = y0; v <= y1 + 1e-6; v += step) ticks.push(v);
+  // Tick labels in thousands with as many decimals as the step needs (52.5k, 55k, 57.5k), so none repeat.
+  const decimals = step >= 1000 ? (step % 1000 === 0 ? 0 : step % 100 === 0 ? 1 : 2) : 0;
+  const tick = (v: number) => (step >= 1000 || v >= 10000
+    ? `${(v / 1000).toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: Math.max(decimals, step < 1000 ? 1 : 0) })}k`
+    : fmt(v));
   const slot = PW / hours.length;
   const x = (i: number) => L + slot * i + slot / 2;
   const y = (v: number) => T + (1 - (v - y0) / (y1 - y0)) * PH;
   const barW = Math.max(2, slot * 0.62);
   const stopX = L + slot * stop;
+
+  // X labels: every new day ("Sun 06:00") unless the next day starts right after it; hours in between keep clear.
   const labelEvery = Math.max(1, Math.round(hours.length / 6));
+  const gap = Math.max(2, Math.ceil(labelEvery * 0.75));
   const days = hours.map((h) => hourLabel(h.from, true).split(" ")[0]);
-  // Every new day gets a label ("Sun 06:00"); regular hour labels keep clear of it so they never overlap.
-  const dayStarts = hours.map((_, i) => i).filter((i) => i === 0 || days[i] !== days[i - 1]);
-  const gap = Math.ceil(labelEvery * 0.75);
+  const starts = hours.map((_, i) => i).filter((i) => i === 0 || days[i] !== days[i - 1]);
+  const dayStarts = starts.filter((d, k) => k === starts.length - 1 || starts[k + 1] - d >= gap);
   const labelled = hours.map((_, i) => dayStarts.includes(i)
     || (i % labelEvery === 0 && dayStarts.every((d) => Math.abs(i - d) >= gap)));
 
-  const stopAt = stops && stop > 0 ? hourLabel(hours[stop - 1].to, true) : stops ? hourLabel(hours[0].from, true) : "";
-  const status = !stops && short <= 0 ? "on track to pack every order"
-    : stops ? `line stops ${stopAt} · ${fmt(short)} short` : `${fmt(short)} short by close`;
+  // Annotations, kept inside the plot and off each other.
+  const markText = `last copies ${lastAt}`;
+  const markLeft = stopX - L - 8 >= textW(markText, 13);
+  const shortText = `${fmt(short)} short`;
+  const shortW = textW(shortText, 17);
+  const shortX = stops
+    ? Math.min(L + PW - shortW / 2 - 4, Math.max(stopX + shortW / 2 + 8, (stopX + L + PW) / 2))
+    : L + PW - shortW / 2 - 4;
+  const between = target != null ? y(target) : y(projected);
+  const roomy = y(projected) - between >= 34;
+  const shortY = roomy ? (y(projected) + between) / 2 + 6 : Math.min(T + PH - 8, y(projected) + 22);
+  const dots = [...new Set([Math.max(0, stop - 1), Math.round((stop + hours.length - 1) / 2), hours.length - 1])];
+
+  const status = stops ? `last copies packed ${lastAt} · ${fmt(short)} short`
+    : short > 0 ? `${fmt(short)} short by close`
+      : stop === 0 ? "nothing left to pack" : stop < hours.length ? `every order packed by ${lastAt}` : "on track to pack every order";
 
   return (
     <section className="overflow-hidden rounded-xl border bg-surface" style={{ borderColor: C.border }}>
-      <div className="flex items-baseline justify-between gap-3 border-b px-5 py-3.5" style={{ borderColor: C.rule }}>
-        <h3 className="min-w-0 truncate text-[17px] font-semibold" style={{ color: C.title }}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b px-5 py-3.5" style={{ borderColor: C.rule }}>
+        <h3 className="min-w-0 text-balance text-[17px] font-semibold" style={{ color: C.title }}>
           {forecast.edition} edition · packing forecast
         </h3>
         <span className="shrink-0 text-sm" style={{ color: C.label }}>copies packed</span>
       </div>
-      <div className="flex items-center justify-between gap-3 border-b px-5 py-2.5" style={{ borderColor: C.rule }}>
-        <p className="flex min-w-0 items-center gap-2 text-[15px]" style={{ color: C.title }}>
-          <Orbit aria-hidden className="size-4 shrink-0" style={{ color: C.forecast }} />
-          <span className="truncate">Forecast ready: {status}</span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b px-5 py-2.5" style={{ borderColor: C.rule }}>
+        <p className="flex min-w-0 items-start gap-2 text-[15px]" style={{ color: C.title }}>
+          <Orbit aria-hidden className="mt-1 size-4 shrink-0" style={{ color: C.forecast }} />
+          <span className="text-pretty">Forecast ready: {status}</span>
         </p>
-        <span className="shrink-0 text-sm tabular" style={{ color: "#a6adba" }}>{ago(forecast.computed_at, now)}</span>
+        <span className="shrink-0 text-sm tabular" style={{ color: C.label }}>{ago(forecast.computed_at, now)}</span>
       </div>
 
       {/* On a phone the chart keeps a readable size and scrolls sideways inside its card. */}
@@ -103,14 +125,14 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
           className="h-auto w-full min-w-[440px]"
           role="img"
           aria-label={`${forecast.edition}: ${fmt(start)} packed at the snapshot, ${fmt(projected)} by close${
-            target != null ? ` of ${fmt(target)} ordered` : ""}${stops ? `, packing stops ${stopAt}` : ""}.`}
+            target != null ? ` of ${fmt(target)} ordered` : ""}${stops ? `, last copies packed ${lastAt}` : ""}.`}
         >
           {/* Hours after the line stops. */}
           {stops && <rect x={stopX} y={T} width={L + PW - stopX} height={PH} fill={C.shade} />}
           {ticks.map((v) => (
             <g key={v}>
               <line x1={L} x2={L + PW} y1={y(v)} y2={y(v)} stroke={C.rule} />
-              <text x={L - 8} y={y(v) + 4} textAnchor="end" fontSize="12" fill={C.faint}>{compact(v)}</text>
+              <text x={L - 8} y={y(v) + 4} textAnchor="end" fontSize="13" fill={C.label}>{tick(v)}</text>
             </g>
           ))}
           {/* Copies packed by the end of each hour while the line runs. */}
@@ -123,6 +145,13 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
               fill="none" stroke={C.trend} strokeWidth="1.6"
             />
           )}
+          {target != null && (
+            <>
+              <line x1={L} x2={L + PW} y1={y(target)} y2={y(target)} stroke={C.faint} strokeWidth="1.6" strokeDasharray="2 5" strokeLinecap="round" />
+              <text x={L + PW} y={y(target) - 7} textAnchor="end" fontSize="13" fill={C.label}
+                stroke="#fff" strokeWidth="4" paintOrder="stroke" strokeLinejoin="round">orders to pack {fmt(target)}</text>
+            </>
+          )}
           {/* After the stop the forecast stays flat: the copies that will not be packed. */}
           {stops && (
             <>
@@ -130,35 +159,28 @@ export function ForecastChart({ forecast, now }: { forecast: Forecast; now: numb
                 points={[`${x(Math.max(0, stop - 1))},${y(cumulative[Math.max(0, stop - 1)])}`, `${x(hours.length - 1)},${y(projected)}`].join(" ")}
                 fill="none" stroke={C.forecast} strokeWidth="2.4"
               />
-              {[Math.max(0, stop - 1), Math.round((stop + hours.length - 1) / 2), hours.length - 1].map((i) => (
+              {dots.map((i) => (
                 <circle key={i} cx={x(i)} cy={y(cumulative[i])} r="4" fill={C.forecast} />
               ))}
               <line x1={stopX} x2={stopX} y1={T - 6} y2={T + PH} stroke={C.faint} strokeDasharray="3 4" />
-              <text x={stopX - 6} y={T + 8} textAnchor="end" fontSize="12.5" fill={C.faint}>line stops</text>
-            </>
-          )}
-          {target != null && (
-            <>
-              <line x1={L} x2={L + PW} y1={y(target)} y2={y(target)} stroke={C.faint} strokeWidth="1.6" strokeDasharray="2 5" strokeLinecap="round" />
-              <text x={L + PW} y={y(target) - 7} textAnchor="end" fontSize="12.5" fill={C.faint}>orders to pack {compact(target)}</text>
+              <text x={markLeft ? stopX - 6 : stopX + 6} y={T + PH - 8} textAnchor={markLeft ? "end" : "start"} fontSize="13"
+                fill={C.label} stroke={markLeft ? "#fff" : C.shade} strokeWidth="4" paintOrder="stroke" strokeLinejoin="round">
+                {markText}
+              </text>
             </>
           )}
           {short > 0 && (
-            <text
-              x={stops ? (stopX + L + PW) / 2 : L + PW - 4}
-              y={Math.max(T + 26, (y(projected) + (target != null ? y(target) : y(projected))) / 2 + 5)}
-              textAnchor={stops ? "middle" : "end"} fontSize="16" fontWeight="700" fill={C.forecast}
-            >
-              {fmt(short)} short
+            <text x={shortX} y={shortY} textAnchor="middle" fontSize="17" fontWeight="700" fill={C.forecast}
+              stroke={stops ? C.shade : "#fff"} strokeWidth="4" paintOrder="stroke" strokeLinejoin="round">
+              {shortText}
             </text>
           )}
           <line x1={L} x2={L + PW} y1={T + PH} y2={T + PH} stroke={C.axis} />
           {hours.map((h, i) => {
-            const newDay = dayStarts.includes(i);
             if (!labelled[i]) return null;
             return (
-              <text key={h.from} x={x(i)} y={H - 8} textAnchor="middle" fontSize="12" fill={C.label}>
-                {hourLabel(h.from, newDay)}
+              <text key={h.from} x={x(i)} y={H - 9} textAnchor="middle" fontSize="13" fill={C.label}>
+                {hourLabel(h.from, dayStarts.includes(i))}
               </text>
             );
           })}

@@ -13,7 +13,6 @@ import {
   PlannerReport, ReconcilerReport, RiskRaterReport, WatcherReport,
 } from "./agent-reports";
 import { AgentWorkspace } from "./workspace/agent-workspace";
-import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
 
 const VALID_IDS = new Set<string>(AGENT_NAV.map((a) => a.id));
 
@@ -98,7 +97,6 @@ export default function ObservabilityDashboard() {
   }, [snap.trace]);
 
   const activeMeta = agentMeta(selectedId);
-  const mock = snap.health?.mockMode ?? true;
 
   return (
     <div className="flex min-h-screen text-ink">
@@ -112,8 +110,8 @@ export default function ObservabilityDashboard() {
         <div className="hidden items-center justify-between gap-2 border-b border-rule px-3 py-4 md:flex">
           {!collapsed && (
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold leading-tight">AI Observability</p>
-              <p className="truncate text-[11px] text-muted">6 agents + human gate</p>
+              <p className="truncate text-sm font-bold leading-tight">AI agents</p>
+              <p className="truncate text-[11px] text-muted">A team of 6 agents + you</p>
             </div>
           )}
           <button
@@ -213,25 +211,12 @@ export default function ObservabilityDashboard() {
               {activeMeta.icon}
             </span>
             <div className="min-w-0">
-              {/* Redrawn for every agent you open. */}
-              <HandWrittenTitle
-                key={selectedId}
-                className="mx-0 -ml-4 w-auto max-w-none px-12 py-5"
-                titleClassName="text-2xl font-bold leading-tight tracking-tight md:text-2xl"
-                title={activeMeta.name}
-                subtitle={null}
-              />
-              <p className="-mt-2 text-sm text-muted">{activeMeta.role}</p>
+              <h1 className="text-2xl font-bold leading-tight">{activeMeta.name}</h1>
+              <p className="text-sm text-muted">{activeMeta.role}</p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <span
-              title={mock ? "MOCK_MODE=true: offline deterministic mode" : "Live: real external feeds & AI calls"}
-              className={`rounded px-2 py-1 text-xs font-bold ${mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
-            >
-              {mock ? "Mock mode" : "Live"}
-            </span>
             <span className="flex items-center gap-1.5 text-sm text-muted">
               <span
                 aria-hidden

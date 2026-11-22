@@ -35,3 +35,6 @@ Start the API with `backend/.venv/bin/python -m backend.planner_demo --serve-soo
 - **Q&A Weapon #1 — "Why wire Polymarket / Open-Meteo / global regulations?" (Pre-Emptive Chasing):** Point to **Predictive Pre-Emptive Chasing** — live external feed spikes match active supplier corridors **24–72h before SAP shows a delay**, staging localized (`PL`/`KO`/`ZH`/`DE`) + English check-ins behind anti-spam & human gates (`POST /api/risk/preemptive-chase`).
 - **Q&A Weapon #2 — "How do you fix single-source risk after the weekend?" (2nd-Source Scout):** Click **Scout 2nd Sources →** on any single-source `CCC` part (`CMP-GAM-010`, `CMP-MAG-005`) — excludes embargoed origins (`CN`/`IN`), ranks safe corridors (`DE`/`PL`/`JP`) via live feeds, proves simulated `70/30` **`CCC → A`** recovery, and copies a spec-grounded RFQ in 1 click.
 - **Q&A Weapon #3 — "What stops an autonomous AI from ordering from a failing vendor?" (Circuit Breakers):** Point to **Risk-Triggered Circuit Breakers** — config-driven Grade 5 (`B`) / Grade 6 (`CCC`) rules automatically lock `Control` mode, freeze unattended auto-POs, upgrade dock QC to `100% AQL`, and shift dual-source volume to the healthy alternate supplier (all logged to `/observability`).
+
+## Demo video
+The 1:55 standalone video script, click plan and recording steps are in `DEMO_VIDEO_SCRIPT.md` (repo root).

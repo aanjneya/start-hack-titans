@@ -304,7 +304,7 @@ export function SheetHeader({
                   }}
                   className={cn(
                     "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm outline-none hover:bg-secondary focus-visible:bg-secondary",
-                    v.id === view && "font-semibold text-primary",
+                    v.id === view && "font-semibold text-act",
                   )}
                 >
                   {v.label}

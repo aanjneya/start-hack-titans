@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { BackgroundBeams } from "@/components/ui/background-beams";
 import "./globals.css";
 
 // One family; the width axis gives the condensed "shipping label" numbers.
@@ -17,11 +16,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${archivo.variable} h-full antialiased`}>
-      <body className="min-h-full">
-        {/* The animated beams sit behind every page; content scrolls over them. */}
-        <BackgroundBeams className="fixed" />
-        <div className="relative z-10 min-h-full">{children}</div>
-      </body>
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }

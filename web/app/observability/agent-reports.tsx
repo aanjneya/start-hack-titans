@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AgentRoster } from "@/components/ui/agent-roster";
 import {
-  ago, clock, eur, fmt,
+  ago, clock, eur, fmt, getData,
   type AgentLogEntry, type Conflict, type Evidence, type ExtendedRiskReason,
   type Forecast, type ObservabilitySnapshot, type RiskScore,
 } from "@/lib/api";
@@ -12,6 +12,7 @@ import {
 } from "./agent-meta";
 import RiskPlaybook from "../risk-playbook";
 import { ForecastPanel } from "./forecast-chart";
+import { GRADE_COLOR, plainRisks, RiskCard } from "./risk-cards";
 import { buildRosterAgents, plural } from "./roster";
 
 // ---------------------------------------------------------------------------
@@ -280,8 +281,8 @@ export function IngestReport({ snap }: { snap: ObservabilitySnapshot }) {
       <StackedBar
         title="Changes by type"
         segments={[
-          { label: "Filled empty fields", count: fills, color: "#2f7a4d" },
-          { label: "Corrected values", count: overwrites, color: "#1d5fb4" },
+          { label: "Filled empty fields", count: fills, color: "var(--color-ok)" },
+          { label: "Corrected values", count: overwrites, color: "var(--primary)" },
         ]}
       />
 
@@ -370,9 +371,9 @@ export function ReconcilerReport({ snap }: { snap: ObservabilitySnapshot }) {
         <StackedBar
           title="Where each finding went"
           segments={[
-            { label: "Planner · copies at risk", count: byKind.copies_at_risk, color: "#127a7a" },
-            { label: "Chaser · missing info", count: byKind.missing_info, color: "#2f7a4d" },
-            { label: "Human check · fraud, big jumps", count: byKind.human_check, color: "#16213a" },
+            { label: "Planner · copies at risk", count: byKind.copies_at_risk, color: "var(--color-act)" },
+            { label: "Chaser · missing info", count: byKind.missing_info, color: "var(--accent)" },
+            { label: "Human check · fraud, big jumps", count: byKind.human_check, color: "var(--color-muted)" },
           ]}
         />
       </div>
@@ -475,10 +476,10 @@ export function ChaserReport({ snap }: { snap: ObservabilitySnapshot }) {
       <StackedBar
         title="Supplier emails"
         segments={[
-          { label: "Replied", count: replied, color: "#2f7a4d" },
-          { label: "Waiting for reply", count: Math.max(0, sent - replied), color: "#1d5fb4" },
-          { label: "Not sent yet", count: pending, color: "#a86a12" },
-          { label: "Escalated", count: escalated, color: "#b3261e" },
+          { label: "Replied", count: replied, color: "var(--color-ok)" },
+          { label: "Waiting for reply", count: Math.max(0, sent - replied), color: "var(--primary)" },
+          { label: "Not sent yet", count: pending, color: "var(--color-warn)" },
+          { label: "Escalated", count: escalated, color: "var(--color-stop)" },
         ]}
       />
 
@@ -617,10 +618,30 @@ export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Risk Rater Report (3-Tier Moody's + 5 Live External Feeds)
+// 7. Risk Rater Report (ratings AAA-CCC for editions, parts and suppliers, plus outside feeds)
 // ---------------------------------------------------------------------------
 export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
+  const mock = snap.health?.mockMode ?? true;
   const [filter, setFilter] = useState<"all" | "product" | "supplier" | "part">("all");
+  const [names, setNames] = useState<Record<string, string>>({});
+
+  // Supplier and part names for the cards (best effort; the cards fall back to ids).
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      getData<{ component_id: string; description: string }[]>("/api/truth/materials").catch(() => []),
+      getData<{ supplier_id: string; name: string }[]>("/api/truth/suppliers").catch(() => []),
+    ]).then(([materials, suppliers]) => {
+      if (!alive) return;
+      setNames(Object.fromEntries([
+        ...materials.map((m) => [m.component_id, m.description.split(" – ")[0]] as const),
+        ...suppliers.map((x) => [x.supplier_id, x.name] as const),
+      ]));
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const latest = useMemo(() => {
     const map = new Map<string, RiskScore>();
@@ -631,120 +652,106 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
     return [...map.values()].sort((a, b) => b.grade - a.grade || a.entity_id.localeCompare(b.entity_id));
   }, [snap.risk]);
 
-  const latestRiskLog = snap.trace.find((e) => e.agent === "risk" && e.action === "risk_rated");
-  const extCounts = (latestRiskLog?.data?.external_signals as Record<string, number> | undefined) ?? {};
+  const editions = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const f of snap.forecast) out[f.product_id] ??= `${f.edition} edition`;
+    return out;
+  }, [snap.forecast]);
+  const cards = useMemo(() => plainRisks(latest, names, editions), [latest, names, editions]);
 
-  const critical = latest.filter((r) => r.grade >= 6).length;
-  const high = latest.filter((r) => r.grade === 5).length;
-  const products = latest.filter((r) => String(r.entity_type) === "product").length;
-  const extTotal = Object.values(extCounts).reduce((a, b) => a + Number(b || 0), 0);
+  const none = latest.length === 0;
+  const at = (type: string) => cards.filter((c) => c.type === type && c.grade >= 5);
+  const riskySuppliers = at("supplier");
+  const riskyParts = at("part");
+  const riskyEditions = at("product");
+  const allSources = [...new Map(cards.flatMap((c) => c.sources).map((x) => [x.key, x])).values()];
+  const soony = allSources.filter((x) => x.kind === "soony").length;
+  const outside = allSources.filter((x) => x.kind === "live" || x.kind === "example").length;
+  const offline = allSources.filter((x) => x.kind === "example").length;
 
-  const visible = latest.filter((r) => filter === "all" || String(r.entity_type) === filter);
+  // What drives supplier risk: the Risk Rater's own score breakdown per supplier, grouped by where the signal comes from.
+  const drivers = { status: 0, approvals: 0, news: 0, markets: 0, rules: 0, route: 0, other: 0 };
+  for (const r of latest.filter((x) => String(x.entity_type) === "supplier")) {
+    const breakdown = ((r.reasons ?? [])[0] as ExtendedRiskReason | undefined)?.breakdown ?? {};
+    for (const [k, v] of Object.entries(breakdown)) {
+      const pts = Number(v) || 0;
+      if (k === "supplier_health") drivers.status += pts;
+      else if (k === "internal_politics") drivers.approvals += pts;
+      else if (k === "trade_news") drivers.news += pts;
+      else if (k === "external_politics") drivers.markets += pts;
+      else if (k === "regulatory_change") drivers.rules += pts;
+      else if (k === "weather" || k === "telemetry" || k === "transport") drivers.route += pts;
+      else drivers.other += pts;
+    }
+  }
+  const sample = mock ? " (offline snapshot)" : "";
+  const grades = [6, 5, 4, 3, 2, 1].map((g) => ({ g, n: latest.filter((r) => r.grade === g).length }));
+  const RATING = ["", "AAA", "AA", "A", "BBB", "B", "CCC"];
+
+  const visible = cards.filter((c) => filter === "all" || c.type === filter);
 
   return (
     <div className="space-y-6">
       <KpiGrid
         items={[
-          { label: "Critical", value: fmt(critical), hint: "Grade CCC · line stop or ban", tone: critical > 0 ? "stop" : "ok" },
-          { label: "High", value: fmt(high), hint: "Grade B · sent to the Planner", tone: high > 0 ? "warn" : "ok" },
-          { label: "Rated", value: `${products} / ${latest.filter((r) => r.entity_type === "part").length} / ${latest.filter((r) => r.entity_type === "supplier").length}`, hint: "Products / parts / suppliers", tone: "act" },
-          { label: "Outside signals", value: fmt(extTotal), hint: Object.keys(extCounts).length ? Object.keys(extCounts).join(" · ") : "None yet", tone: "act" },
+          { label: "High-risk suppliers", value: fmt(riskySuppliers.length),
+            hint: none ? "Not rated yet" : riskySuppliers[0] ? `${riskySuppliers[0].name} rated ${riskySuppliers[0].rating}` : "None rated B or worse",
+            tone: none ? "default" : riskySuppliers.length ? "stop" : "ok" },
+          { label: "Parts at risk", value: fmt(riskyParts.length),
+            hint: none ? "Not rated yet" : `of ${fmt(cards.filter((c) => c.type === "part").length)} parts rated`, tone: none ? "default" : riskyParts.length ? "warn" : "ok" },
+          { label: "Editions at risk", value: fmt(riskyEditions.length),
+            hint: none ? "Not rated yet" : riskyEditions.length ? riskyEditions.map((c) => c.name).join(" · ") : `${fmt(Object.keys(editions).length)} editions on track`,
+            tone: none ? "default" : riskyEditions.length ? "warn" : "ok" },
+          { label: "Sources behind the ratings", value: fmt(soony + outside),
+            hint: none ? "Not rated yet" : `${fmt(soony)} Soony files · ${fmt(outside)} outside feeds${offline ? ` (${fmt(offline)} offline snapshots)` : ""}`, tone: "act" },
         ]}
       />
 
-      {Object.keys(extCounts).length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-rule bg-surface px-4 py-3 text-xs">
-          <span className="font-bold text-ink">Outside signals:</span>
-          {Object.entries(extCounts).map(([name, count]) => (
-            <span key={name} className="rounded bg-act-soft px-2.5 py-1 font-semibold text-act tabular">
-              {name}: {count}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <RiskPlaybook />
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold">Risk ratings ({visible.length})</h2>
-        <div className="flex gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
-          {(["all", "product", "supplier", "part"] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setFilter(k)}
-              className={`rounded-md px-3 py-1 capitalize ${filter === k ? "bg-ink text-white" : "text-muted hover:text-ink"}`}
-            >
-              {k === "all" ? "All tiers" : `${k}s`}
-            </button>
-          ))}
-        </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <StackedBar
+          title="Ratings by grade"
+          segments={grades.filter((x) => x.n > 0).map((x) => ({ label: RATING[x.g], count: x.n, color: GRADE_COLOR[x.g] }))}
+        />
+        <StackedBar
+          title="What drives supplier risk (points)"
+          segments={[
+            { label: "Supplier status and notices", count: Math.round(drivers.status), color: "var(--color-stop)" },
+            { label: "Soony portal news", count: Math.round(drivers.news), color: "var(--primary)" },
+            { label: "Approvals and open checks", count: Math.round(drivers.approvals), color: "var(--color-muted)" },
+            { label: `Weather and satellite tracking`, count: Math.round(drivers.route), color: "var(--accent)" },
+            { label: `Markets (Polymarket${sample})`, count: Math.round(drivers.markets), color: "var(--color-warn)" },
+            { label: `New rules${sample}`, count: Math.round(drivers.rules), color: "color-mix(in srgb, var(--color-warn) 45%, white)" },
+            { label: "Other", count: Math.round(drivers.other), color: "var(--color-rule)" },
+          ].filter((x) => x.count > 0)}
+        />
       </div>
 
-      {visible.length === 0 ? (
-        <EmptyState text="No risk scores computed yet." />
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {visible.map((r) => {
-            const reasons = (r.reasons ?? []) as ExtendedRiskReason[];
-            const score = reasons[0]?.score_0_100 ?? Math.round((r.grade / 6) * 100);
-            const breakdown = reasons[0]?.breakdown ?? {};
-            const barColor = r.grade >= 6 ? "#b3261e" : r.grade >= 5 ? "#a86a12" : r.grade >= 4 ? "#1d5fb4" : "#2f7a4d";
-            return (
-              <details key={`${String(r.entity_type)}-${r.entity_id}`} className="rounded-xl border border-rule bg-surface p-4" open={r.grade >= 5}>
-                <summary className="flex cursor-pointer items-center gap-3 list-none">
-                  <span
-                    className={`flex h-11 w-14 shrink-0 flex-col items-center justify-center rounded-lg font-bold tabular ${
-                      r.grade >= 6 ? "bg-stop text-white" : r.grade >= 5 ? "bg-stop-soft text-stop" : r.grade >= 4 ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"
-                    }`}
-                  >
-                    <span className="text-sm leading-none">{r.rating}</span>
-                    <span className="mt-0.5 text-[10px] opacity-80">{r.grade}/6</span>
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate font-bold text-ink">{r.entity_id}</span>
-                      <span className="text-xs font-semibold text-muted tabular">{Math.round(score)}/100</span>
-                    </div>
-                    <span className="block text-xs uppercase tracking-wide text-muted">{String(r.entity_type)}</span>
-                    <div className="mt-1.5 h-1.5 w-full rounded-full bg-dock" aria-hidden>
-                      <div className="h-1.5 rounded-full" style={{ width: `${Math.min(100, score)}%`, background: barColor }} />
-                    </div>
-                  </div>
-                </summary>
-
-                <div className="mt-3 space-y-2 border-t border-rule pt-3 text-xs">
-                  <p className="font-semibold uppercase tracking-wide text-muted">Top reasons & evidence</p>
-                  {reasons.map((rs, idx) => (
-                    <div key={idx} className="rounded-md bg-dock/60 p-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="font-medium text-ink">{rs.text}</span>
-                        {rs.points != null && rs.points > 0 && (
-                          <span className="shrink-0 rounded bg-surface px-1.5 py-0.5 font-bold text-ink tabular">
-                            +{Math.round(rs.points)} pts
-                          </span>
-                        )}
-                      </div>
-                      {rs.evidence && rs.evidence.length > 0 && <EvidenceList evidence={rs.evidence} />}
-                    </div>
-                  ))}
-                  {Object.keys(breakdown).length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {Object.entries(breakdown)
-                        .filter(([, v]) => v > 0)
-                        .map(([k, v]) => (
-                          <span key={k} className="rounded border border-rule px-2 py-0.5 text-[11px] text-muted tabular">
-                            {k.replaceAll("_", " ")}: <strong className="text-ink">{v}</strong>
-                          </span>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              </details>
-            );
-          })}
+      <section aria-label="Risk ratings">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-bold">Risk ratings ({visible.length})</h2>
+          <div className="flex gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
+            {(["all", "supplier", "part", "product"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setFilter(k)}
+                className={`rounded-md px-3 py-1 ${filter === k ? "bg-primary text-primary-foreground" : "text-muted hover:text-ink"}`}
+              >
+                {k === "all" ? "All" : k === "product" ? "Editions" : `${k[0].toUpperCase()}${k.slice(1)}s`}
+              </button>
+            ))}
+          </div>
         </div>
-      )}
+        {visible.length === 0 ? (
+          <EmptyState text="No risk ratings yet." />
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {visible.map((c) => <RiskCard key={c.key} r={c} />)}
+          </div>
+        )}
+      </section>
+
+      <RiskPlaybook mock={mock} refreshKey={snap.health?.lastRiskCheck?.run_id ?? undefined} />
     </div>
   );
 }

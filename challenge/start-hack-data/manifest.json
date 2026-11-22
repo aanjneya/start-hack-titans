@@ -65,6 +65,12 @@
   "sha256": "f8d29a34916a20df10c58efc6f4affc8cf7dfb868e78cc89b09a8e1eafd3ab3b",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/erp/packout_log.csv"
  },
+ "soony/erp/po_export_2026-11-22.csv": {
+  "bytes": 9627,
+  "path": "soony/erp/po_export_2026-11-22.csv",
+  "sha256": "02d8e75c7539dbc7e7992ac99686b51810bc68e7a875456b48568b0fa1327d06",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/soony/erp/po_export_2026-11-22.csv"
+ },
  "soony/erp/purchase_orders_2025H2-2026.csv": {
   "bytes": 42211,
   "path": "soony/erp/purchase_orders_2025H2-2026.csv",
@@ -604,6 +610,12 @@
   "path": "suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_2022.pdf",
   "sha256": "c304343369c76b741f0f23a5a72375e817bea1a82141cf4cee2e712a3b23d899",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_2022.pdf"
+ },
+ "suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf": {
+  "bytes": 63944,
+  "path": "suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf",
+  "sha256": "74ed2b62b70965545e3da637243ac4ccce208b49f24d08493852d19db0d91f96",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf"
  },
  "suppliers/SUP-0010_Hwaseong_Memory/order_confirmations/OA25124672_4500318565.pdf": {
   "bytes": 63591,
@@ -1558,6 +1570,12 @@
   "path": "suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/OA26979097_4500318706.pdf",
   "sha256": "0f8fdc195d227077cb25b4fa7828798487d5d2ad32ab4103df9533f3576ca5f7",
   "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/OA26979097_4500318706.pdf"
+ },
+ "suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv": {
+  "bytes": 2530,
+  "path": "suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv",
+  "sha256": "61a242fb74ca64cb66bde3580a2947d318450dbe558a6f62a6b54d4b5ad971cb",
+  "url": "https://start-hack-portal-cxh3crbdaef2f8gt.westeurope-01.azurewebsites.net/api/v1/files/suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv"
  },
  "suppliers/SUP-0019_Dongguan_Precision_Housings/profile.csv": {
   "bytes": 447,

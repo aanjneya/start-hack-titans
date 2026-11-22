@@ -5,10 +5,12 @@ Read this before building on portal data: files appear and change without notice
 Full per-check log, reports and every file version: `challenge/start-hack-data/README.md`,
 `challenge/start-hack-data/reports/`, `challenge/start-hack-data/versions/<check>/` (old copies), `challenge/start-hack-data/data/` (current).
 
-**Last check:** 2026-11-22 08-45 Berlin · 332 files, 53.2 MB · no changes
+**Last check:** 2026-11-22 09-23 Berlin · 335 files, 53.3 MB · 3 added · 0 changed · 0 removed
 
 ## Checks with changes (newest first)
 
+- **2026-11-22 09-23** — 3 added · 0 changed · 0 removed: `soony/erp/po_export_2026-11-22.csv`, `suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf`, `suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv`
+  - report: `challenge/start-hack-data/reports/2026-11-22T09-23.md`
 - **2026-11-21 21-38** — 14 added · 0 changed · 0 removed: `soony/erp/goods_receipts_update.csv`, `soony/erp/stock_update_2026-11-21.xlsx`, `soony/receiving/DC-HAM/20260903_DN-260831-382.jpg`, `soony/receiving/DC-HAM/20260903_WZ-260902-594.jpg` …
   - Evening drop: 12 new delivery-note scans, a goods-receipt update and book stock after the late shift. Packed at 20:50: Standard 602,000 (38,000 left), Collector's 60,300 (11,700 left). Book stock shows clear cases CMP-GAM-003 at only 6,000 vs ~38,000 Standard still to pack, while 350,000 cases sit at CTA Hamburg (SHP-2026-04276, ready for pick-up); game cards CMP-GAM-001 at 42,900 vs ~49,700 needed (Hwaseong delivered 28,000 of 48,000, rest after launch). New traps: one pallet booked as GH6 sleeves CMP-GAM-004 holds 4,000 GH5 sleeves; and Art Book book stock 77,800 still includes the 72,000 phantom books from WZ-261116-473, so real stock is ~5,800 vs 11,700 Collector's copies left.
   - report: `challenge/start-hack-data/reports/2026-11-21T21-38.md`

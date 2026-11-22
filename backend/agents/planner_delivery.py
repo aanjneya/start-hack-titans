@@ -8,7 +8,7 @@ from pydantic import AwareDatetime, BaseModel, Field
 from sqlmodel import select
 
 from ..core import trace
-from ..core.models import DecisionCard, InboxMessage, Issue, OrderConfirmation, OutboxMessage, Shipment
+from ..core.models import DecisionCard, Document, InboxMessage, Issue, OrderConfirmation, OutboxMessage, Shipment
 from ..core.store import session
 from .base import issue_fingerprint
 from .ingest import IngestNormalizer
@@ -75,7 +75,24 @@ class PlanningReplyIngest(IngestNormalizer):
             super().on_reply(event)
 
 
-def _text_confirmation(body, shipment_ids):
+def _delivery_sites(s, supplier, shipment_id):
+    """A supplier naming a place must identify the destination in this customer's own site master."""
+    sites = {site for site in s.exec(select(Shipment.dest_site).where(
+        Shipment.supplier_id == supplier, Shipment.shipment_id == shipment_id)) if site}
+    if len(sites) != 1:
+        return set()
+    site = sites.pop()
+    names = {}
+    for doc in s.exec(select(Document).where(Document.kind == "table")):
+        for row in doc.extracted.get("rows", []):
+            if code := row.get("site_id"):
+                for name in (row.get("name"), row.get("city")):
+                    if name:
+                        names.setdefault(name.casefold(), set()).add(code)
+    return {site} | {name for name, codes in names.items() if codes == {site}}
+
+
+def _text_confirmation(body, shipment_ids, sites=()):
     # Without an explicit positive, unambiguous answer keep the raw message for review.
     body = re.split(r"(?im)^\s*(?:>|On .+wrote:|-----Original Message-----)", body, maxsplit=1)[0]
     if "?" in body or re.search(r"\b(?:not|cannot|unable|unconfirmed|estimate[d]?|tentative|if|pending|"
@@ -85,7 +102,7 @@ def _text_confirmation(body, shipment_ids):
     if not is_quote and not re.search(r"\b(?:confirmed|we confirm|I confirm)\b", body, re.I):
         return None
     identifier = r"[\w]+(?:[.:-][\w]+)*"
-    po_lines = re.findall(r"\bPO\s+(" + identifier + r")/(\d+)\b", body, re.I)
+    po_lines = re.findall(r"\bPO\s+(" + identifier + r")(?:\s*/\s*|,?\s+(?:line|item)\s+)(\d+)\b", body, re.I)
     tokens = set(re.findall(identifier, body))
     shipments = tokens.intersection(shipment_ids)
     explicit = set(re.findall(r"\bshipment(?:\s+ID)?\s*[:#]?\s+(" + identifier + r")", body, re.I))
@@ -98,7 +115,14 @@ def _text_confirmation(body, shipment_ids):
     times = re.findall(timestamp, body)
     if not all(len(x) == 1 for x in (po_lines, shipments, units, rev)):
         return None
-    arrival = re.findall(r"\b(?:arrival|arrives?|delivery|ETA)\s*(?:at\s+|by\s+)?[:=]?\s*(" + timestamp + ")", body, re.I)
+    place = "|".join(re.escape(n) for n in sorted(sites, key=len, reverse=True))
+    named_site = rf"(?:(?:at|in|to)\s+(?:{place})\s*,?\s+)?" if place else ""
+    arrival = re.findall(r"\b(?:arrival|arrives?|delivery|ETA)\s*" + named_site
+                         + r"(?:at\s+|on\s+|by\s+)?[:=]?\s*(" + timestamp + ")", body, re.I)
+    # An explicit destination following the time must agree as well.
+    following_place = re.search(timestamp + r"\s+(?:at|in|to)\s+(.+)", body, re.I)
+    if following_place and (not place or not re.match(rf"(?:{place})(?=[.,;]|\s*$|\s+(?:on|at)\b)", following_place[1], re.I)):
+        return None
     if len(arrival) != 1:
         return None
     fields = dict(po_number=po_lines[0][0], po_line=int(po_lines[0][1]), shipment_id=next(iter(shipments)),
@@ -147,7 +171,8 @@ def ingest_reply(msg, delivery, agent, *, quote=None):
             shipment_ids = set(s.exec(select(Shipment.shipment_id).where(Shipment.supplier_id == msg.supplier_id)))
             if line.get("shipment_id"):
                 shipment_ids.add(line["shipment_id"])
-            advice = _text_confirmation(msg.body, shipment_ids)
+            sites = _delivery_sites(s, msg.supplier_id, line.get("shipment_id"))
+            advice = _text_confirmation(msg.body, shipment_ids, sites)
         quote = advice if isinstance(advice, SupplierQuote) else None
         fact = advice.model_dump(mode="json") if advice else {}
         field = "supplier_quote" if quote else "confirmed_delivery"

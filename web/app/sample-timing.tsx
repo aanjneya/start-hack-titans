@@ -38,7 +38,7 @@ export default function SampleTiming({ decision, option, window }: { decision: n
   const gap = Math.abs(scenario.days_between);
   const relative = scenario.days_between > 0 ? "before" : "after";
   return <details className="mt-3 rounded-md border border-rule text-sm">
-    <summary className="cursor-pointer px-3 py-2 font-semibold text-act">Compare sample timing
+    <summary className="cursor-pointer px-3 py-2 font-semibold text-act">Compare sample timing{" "}
       <span className="ml-2 font-normal text-muted">{window.days_between > 0 ?
         `${window.days_between} ${window.days_between === 1 ? "day" : "days"} to assess samples if requested now`
         : "Check the first PO date"}</span></summary>

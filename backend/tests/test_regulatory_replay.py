@@ -449,7 +449,15 @@ def test_market_price_can_open_and_withdraw_a_buyer_check_without_a_portal_drop(
     class Market(risk_signals.PolymarketProvider):
         def fetch(self, **context):
             return self._fetch_live(context["countries"], context["reference_now"])
-    monkeypatch.setattr(RiskRater, "providers", (Market(),))
+    class Weather:
+        name = "weather"
+        available = True
+        def fetch(self, **context):
+            if not self.available:
+                raise risk_signals.RiskFeedUnavailable("Weather service offline")
+            return []
+    weather = Weather()
+    monkeypatch.setattr(RiskRater, "providers", (Market(), weather))
     odds = {"yes": 0.20, "updated":"2026-11-21T14:00:00Z"}
     def market_response(url, params):
         if odds["yes"] is None:
@@ -462,7 +470,11 @@ def test_market_price_can_open_and_withdraw_a_buyer_check_without_a_portal_drop(
     assert check()["status"] == "completed" and not future(client)
     assert client.get("/api/risk?current=true").json()["data"][0]["rating"] == "BBB"
     odds["yes"] = .85
+    weather.available = False
     run = check()
+    assert run["status"] == "partial"
+    partial = client.get("/api/health").json()["data"]["lastRiskCheck"]
+    assert partial["grades_changed"] == 1 and partial["unavailable"]["weather"]["last_known_at"]
     entry, = future(client)
     assert (entry["latest_grade_change"]["run_id"], entry["latest_grade_change"]["current"]) == (run["run_id"], "B")
     choice = entry["option"]
@@ -473,15 +485,18 @@ def test_market_price_can_open_and_withdraw_a_buyer_check_without_a_portal_drop(
     market = next(s for group in exposure["signals"] for s in group["sources"] if s["provider"] == "polymarket")["market"]
     assert (market["previous_yes_pct"], market["yes_pct"]) == (20, 85)
     odds["updated"] = "2026-11-21T14:10:00Z"
+    weather.available = True
     assert check()["status"] == "completed" and future(client)[0]["decision_id"] == entry["decision_id"]
     restart()
     odds["yes"] = None
+    weather.available = False
     failed = check()
     assert failed["status"] == "partial" and failed["failures"][0]["event"] == events.RISK_REFRESH_REQUESTED
     health = client.get("/api/health").json()["data"]["lastRiskCheck"]
     assert health["unavailable"]["polymarket"]["last_known_at"] and health["grades_changed"] is None
     assert future(client)[0]["version"] == entry["version"]
     odds["yes"] = .20
+    weather.available = True
     assert check()["status"] == "completed" and not future(client)
     history = client.get(f"/api/decisions/{entry['decision_id']}/history").json()["data"]["events"]
     withdrawn, = [e for e in history if e["title"] == "Pending review withdrawn"]

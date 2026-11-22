@@ -20,6 +20,8 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
   const market = marketSignal?.sources.find(s => s.evidence.locator?.startsWith("polymarket:"));
   const odds = market?.market ? `${market.market.yes_pct}%` : market?.evidence.quote?.match(/^Yes=([\d.]+%)/)?.[1];
   const priorOdds = market?.market?.previous_yes_pct;
+  const changedDrivers = exposure.last_grade_change?.drivers.filter(d => d.before !== d.after)
+    .sort((a, b) => Math.abs(b.after - b.before) - Math.abs(a.after - a.before)).slice(0, 2);
   return <div className="mt-3 space-y-2">
     {exposure.supplier_rating && <p className="flex flex-wrap items-center gap-x-2 text-sm font-semibold">
       {exposure.supplier} <span className="rounded bg-warn-soft px-2 py-0.5 text-ink">Supplier grade {exposure.last_grade_change && `${exposure.last_grade_change.previous} → `}{exposure.supplier_rating}</span>
@@ -40,6 +42,7 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
     {exposure.signals.length > 0 && <details className="text-sm text-muted"><summary className="cursor-pointer">
       {exposure.signals.length} signal {exposure.signals.length === 1 ? "type" : "types"}
       {market && <> · Polymarket · {priorOdds != null && `${priorOdds}% → `}{odds && `${odds} yes · `}{market.origin.toLowerCase()}</>}</summary>
+      {!!changedDrivers?.length && <p className="mt-2 pl-3 font-medium text-ink">What moved the grade · {changedDrivers.map(d => factorNames[d.factor] || d.factor).join(" and ")}.</p>}
       {market && <div className="mt-1 pl-3"><p>{market.title || marketSignal?.text}</p>
         {market.market?.disruption_outcome === "No" && <p>The question asks about recovery. The rating uses its No side.</p>}
         <p className="text-xs">The price describes this market question. Supplier evidence establishes which orders need review.</p></div>}

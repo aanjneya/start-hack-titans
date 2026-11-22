@@ -21,6 +21,19 @@ def queue(client):
     return response.json()["data"]
 
 
+def test_conflicting_preorder_counts_preserve_only_the_agreed_priority():
+    from backend.agents.planner_inputs import launch_priorities
+    from backend.core.models import LaunchStatus
+
+    edition = LaunchStatus(product_id="KIT", edition="Collector", day_one_demand=100)
+    docs = [Document(kind="memo", path=f"priority-{qty}",
+                     text=f"Collector first. All {qty} copies are preordered.\nRationale: refunds.")
+            for qty in (100, 120)]
+    priority = launch_priorities([edition], docs, datetime(2027, 1, 10))["KIT"]
+    assert priority["evidence"]["quote"] == "Collector first."
+    assert priority["preordered"] is None and not priority["all_demand_preordered"] and priority["rationale"] is None
+
+
 def test_evening_queue_preserves_findings_and_ranks_conditional_actions():
     client = TestClient(app)
     for drop in list_drops():

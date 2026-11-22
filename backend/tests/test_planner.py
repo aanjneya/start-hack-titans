@@ -187,7 +187,7 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
                    for log in all_rows(AgentLog))
         mail = chaser.mailbox.IncomingMail("1", "<supplier-reply@example.test>", spend.message_id, "",
                 "supplier-dispatch@example.test", "Re: " + spend.subject, f"Confirmed PO 4500318775/2, SHP-2026-04313, "
-                f"20000 units, rev C, arrival {arrival.isoformat()}.")
+                f"20000 units, rev C, arrival at Hamburg {arrival.isoformat()}.")
         settings = replace(chaser.get_settings(), chaser_send=True)
         with monkeypatch.context() as transport:
             transport.setattr(chaser, "get_settings", lambda: settings)

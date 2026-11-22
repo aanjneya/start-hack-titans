@@ -81,7 +81,10 @@ def launch_priorities(editions, documents, as_of):
         return {}
     pid, source = max(current, key=lambda pair: len(pair[1]["evidence"]["quote"]))
     if len({s["preordered"] for _, s in current if s["preordered"] is not None}) > 1:
-        source = dict(source, preordered=None, all_demand_preordered=False, rationale=None)
+        proof = source["evidence"]
+        instruction = re.split(r"\s+All [\d,]+ copies are pre-?ordered\b", proof["quote"], maxsplit=1, flags=re.I)[0]
+        source = dict(source, evidence=dict(proof, quote=instruction), preordered=None,
+                      all_demand_preordered=False, rationale=None)
     return {pid: source}
 
 

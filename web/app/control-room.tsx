@@ -96,6 +96,7 @@ async function loadSnapshot(health: HealthCheckResponse): Promise<{ snap: Snapsh
 
 export default function ControlRoom() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY);
+  const describeReply = useCallback((message: InboxMessage) => replyOutcome(message, snap.setup?.timezone), [snap.setup?.timezone]);
   const [missing, setMissing] = useState<string[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [now, setNow] = useState<number>(0);
@@ -210,8 +211,9 @@ export default function ControlRoom() {
   const future = snap.queue.filter(entry => entry.option.horizon === "future" && !entry.option.followup_for);
   const riskCheck = snap.health?.lastRiskCheck;
   const marketRun = riskCheck?.trigger === "risk.refresh.requested" ? riskCheck.run_id : null;
+  const latestDrop = !notice && snap.health?.lastDrop?.status === "completed" ? snap.health.lastDrop.run_id : null;
   const updated = future.find(entry => entry.latest_grade_change &&
-    [playedRun, marketRun].includes(entry.latest_grade_change.run_id));
+    [playedRun, marketRun, latestDrop].includes(entry.latest_grade_change.run_id));
   const other = snap.queue.filter(entry => !entry.on_time_recovery && entry.option.horizon !== "future");
   const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
     {entries.map(entry => <li id={`action-${entry.key}`} tabIndex={-1} key={entry.key}>
@@ -223,11 +225,13 @@ export default function ControlRoom() {
   const snapshotTime = editions.map(f => f.details.as_of).find((t): t is string => typeof t === "string");
   const deadline = editions.find((f) => f.deadline)?.deadline ?? null;
   const mock = snap.health?.mockMode ?? true;
+  const supplierView = editions.length === 0 && snap.risk.length > 0 && !missing.includes("forecast");
 
   return (
     <div className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
         setup={snap.setup}
+        supplierView={supplierView}
         online={online}
         mock={mock}
         deadline={deadline}
@@ -238,7 +242,7 @@ export default function ControlRoom() {
         replayEnabled={!!snap.health?.replayEnabled}
         onDrop={nextDrop}
         updates={snap.setup?.demo_buyer && <BuyerUpdates key={snap.setup.customer + "/" + snap.setup.demo_buyer}
-          setup={snap.setup} activity={snap.trace} queue={snap.queue} inbox={snap.inbox} decisions={snap.decisions} describeReply={replyOutcome} onMail={openMail}
+          setup={snap.setup} activity={snap.trace} queue={snap.queue} inbox={snap.inbox} decisions={snap.decisions} describeReply={describeReply} onMail={openMail}
           onAction={key => {
             const parent = snap.queue.find(e => e.key === key)?.option.followup_for;
             if (!parent) return focusAction(key);
@@ -278,7 +282,8 @@ export default function ControlRoom() {
       {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
         Update unavailable for {missing.join(", ")}. Showing the last available data.
       </p>}
-      {(!missing.includes("forecast") || editions.length > 0) &&
+      {supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} online={online === true} mock={mock} refresh={refresh} />}
+      {!supplierView && (!missing.includes("forecast") || editions.length > 0) &&
         <Hero editions={editions} replayEnabled={!!snap.health?.replayEnabled} ready={online === true} />}
 
       <div className="mt-6 space-y-6">
@@ -353,8 +358,8 @@ export default function ControlRoom() {
           ))}
         </div>
         {tab === "findings" && <Findings issues={snap.issues} />}
-        {tab === "emails" && <Emails activeMail={activeMail} mailVisit={mailVisit} outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
-        {tab === "risk" && <><SignalRefresh reading={riskCheck} online={online === true} mock={mock} refresh={refresh} /><Risk rows={snap.risk} /></>}
+        {tab === "emails" && <Emails activeMail={activeMail} mailVisit={mailVisit} snap={snap} mock={mock} onSent={refresh} />}
+        {tab === "risk" && <>{!supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} online={online === true} mock={mock} refresh={refresh} />}<Risk rows={snap.risk} /></>}
       </section>
       {showData && <DataDrawer onClose={closeData} />}
     </div>
@@ -389,7 +394,7 @@ function CaseUpdates({ snap, openMail, refresh, current }: {
       const problem = snap.trace.find(log => log.action === "error" &&
         ((d.status === "approved" && !review && sent?.status !== "sent" && !reply && log.data?.decision_id === d.id)
           || (reply && !reply.processed && log.data?.inbox_id === reply.id)));
-      const state = d.status === "rejected" ? "Rejected" : d.status === "outdated" ? "The earlier authorization is outdated. Open its history to see what changed." : reply ? replyOutcome(reply)
+      const state = d.status === "rejected" ? "Rejected" : d.status === "outdated" ? "The earlier authorization is outdated. Open its history to see what changed." : reply ? replyOutcome(reply, snap.setup?.timezone)
         : sent?.status === "failed" ? "Send failed. The buyer needs to check the email."
         : sent?.status === "draft" ? "Chaser prepared a draft. Delivery is pending."
         : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
@@ -465,6 +470,7 @@ function SampleInquiry({ entry, buyer, current, refresh }: {
 
 function TopBar(props: {
   updates?: React.ReactNode;
+  supplierView: boolean;
   setup: CustomerSetup | null;
   online: boolean | null;
   mock: boolean;
@@ -499,9 +505,9 @@ function TopBar(props: {
             Demo view · {props.setup.demo_buyer} · Procurement buyer
           </p>
         )}
-        <h1 className="text-2xl font-bold leading-tight">{props.setup?.customer || "Procurement"} launch control</h1>
+        <h1 className="text-2xl font-bold leading-tight">{props.setup?.customer || "Procurement"} {props.supplierView ? "supplier decisions" : "launch control"}</h1>
         <p className="text-sm text-muted">
-          {props.setup?.site ? props.setup.site + " packing line" : "Packing line"}
+          {props.supplierView ? (props.setup?.site || "Procurement") : props.setup?.site ? props.setup.site + " packing line" : "Packing line"}
           {props.setup && <> · <button className="text-act underline decoration-dotted underline-offset-2"
             aria-controls="company-rules" aria-expanded={rulesOpen} onClick={() => setRulesOpen(!rulesOpen)}>
             {props.setup.autonomy.mode === "control" ? "Control mode" :
@@ -533,14 +539,14 @@ function TopBar(props: {
           />
           {props.online ? "Backend online" : props.online === false ? "Backend offline" : "Connecting"}
         </span>
-        <button
+        {props.replayEnabled && <button
           onClick={props.onDrop}
-          disabled={props.busy || !props.online || !props.replayEnabled}
+          disabled={props.busy || !props.online}
           className="rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-act disabled:cursor-not-allowed disabled:opacity-50"
           title="Resumes the next recorded drop in the dedicated replay database."
         >
           {props.busy ? "Agents are working" : props.retry ? "Retry incomplete drop" : "Play next data drop"}
-        </button>
+        </button>}
         <Link
           href="/observability"
           className="rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-semibold text-ink hover:border-act hover:text-act"
@@ -921,20 +927,24 @@ function Findings({ issues }: { issues: Issue[] }) {
   );
 }
 
-function Emails({ activeMail, mailVisit, outbox, inbox, mock, onSent }: { activeMail: number | null; mailVisit: number; outbox: OutboxMessage[]; inbox: InboxMessage[]; mock: boolean; onSent: () => void }) {
+function Emails({ activeMail, mailVisit, snap, mock, onSent }: { activeMail: number | null; mailVisit: number; snap: Snapshot; mock: boolean; onSent: () => void }) {
+  const {outbox, inbox} = snap;
+  const sampleDecisions = new Set(snap.decisions.filter(d => d.chosen_option != null &&
+    d.options[d.chosen_option]?.actions.some(a => a.purpose === "verify_sample_terms")).map(d => d.id));
   if (outbox.length === 0) return <p className="text-muted">No supplier emails yet. The Chaser writes one when a finding needs an answer.</p>;
   return (
     <ul className="space-y-3">
       {outbox.map((m) => (
         <li id={`mail-${m.id}`} key={m.id}>
-          <EmailView key={activeMail === m.id ? mailVisit : 0} focus={activeMail === m.id} m={m} replies={inbox.filter((r) => r.outbox_id === m.id)} mock={mock} onSent={onSent} />
+          <EmailView key={activeMail === m.id ? mailVisit : 0} focus={activeMail === m.id} m={m} replies={inbox.filter((r) => r.outbox_id === m.id)} mock={mock} onSent={onSent}
+            timezone={snap.setup?.timezone} samples={m.decision_id != null && sampleDecisions.has(m.decision_id)} />
         </li>
       ))}
     </ul>
   );
 }
 
-function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: OutboxMessage; replies: InboxMessage[]; mock: boolean; onSent: () => void }) {
+function EmailView({ focus, m, replies, mock, onSent, timezone, samples }: { focus: boolean; m: OutboxMessage; replies: InboxMessage[]; mock: boolean; onSent: () => void; timezone?: string; samples: boolean }) {
   const [open, setOpen] = useState(focus);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -981,7 +991,7 @@ function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: Out
             <div key={r.id} className="mt-4 border-l-2 border-ok pl-3">
               <p className="text-xs text-muted">Reply from {r.supplier_id}, {clock(r.received_at)}</p>
               <p className="whitespace-pre-line">{r.body}</p>
-              <p className="mt-1 text-xs text-muted">{replyOutcome(r)}</p>
+              <p className="mt-1 text-xs text-muted">{replyOutcome(r, timezone)}</p>
             </div>
           ))}
           <label className="mt-4 block text-xs font-semibold text-muted" htmlFor={`reply-${m.id}`}>
@@ -993,7 +1003,7 @@ function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: Out
             onChange={(e) => setText(e.target.value)}
             rows={2}
             className="mt-1 w-full rounded-md border border-rule p-2"
-            placeholder="Confirm the order line, revision, quantity and delivery time."
+            placeholder={samples ? "Give sample availability, specifications, freight and qualification terms." : "Confirm the order line, revision, quantity and delivery time."}
           />
           <button
             onClick={reply}
@@ -1010,7 +1020,7 @@ function EmailView({ focus, m, replies, mock, onSent }: { focus: boolean; m: Out
 }
 
 /** What Ingest did with a supplier reply, in one sentence. */
-function replyOutcome(r: InboxMessage): string {
+function replyOutcome(r: InboxMessage, timezone = "UTC"): string {
   const res = r.result ?? {};
   if (!r.processed) return "Waiting for Ingest.";
   if (typeof res.review === "string" && res.review.startsWith("Duplicate of inbox/"))
@@ -1019,12 +1029,12 @@ function replyOutcome(r: InboxMessage): string {
   if (res.qualification_correspondence) return `Ingest attached this response to review #${res.qualification_correspondence.review_id}. Engineering and Quality assessment is pending.`;
   const advice = (res.confirmed_delivery ?? res.supplier_quote) as Record<string, unknown> | undefined;
   if (advice) {
-    const when = parseTs(String(advice.arrival))?.toLocaleString("en-GB", {
-      weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+    const time = (value: unknown) => parseTs(String(value))?.toLocaleString("en-GB", {
+      weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: timezone,
     });
     return res.supplier_quote
-      ? `Ingest recorded a quote for ${fmt(Number(advice.quantity))} pcs. The Planner can now compare the offer.`
-      : `Ingest confirmed ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, due ${when} UTC. The Planner checks dock release and packing time.`;
+      ? `Supplier quoted ${formatMoney().format(Number(advice.incremental_cost_eur))} for ${String(advice.mode)} of ${fmt(Number(advice.quantity))} units. Offer expires ${time(advice.valid_until)} ${timezone}.`
+      : `Ingest confirmed ${fmt(Number(advice.quantity))} units, revision ${String(advice.revision)}, due ${time(advice.arrival)} ${timezone}. The Planner checks dock release and packing time.`;
   }
   const fields = Array.isArray(res.fields) ? (res.fields as string[]) : [];
   return fields.length
@@ -1032,8 +1042,34 @@ function replyOutcome(r: InboxMessage): string {
     : "Read by Ingest; nothing to fill.";
 }
 
-function SignalRefresh({reading, online, mock, refresh}: {
-  reading: HealthCheckResponse["lastRiskCheck"]; online: boolean; mock: boolean; refresh: () => Promise<void>;
+function MarketWatch({scores}: {scores: RiskScore[]}) {
+  type Source = NonNullable<RiskScore["reasons"][number]["signal_inputs"]>[string][number];
+  const watches = new Map<string, {source: Source; suppliers: Set<string>}>();
+  for (const row of scores) {
+    if (row.entity_type !== "supplier") continue;
+    for (const source of row.reasons[0]?.signal_inputs?.external_politics ?? []) {
+      if (source.provider !== "polymarket" || !source.market) continue;
+      const key = JSON.stringify([source.market.question_id || source.title, source.market.yes_pct, source.live, source.observed_at, source.last_known_at]);
+      if (!watches.has(key)) watches.set(key, {source, suppliers:new Set()});
+      watches.get(key)!.suppliers.add(row.entity_id + " · " + row.rating);
+    }
+  }
+  if (!watches.size) return null;
+  return <details className="basis-full border-t border-rule pt-2 text-sm" open={watches.size === 1 || undefined}>
+    <summary className="cursor-pointer font-semibold text-act">Polymarket questions in supplier ratings ({watches.size})</summary>
+    <ul className="mt-2 divide-y divide-rule">{[...watches].map(([key, {source, suppliers}]) => <li key={key} className="py-2">
+      <p><strong className="mr-2 tabular">{source.market!.yes_pct}% Yes</strong>
+        {source.live && /^https?:\/\//i.test(source.evidence.path)
+          ? <a className="text-act underline" href={source.evidence.path} target="_blank" rel="noreferrer">{source.title} ↗</a> : source.title}</p>
+      <p className="text-xs text-muted">{source.live ? "Public market at collection" : "Offline example"} · {source.market!.scope_basis || source.scope}
+        {source.market!.disruption_outcome === "No" && " · The No side measures disruption"} · {Array.from(suppliers).sort().join(", ")}</p>
+      {source.last_known_at && <p className="text-xs text-warn">Last successful reading {source.last_known_at.slice(0,16).replace("T"," ")} UTC.</p>}
+    </li>)}</ul>
+  </details>;
+}
+
+function SignalRefresh({reading, scores, online, mock, refresh}: {
+  reading: HealthCheckResponse["lastRiskCheck"]; scores: RiskScore[]; online: boolean; mock: boolean; refresh: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1050,13 +1086,14 @@ function SignalRefresh({reading, online, mock, refresh}: {
   const failed = Object.keys(reading?.unavailable ?? {});
   return <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule bg-surface p-4">
     <div className="text-sm"><h3 className="font-bold">External signal check</h3>
-      <p>{reading ? <>{mock ? "Replay evidence" : "Live monitoring"} · Checked {clock(reading.at)} · {reading.grades_changed == null
+      <p>{reading ? <>{mock ? "Offline evidence" : "Live monitoring"} · Checked {clock(reading.at)} · {reading.grades_changed == null
         ? "previous grades retained" : `${reading.grades_changed} grade changes`}</> : "Waiting for the first check."}
         {reading && <> · <a className="text-act underline" href={API_URL + "/api/trace?run_id=" + reading.run_id}>Check trace</a></>}</p>
       {failed.length > 0 && <p role="alert" className="text-warn">Unavailable feeds · {failed.join(", ")}</p>}
       {error && <p role="status" className="text-warn">{error}</p>}</div>
     <button className="rounded border border-rule px-3 py-2 text-sm font-semibold text-act disabled:opacity-50"
-      disabled={busy || !online} onClick={() => void check()}>{busy ? "Checking signals…" : mock ? "Recheck replay signals" : "Refresh live signals"}</button>
+      disabled={busy || !online} onClick={() => void check()}>{busy ? "Checking signals…" : mock ? "Check signals" : "Refresh live signals"}</button>
+    <MarketWatch scores={scores} />
   </div>;
 }
 

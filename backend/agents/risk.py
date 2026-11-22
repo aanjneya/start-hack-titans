@@ -76,9 +76,11 @@ class RiskRater(Agent):
         for name, failure in unavailable.items():
             self.log("error", f"{name} unavailable: {failure['reason']}", data={
                 "event": event.name, "provider": name, "last_known_at": failure["last_known_at"]})
-        if prev_scores and unavailable and (event.name == events.RISK_REFRESH_REQUESTED
-                                            or any(f["last_known_at"] is None for f in unavailable.values())):
-            # An upgraded deployment can have grades from before provider snapshots were saved.
+        missing_baseline = any(f["last_known_at"] is None for f in unavailable.values())
+        no_fresh_source = len(unavailable) == len(self.providers) and bool(unavailable)
+        if prev_scores and (missing_baseline or (event.name == events.RISK_REFRESH_REQUESTED and no_fresh_source)):
+            # A missing baseline could silently remove an existing contributor. With a baseline,
+            # a healthy feed may still move the grade while another retains its last known input.
             self.log("risk_refresh_incomplete", "Previous grades retained until the missing source returns.",
                      data={"trigger": event.name, "unavailable": unavailable, "external_signals": provider_counts})
             return

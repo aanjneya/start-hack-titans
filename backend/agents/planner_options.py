@@ -268,7 +268,7 @@ def options_for(issue, plan, forecast, row):
                     "Buyer must confirm offer validity, freight, dock release and a new PO before ordering.")
             review = {"type": "human_review", "product_id": pid, "part": part,
                       "reference": offer.path, "supplier_id": offer.supplier_id, "copies_at_risk": forecast.shortfall}
-            add(f"Verify the offer for {qty:,} finished {material.description or part}", "supplier stock offer", cost, gain, note,
+            add(f"Verify the offer for {qty:,} units of {material.description or part}", "supplier stock offer", cost, gain, note,
                 actions=[review], value=0, proof=proof)
             choices[-1]["needs_approval"] = True
             choices[-1]["latest_useful"] = min(useful_until(plan, row, gain) - lead, due).isoformat()

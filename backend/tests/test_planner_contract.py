@@ -119,7 +119,7 @@ def test_selected_supplier_order_line_decides_the_buyer():
 
 
 def test_second_customer_order_thread_requires_dispatched_request_and_site_arrival():
-    from backend.core.models import OutboxMessage, PurchaseOrder, Shipment, Supplier
+    from backend.core.models import Document, OutboxMessage, PurchaseOrder, Shipment, Supplier
     from backend.core.store import session
 
     client = TestClient(app)
@@ -128,6 +128,9 @@ def test_second_customer_order_thread_requires_dispatched_request_and_site_arriv
     request = dict(type="email", purpose="confirm_supply", supplier_id="VN-R", po_number="KIT:26-4", po_line=7,
                    shipment_id="ROAD-OS.92", part="PUMP.A", ask="Confirm revision, quantity and site arrival in Osaka.")
     add_all([Supplier(supplier_id="VN-R", name="Rin Hydraulics", contact_email="rin@example.test"),
+             Document(kind="table", path="plants", extracted={"rows":[
+                 {"site_id":"OS", "city":"Osaka", "name":"Rin East Plant"},
+                 {"site_id":"OTHER", "city":"Nagoya", "name":"Rin West Plant"}]}),
              PurchaseOrder(po_number="KIT:26-4", po_line=7, supplier_id="VN-R", material_id="PUMP.A",
                            currency="JPY", buyer="Aya Mori", quantity=35),
              OrderConfirmation(po_number="KIT:26-4", po_line=7, supplier_id="VN-R", material_id="PUMP.A",
@@ -147,6 +150,7 @@ def test_second_customer_order_thread_requires_dispatched_request_and_site_arriv
             return db.get(InboxMessage, response.json()["data"]["inbox_id"]).result
 
     for invalid in [message.replace("ETA", "dispatch time"), message.replace("+09:00", ""),
+                    message.replace("ETA", "arrival at Nagoya"), message.replace("+09:00.", "+09:00 in Nagoya."),
                     message.replace("30 units", "36 units"), message + " Also shipment ROAD-OS.93.",
                     message.replace("KIT:26-4/7", "KIT:26-4/6"), message.replace("r2-b", "r3")]:
         assert "review" in deliver(invalid)
@@ -158,7 +162,7 @@ def test_second_customer_order_thread_requires_dispatched_request_and_site_arriv
     with session() as db:
         db.get(OutboxMessage, mail.id).status = "sent"
         db.commit()
-    fact = deliver(message)["confirmed_delivery"]
+    fact = deliver(message.replace("ETA", "arrival at Osaka").replace("KIT:26-4/7", "KIT:26-4 line 7"))["confirmed_delivery"]
     assert (fact["revision"], fact["shipment_id"], fact["arrival"], fact["quantity"]) == (
         "R2-B", "ROAD-OS.92", "2026-12-03T10:00:00+09:00", 30)
     assert deliver(message)["review"].startswith("Duplicate")

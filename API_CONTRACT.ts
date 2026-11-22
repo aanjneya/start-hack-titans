@@ -270,7 +270,7 @@ export interface RiskScore {
     shipment_ids: string[]; title: string; summary: string; evidence: Evidence; observed_at: string | null; selected_for_rating: boolean;
   }[]; signal_inputs?: Record<string, {
     provider: string; title: string; summary: string; evidence: Evidence; live: boolean; scope: string;
-    published: string | null; observed_at: string | null; shipment_ids?: string[]; market?: MarketObservation;
+    published: string | null; observed_at: string | null; last_known_at?: string; shipment_ids?: string[]; market?: MarketObservation;
   }[]> }[];
   computed_at: string;
 }

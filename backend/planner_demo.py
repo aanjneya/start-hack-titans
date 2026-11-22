@@ -148,10 +148,15 @@ if __name__ == "__main__":
     serve = parser.add_mutually_exclusive_group()
     serve.add_argument("--serve-inquiry", action="store_true", help="serve the simulated recount before any buyer action")
     serve.add_argument("--serve-pickup", action="store_true", help="serve the simulated €500 quote for the buyer UI")
+    serve.add_argument("--serve-market", action="store_true", help="serve a second customer's isolated 20% to 85% market move")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     with TemporaryDirectory(prefix="launch-planner-") as temp:
         scratch = Path(temp)
+        if args.serve_market:
+            from .market_demo import serve as serve_market
+            serve_market(scratch, args.port)
+            raise SystemExit(0)
         os.environ.update(MOCK_MODE="true", REPLAY_DB_PATH=str(scratch / "demo.db"), CHASER_SEND="false", REPLAY_DIR=str(scratch / "replay"))
         from fastapi.testclient import TestClient
         from .app.main import app

@@ -45,6 +45,9 @@ def test_restart_after_partial_retries_only_failed_handler(tmp_path):
     assert run["status"] == "partial" and healthy
     assert all(f["agent"] == "temporary_failure" and f["event"] == events.TRUTH_UPDATED for f in run["failures"])
     traced = client.get("/api/trace", params={"run_id": run["run_id"]}).json()["data"]
+    assert set(system.agent_names()) <= {e["agent"] for e in traced}
+    assert len(client.get("/api/trace", params={"run_id": run["run_id"], "limit":1}).json()["data"]) == 1
+    assert len(client.get("/api/trace").json()["data"]) == 200
     assert {f["trace_id"] for f in run["failures"]} <= {e["id"] for e in traced if e["action"] == "error"}
     assert client.get("/api/health").json()["data"]["lastDrop"]["status"] == "partial"
     sent = [m.id for m in store.all_rows(m.OutboxMessage)]

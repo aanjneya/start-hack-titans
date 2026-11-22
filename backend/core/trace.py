@@ -60,7 +60,7 @@ def log(
     return entry
 
 
-def recent(limit: int = 200, agent: str | None = None, run_id: str | None = None) -> list[AgentLog]:
+def recent(limit: int | None = 200, agent: str | None = None, run_id: str | None = None) -> list[AgentLog]:
     with session() as s:
         stmt = select(AgentLog).order_by(AgentLog.id.desc()).limit(limit)
         if agent:

@@ -457,7 +457,7 @@ export const API_ROUTES = {
   DECISIONS: '/api/decisions', // GET ?status= or ?for_buyer=true (current decisions and follow-up records)
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
   DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest, an assigned signer can decline the recommendation
-  TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]
+  TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]. Defaults to the full selected run or 200 recent entries.
   BUYER_ACTIVITY: '/api/buyer-activity', // GET -> BuyerActivity[]; latest 400 steps without document payloads
   RISK: '/api/risk', // GET -> RiskScore[]; ?current=true selects the latest grade per entity before ranking
   RISK_REFRESH: '/api/risk/refresh', // POST -> ActionRun; recheck external signals against current orders

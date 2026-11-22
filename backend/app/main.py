@@ -381,13 +381,15 @@ def reject(decision_id: int, req: DecideRequest | None = None) -> dict:
 
 
 @app.get("/api/trace")
-def get_trace(limit: int = 200, agent: Optional[str] = None, run_id: Optional[str] = None,
+def get_trace(limit: Optional[int] = None, agent: Optional[str] = None, run_id: Optional[str] = None,
               trace_id: Optional[int] = None) -> dict:
     if trace_id is not None:
         with session() as s:
             entry = s.get(AgentLog, trace_id)
             return ok([entry.model_dump(mode="json")] if entry and (not agent or entry.agent == agent)
                       and (not run_id or entry.run_id == run_id) else [])
+    if limit is None and not run_id:
+        limit = 200
     return ok([e.model_dump(mode="json") for e in trace.recent(limit=limit, agent=agent, run_id=run_id)])
 
 

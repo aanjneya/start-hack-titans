@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { actionHref, findingHref, mailHref } from "./buyer-links";
-import { fmt, type Forecast, type InboxMessage, type Issue, type OutboxMessage } from "@/lib/api";
+import { fmt, getData, type Forecast, type InboxMessage, type Issue, type OutboxMessage, type RiskScore, type ExtendedRiskReason } from "@/lib/api";
+import { recordedScore, riskBands } from "./observability/risk-explanations";
 import type { BuyerActivity, BuyerQueueEntry } from "../../API_CONTRACT";
 
 type Delivery = "sent" | "simulated" | "unverified";
@@ -27,6 +29,70 @@ const linkStyle = "shrink-0 text-xs font-semibold text-act hover:underline";
 const panel = "min-w-0 rounded-lg border border-rule bg-surface px-4 py-4 sm:px-5";
 const title = "text-base font-bold tracking-tight";
 const header = "mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1";
+
+type Signal = NonNullable<RiskScore["reasons"][number]["signal_inputs"]>[string][number];
+
+function sourceLabel(signal: Signal) {
+  if (signal.live === false) return "Offline example";
+  if (signal.provider === "portal_news") return "Customer news record";
+  if (signal.provider === "telemetry") return "Shipment tracking";
+  if (signal.provider === "polymarket") return "Polymarket";
+  return "Recorded signal";
+}
+
+/** Mounted only when the linked decisions have no supplier name. Health polling does not repeat this read. */
+function RegisterName({ supplierId }: { supplierId: string }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    let active = true;
+    getData<{supplier_id: string; name: string; legal_name?: string}[]>(
+      `/api/truth/suppliers?q=${encodeURIComponent(supplierId)}`
+    ).then(rows => {
+      const match = rows.find(row => row.supplier_id === supplierId);
+      if (active && match) setName(match.name?.trim() || match.legal_name?.trim() || "");
+    }).catch(() => { /* The recorded supplier ID remains available. */ });
+    return () => { active = false; };
+  }, [supplierId]);
+  return <>{name || supplierId}</>;
+}
+
+export function SupplierRiskWatch({ scores, queue, waiting }: {
+  scores: RiskScore[]; queue: BuyerQueueEntry[] | null; waiting: boolean;
+}) {
+  const supplier = scores.filter(row => row.entity_type === "supplier").sort((a,b) =>
+    b.grade - a.grade || (recordedScore(b) ?? -1) - (recordedScore(a) ?? -1) || a.entity_id.localeCompare(b.entity_id))[0];
+  if (!supplier) return null;
+
+  const name = queue?.flatMap(entry => entry.option.exposure?.rating_path ?? [])
+    .find(node => node.tier === "supplier" && node.id === supplier.entity_id && node.name?.trim() && node.name !== node.id)?.name;
+  const score = recordedScore(supplier);
+  const band = riskBands.find(b => b.rating === supplier.rating);
+  // A supplier's strongest contributing external factor may follow an internal operating risk.
+  // Link to an observation retained on this exact rating, regardless of today's feed availability.
+  const reasons = supplier.reasons as ExtendedRiskReason[];
+  const inputs = supplier.reasons.find(reason => reason.signal_inputs)?.signal_inputs ?? {};
+  const points = reasons.find(reason => reason.breakdown)?.breakdown ?? {};
+  const factorPoints = (factor: string) => points[factor] ?? reasons.find(r => r.factor === factor)?.points ?? 0;
+  const signal = Object.entries(inputs).sort(([a],[b]) => factorPoints(b) - factorPoints(a) || a.localeCompare(b))
+    .flatMap(([, sources]) => sources).find(source => source.title);
+  const href = `/observability?agent=risk&tier=supplier&entity=${encodeURIComponent(supplier.entity_id)}${signal ? "#risk-signals" : ""}`;
+  return <section aria-labelledby="supplier-risk-watch"
+    className="rounded-lg border border-rule border-l-[3px] border-l-act bg-act-soft/60 px-4 py-3 sm:px-5">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <h2 id="supplier-risk-watch" className="text-base font-bold tracking-tight">Supplier risk</h2>
+      <Link href={href} className={linkStyle}>{signal ? "See rating and evidence" : "See rating details"} →</Link>
+    </div>
+    <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+      <strong className="text-ink">{name || <RegisterName key={supplier.entity_id} supplierId={supplier.entity_id} />}</strong>
+      <span className={`font-semibold tabular ${supplier.grade >= 5 ? "text-stop" : supplier.grade >= 4 ? "text-warn" : "text-muted"}`}>
+        {score != null && `${score}/100 · `}{supplier.rating}{band && ` · ${band.label}`}</span>
+      {waiting && <span className="text-xs text-warn">Last available rating</span>}
+    </div>
+    {signal && <p className="mt-1 line-clamp-2 text-sm leading-snug">
+      <span className="text-muted">{sourceLabel(signal)}{signal.last_known_at && " · Last known"} · </span>{signal.title}
+    </p>}
+  </section>;
+}
 
 export function PackingOutlook({ editions, waiting, replayEnabled }: {
   editions: Forecast[]; waiting: boolean; replayEnabled: boolean;

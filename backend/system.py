@@ -139,6 +139,46 @@ def emit(event_name: str, payload: dict, source: str = "api") -> dict:
         return _complete_run(b, run_id)
 
 
+class SupplierCheckChanged(Exception):
+    pass
+
+
+def request_supplier_check(alert_id: str, supplier_id: str, references: dict) -> dict:
+    """Revalidate the displayed warning and serialize the request with other agent runs."""
+    from .agents.reconciler_rules import build_context
+    from .agents.risk_baseline import saved_signals
+    from .agents.risk_playbook import current_supplier_checks
+    from .core.models import OutboxMessage
+
+    with _lock:
+        ctx = build_context()
+        with session() as db:
+            alert = next((a for a in current_supplier_checks(db, ctx, saved_signals(db))
+                          if a["alert_id"] == alert_id and a["supplier_id"] == supplier_id), None)
+        if not alert or any(ref and alert[key] != ref for key, ref in references.items()):
+            raise SupplierCheckChanged("The warning or its shipment details changed. Refresh the supplier checks.")
+        if alert["status"] != "ready":
+            raise SupplierCheckChanged("A supplier check already exists. Review the current supplier thread.")
+        result = emit(events.EMAIL_REQUESTED, {
+            "supplier_id": supplier_id, "shipment_id": alert["shipment_id"], "po_number": alert["po_number"],
+            "part": alert["part_id"], "ask": alert["supplier_question"],
+        })
+        with session() as db:
+            message = db.exec(select(OutboxMessage).where(OutboxMessage.run_id == result["run_id"],
+                              OutboxMessage.supplier_id == supplier_id).order_by(OutboxMessage.id)).first()
+            delivery = "no_message"
+            if message:
+                mock_log = db.exec(select(AgentLog).where(AgentLog.run_id == result["run_id"],
+                                    AgentLog.action == "mock_send")).first()
+                delivery = ("failed" if message.status == "failed" else "simulated" if mock_log else
+                            "sent" if message.sent_at else "draft")
+            outcome = dict(alert_id=alert_id, supplier_id=supplier_id, shipment_id=alert["shipment_id"],
+                           outbox_id=message.id if message else None, delivery=delivery)
+        trace.log("human", "preemptive_chase", f"Supplier check for {supplier_id}: {delivery}",
+                  evidence=alert["evidence"], data=outcome)
+        return {**outcome, **result}
+
+
 def refresh_risk(source: str = "api") -> dict:
     with _lock:
         payload = {}

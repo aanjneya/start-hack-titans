@@ -128,24 +128,31 @@ def buyer_risk(nodes, documents):
 
 def market_key(source):
     market = source.get("market") or {}
-    # A live instrument and a replay example must never form a time series together.
+    price = market.get("yes_pct")
+    origin, outcome = source.get("origin"), market.get("disruption_outcome")
+    if (source.get("provider") != "polymarket" or source.get("last_known_at")
+            or origin not in {"Offline example", "Live at collection"} or outcome not in {"Yes", "No"}
+            or type(price) not in (int, float) or not 0 <= price <= 100):
+        return None
     identity = market.get("question_id")
-    if not identity and source.get("origin") == "Offline example":
+    if not identity and origin == "Offline example" and source.get("title") and source["evidence"].get("path"):
         identity = (source["evidence"]["path"], source["title"])
-    return (source.get("origin"), identity) if identity else None
+    return (origin, identity, outcome) if identity else None
 
 
-def market_readings(score):
-    readings = {}
-    for reason in score.reasons:
+def priced_markets(reasons):
+    for reason in reasons:
         for obs in reason.get("signal_inputs", {}).get("external_politics", []):
-            if not obs.get("market") or obs.get("provider") != "polymarket":
+            if not obs.get("market") or not obs.get("evidence") or not isinstance(obs.get("live"), bool):
                 continue
             source = signal_source(obs["evidence"], {}, obs)
             key = market_key(source)
             if key:
-                readings[key] = obs["market"]["yes_pct"]
-    return readings
+                yield key, obs["market"]
+
+
+def market_readings(score):
+    return {key: market["yes_pct"] for key, market in priced_markets(score.reasons)}
 
 
 def same_review_option(first, second):

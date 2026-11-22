@@ -30,6 +30,7 @@ Start the API with `backend/.venv/bin/python -m backend.planner_demo --serve-soo
 
 ## 4. Risk ratings and decisions
 
-- Open **Agent Team → Risk**. Expand Collector’s Edition and select the line about export licensing to see the supplier evidence. The grade legend explains what the numerical score means.
+- Open **Risk ratings** and select Guangzhou PackRight. The 72% Yes price belongs to a labeled replay example about export controls. Its market contribution stayed flat while supplier notices and trade news drove A → CCC. Open the buyer action beside the market to inspect the three order lines and the notice extending lead time from 63 to 105 days.
+- In the separate Canadian simulation, **Check signals** changes the recorded Yes price from 20% to 85% with purchasing data held fixed. Open the applicability review for Rei Ito and KIT-9 line 2 from the same report.
 - Under **What would lower product risk?**, choose Standard and compare current conditions with restored stock coverage. The score changes only under the selected assumptions. Open **Review buyer action** for the container pickup, its conditional packing gain, and the cost and evidence still needed.
 - **Backup suppliers** shows candidates to investigate. **Early supplier checks** previews a supplier inquiry and shows whether one has already been requested. On the Control Room, the supplier email summary distinguishes simulated and actual sends.

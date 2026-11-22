@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { SupplierCheckResult } from "../../API_CONTRACT";
+import { mailHref } from "./buyer-links";
 import { useCallback, useEffect, useState } from "react";
 import {
   eur,
@@ -110,6 +112,7 @@ export default function RiskPlaybook({
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
+  const [mailId, setMailId] = useState<number | null>(null);
   const [openScout, setOpenScout] = useState<string | null>(null);
   const [openDraft, setOpenDraft] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -150,20 +153,23 @@ export default function RiskPlaybook({
   const dispatchPreemptive = async (alert: PreemptiveChaseAlert) => {
     setBusyId(alert.alert_id);
     setToast("");
+    setMailId(null);
     try {
-      await postData("/api/risk/preemptive-chase", {
+      const result = await postData<SupplierCheckResult>("/api/risk/preemptive-chase", {
         alert_id: alert.alert_id,
         supplier_id: alert.supplier_id,
-        shipment_id: alert.shipment_id,
-        po_number: alert.po_number,
-        part_id: alert.part_id,
-        ask: alert.draft_body_en,
       });
-      setToast(`Supplier check requested for ${alert.supplier_name} (${alert.language}).`);
+      const delivery = {
+        simulated: "Delivery simulated in replay", sent: "Email sent", draft: "Email saved as a draft",
+        failed: "Email delivery failed", no_message: "The Chaser did not create an email",
+      }[result.delivery];
+      setToast(`${alert.supplier_name} · ${delivery}.${result.status === "partial" ? " An agent needs follow-up." : ""}`);
+      setMailId(result.outbox_id);
       await load();
       await onActionComplete?.();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : "Pre-emptive dispatch failed");
+      setToast(e instanceof Error ? e.message : "The supplier check could not be requested.");
+      await load();
     } finally {
       setBusyId(null);
     }
@@ -175,6 +181,7 @@ export default function RiskPlaybook({
       setCopiedId(scout.part_id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
+      setMailId(null);
       setToast("Copy blocked by browser — select text from the RFQ box.");
     }
   };
@@ -188,15 +195,15 @@ export default function RiskPlaybook({
   }
   if (error || !playbook) {
     return error ? (
-      <div className="mb-6 rounded-xl border border-rule bg-warn-soft p-4 text-sm text-warn">{error}</div>
+      <div id="risk-scenarios" className="mb-6 rounded-xl border border-rule bg-warn-soft p-4 text-sm text-warn">{error}</div>
     ) : null;
   }
 
   return (
     <div className="mb-6 space-y-5">
       {toast && (
-        <div role="status" className="flex items-center justify-between rounded-lg border border-ok/30 bg-ok-soft px-4 py-2.5 text-sm font-medium text-ok">
-          <span>{toast}</span>
+        <div role="status" className="flex items-center justify-between rounded-lg border border-rule bg-surface px-4 py-2.5 text-sm font-medium text-ink">
+          <span>{toast}{mailId != null && <>{" "}<Link href={mailHref(mailId)} className="underline">View supplier email</Link></>}</span>
           <button onClick={() => setToast("")} className="ml-4 text-xs underline">
             Dismiss
           </button>
@@ -370,28 +377,32 @@ export default function RiskPlaybook({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded bg-warn-soft px-2 py-0.5 text-[11px] font-bold text-warn">
-                          {al.lead_time_advantage_hours}h planning window
-                        </span>
                         <span className="text-xs font-bold text-ink">{al.supplier_name} ({al.country})</span>
                         <span className="text-xs text-muted">· {al.provider}</span>
-                        {al.shipment_id && <span className="font-mono text-[11px] text-muted">{al.shipment_id}</span>}
+                        <span className="text-xs text-muted">{al.source_origin} · {al.source_scope}</span>
                       </div>
                       <p className="mt-1 text-xs text-ink">{al.signal_title}</p>
+                      {al.evidence.length > 0 && <details className="mt-1 text-xs">
+                        <summary className="cursor-pointer font-semibold text-act">Source evidence</summary>
+                        {al.evidence.map(e => <div className="mt-1 break-words text-muted" key={e.path + e.locator}>
+                          {e.quote && <p>{e.quote}</p>}
+                          {al.source_origin === "Public feed at collection" && /^https?:\/\//i.test(e.path)
+                            ? <a className="text-act underline" href={e.path} target="_blank" rel="noreferrer">Open cited source ↗</a>
+                            : al.source_origin === "Customer record" && <span>{e.path} · {e.locator}</span>}
+                        </div>)}
+                      </details>}
                     </div>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setOpenDraft(expanded ? null : al.alert_id)}
                         className="rounded border border-rule bg-surface px-2.5 py-1 text-xs font-semibold text-ink hover:bg-dock"
                       >
-                        {expanded ? "Hide Draft" : `Preview (${al.language})`}
+                        {expanded ? "Hide wording" : `Sample wording (${al.language})`}
                       </button>
-                      {al.status === "dispatched" ? (
-                        <span className="rounded bg-ok-soft px-2.5 py-1 text-xs font-bold text-ok">Requested</span>
-                      ) : al.status === "blocked_anti_spam" ? (
-                        <span className="rounded bg-dock px-2.5 py-1 text-xs font-semibold text-muted" title="Chaser already has an open thread with this supplier">
-                          Existing thread open
-                        </span>
+                      {al.status !== "ready" && al.outbox_id != null ? (
+                        <Link href={mailHref(al.outbox_id)} className="rounded bg-dock px-2.5 py-1 text-xs font-semibold text-act underline">
+                          {al.status === "dispatched" ? "View requested email" : "View open supplier thread"}
+                        </Link>
                       ) : (
                         <button
                           onClick={() => void dispatchPreemptive(al)}

@@ -155,10 +155,19 @@ export function ago(ts: string | null | undefined, now: number): string {
   return `${Math.round(s / 3600)} h ago`;
 }
 
-export async function loadObservabilitySnapshot(): Promise<{ snap: ObservabilitySnapshot; online: boolean }> {
-  const [health, trace, drops, changes, issues, conflicts, risk, decisions, forecast, outbox, inbox] =
+export async function loadObservabilitySnapshot(previous = EMPTY_OBSERVABILITY, allowUnchanged = false) {
+  const missing: (keyof ObservabilitySnapshot)[] = [];
+  let health: HealthCheckResponse;
+  try {
+    health = await getData<HealthCheckResponse>("/api/health");
+  } catch {
+    return { snap: previous, online: false, missing };
+  }
+  if (allowUnchanged && health.activity_version && health.activity_version === previous.health?.activity_version) {
+    return { snap: { ...previous, health }, online: true, missing };
+  }
+  const [trace, drops, changes, issues, conflicts, risk, decisions, forecast, outbox, inbox] =
     await Promise.allSettled([
-      getData<HealthCheckResponse>("/api/health"),
       getData<AgentLogEntry[]>("/api/trace?limit=500"),
       getData<DropRecord[]>("/api/drops"),
       getData<FieldChange[]>("/api/changes?limit=300"),
@@ -170,21 +179,18 @@ export async function loadObservabilitySnapshot(): Promise<{ snap: Observability
       getData<OutboxMessage[]>("/api/outbox"),
       getData<InboxMessage[]>("/api/inbox"),
     ]);
-  const val = <T,>(r: PromiseSettledResult<T>, fallback: T) => (r.status === "fulfilled" ? r.value : fallback);
+  function keep<K extends keyof ObservabilitySnapshot>(key: K, result: PromiseSettledResult<ObservabilitySnapshot[K]>) {
+    if (result.status === "fulfilled") return result.value;
+    missing.push(key);
+    return previous[key];
+  }
   return {
-    online: health.status === "fulfilled",
+    online: true, missing,
     snap: {
-      health: val(health, null),
-      trace: val(trace, []),
-      drops: val(drops, []),
-      changes: val(changes, []),
-      issues: val(issues, []),
-      conflicts: val(conflicts, []),
-      risk: val(risk, []),
-      decisions: val(decisions, []),
-      forecast: val(forecast, []),
-      outbox: val(outbox, []),
-      inbox: val(inbox, []),
+      health, trace: keep("trace", trace), drops: keep("drops", drops), changes: keep("changes", changes),
+      issues: keep("issues", issues), conflicts: keep("conflicts", conflicts), risk: keep("risk", risk),
+      decisions: keep("decisions", decisions), forecast: keep("forecast", forecast),
+      outbox: keep("outbox", outbox), inbox: keep("inbox", inbox),
     },
   };
 }

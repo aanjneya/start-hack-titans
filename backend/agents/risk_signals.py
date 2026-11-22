@@ -193,8 +193,9 @@ def load_ports_from_root(data_root: Optional[Path] = None) -> dict[str, dict[str
 # ---------------------------------------------------------------------------
 # 1. Polymarket Provider (Live Geopolitics & Economy Events via Gamma API)
 # ---------------------------------------------------------------------------
+_MARITIME_CORRIDORS = ("hormuz", "red sea", "houthi", "suez")
 _POLYMARKET_RULES: list[tuple[tuple[str, ...], list[str], list[str]]] = [
-    (("strait of hormuz", "hormuz", "red sea", "houthi", "suez", "blockade", "shipping"),
+    ((*_MARITIME_CORRIDORS, "blockade", "shipping"),
      ["CN", "KR", "IN"], ["maritime", "chokepoint"]),
     (("china", "taiwan", "rare earth", "export control", "south china sea"),
      ["CN", "KR"], ["geopolitics", "export-control"]),
@@ -321,10 +322,11 @@ def _market_signal(market, event, countries, reference_now):
     if severity < 0.10:
         return None
     direct = named_countries(question, countries)
+    if not direct and not any(term in q for term in _MARITIME_CORRIDORS):
+        if named_countries(question, (c.alpha2 for c in iso_countries)):
+            return None  # A shipping or tariff question about a different country is not evidence for these suppliers.
     for terms, area, tags in _POLYMARKET_RULES:
         if any(term in q for term in terms):
-            if not direct and "maritime" not in tags and named_countries(question, (c.alpha2 for c in iso_countries)):
-                continue
             scope = direct or sorted(set(area).intersection(countries))
             if scope:
                 break

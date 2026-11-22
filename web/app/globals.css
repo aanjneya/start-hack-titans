@@ -137,6 +137,53 @@ html { scroll-padding-top: calc(var(--workspace-nav-height) + 1rem); }
 .workspace-menu-panel a:focus-visible { outline-color: #477554; }
 .workspace-skip { position: absolute; left: 1rem; top: -6rem; z-index: 2; padding: .6rem 1rem; border-radius: .25rem; background: white; color: #203d30; }
 .workspace-skip:focus { top: .4rem; }
+
+.risk-topic-nav { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem 1.25rem; border-bottom: 1px solid var(--border); }
+.risk-topic-nav a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  font-size: .84rem;
+  font-weight: 620;
+  color: var(--brand-ink);
+  text-decoration: underline;
+  text-decoration-color: #b9c6b6;
+  text-underline-offset: .28rem;
+}
+.risk-topic-nav a:hover { text-decoration-color: currentColor; }
+.signal-market {
+  --color-ink: #f5f8f4;
+  --color-muted: #c8d9d1;
+  --color-act: #b8daaf;
+  --color-rule: #526f63;
+  --color-surface: #2e5044;
+  --color-warn: #ffdc91;
+  background: #213f34;
+  color: var(--color-ink);
+}
+.signal-market h3 { max-width: 39ch; font-size: clamp(1.15rem, 1.6vw, 1.5rem); line-height: 1.2; }
+.signal-market .signal-odds { font-size: clamp(2.6rem, 3.4vw, 3.65rem); letter-spacing: -.045em; }
+.signal-market a:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.signal-buyer-action a { text-underline-offset: .2rem; }
+@media (max-width: 30rem) {
+  .risk-topic-nav { column-gap: 1rem; }
+  .risk-topic-nav a { font-size: .79rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .signal-market figure [style*="width"] { transition: width .36s cubic-bezier(.2,.65,.3,1); }
+  .risk-workspace :is(#risk-ratings, #risk-signals, #risk-action, #risk-scenarios):target {
+    animation: risk-section-arrive .8s ease-out;
+  }
+  .risk-workspace details[open] > :not(summary) { animation: risk-reveal .16s ease-out; }
+  @keyframes risk-section-arrive {
+    from { outline: 2px solid #73957c; outline-offset: .15rem; }
+    to { outline: 2px solid transparent; outline-offset: .4rem; }
+  }
+  @keyframes risk-reveal {
+    from { opacity: .45; transform: translateY(-2px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
 @media (max-width: 55rem) {
   .workspace-wide-nav { display: none; }
   .workspace-compact-nav { display: block; }

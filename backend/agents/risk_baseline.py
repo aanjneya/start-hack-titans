@@ -1,10 +1,12 @@
 """Read the Risk Rater's published scores and last provider readings for the buyer screens."""
 from __future__ import annotations
 
+from sqlalchemy import and_, or_
 from sqlmodel import func, select
 
 from ..core import llm
 from ..core.models import Evidence, RiskFeedSnapshot, RiskScore
+from .planner_risk import market_readings, priced_markets
 from .reconciler_rules import CheckContext, compute_part_impact
 from .risk_scoring import ComputedRisk, ReasonItem
 from .risk_signals import ExternalSignal
@@ -14,6 +16,28 @@ def current_risk_scores(db):
     newest = select(func.max(RiskScore.id)).group_by(RiskScore.entity_type, RiskScore.entity_id)
     return db.exec(select(RiskScore).where(RiskScore.id.in_(newest)).order_by(
         RiskScore.grade.desc(), RiskScore.entity_type, RiskScore.entity_id)).all()
+
+
+def current_risk_response(db):
+    """Fetch latest ratings plus just the preceding supplier publication in a single snapshot."""
+    rank = func.row_number().over(partition_by=(RiskScore.entity_type, RiskScore.entity_id),
+                                  order_by=RiskScore.id.desc()).label("rank")
+    ranked = select(RiskScore.id, rank).subquery()
+    rows = db.exec(select(RiskScore, ranked.c.rank).join(ranked, ranked.c.id == RiskScore.id)
+                   .where(or_(ranked.c.rank == 1, and_(RiskScore.entity_type == "supplier", ranked.c.rank == 2)))
+                   .order_by(RiskScore.grade.desc(), RiskScore.entity_type, RiskScore.entity_id)).all()
+    previous = {row.entity_id: market_readings(row) for row, rank in rows if rank == 2}
+    result = []
+    for row, rank in rows:
+        if rank != 1:
+            continue
+        data = row.model_dump(mode="json")
+        if row.entity_type == "supplier" and row.entity_id in previous:
+            for key, market in priced_markets(data["reasons"]):
+                if key in previous[row.entity_id]:
+                    market["previous_yes_pct"] = previous[row.entity_id][key]
+        result.append(data)
+    return result
 
 
 def saved_signals(db):

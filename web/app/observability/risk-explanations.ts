@@ -50,7 +50,7 @@ const factorSummaries: Record<string, string> = {
   regulatory_change: "A regulatory update needs checking against this supplier’s orders.",
   weather: "Weather on the shipping route could disrupt deliveries.",
   telemetry: "A shipment tracking update needs checking.",
-  external_politics: "Prediction markets flag a possible disruption in the supplier’s region.",
+  external_politics: "Political or trade signals flag a possible disruption in the supplier’s region.",
   shift_slack: "The remaining packing work leaves little time to recover from a delay.",
   baseline: "The rating found no material disruption.",
 };
@@ -90,6 +90,7 @@ export function reasonHeadline(reason: ExtendedRiskReason, names: RiskNames): st
     if (orders) return `${orders} purchase ${orders === "1" ? "order needs" : "orders need"} internal approval.`;
     return text.includes("seat") ? "A category lead position is vacant." : "The purchasing team has unresolved high-priority issues.";
   }
+  if (reason.factor === "external_politics" && text.includes("Polymarket")) return "A prediction market flags a possible disruption in the supplier’s region.";
   if (reason.factor === "trade_news") return text.replace(/^Trade\/export news \([^)]+\):\s*/, "");
   if (reason.factor === "lead_time_spike") {
     const days = text.match(/to (\d+)d at/)?.[1];

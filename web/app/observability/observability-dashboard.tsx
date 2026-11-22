@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EMPTY_OBSERVABILITY, loadObservabilitySnapshot, postData,
   type ObservabilitySnapshot,
@@ -13,9 +13,11 @@ import {
   PlannerReport, ReconcilerReport, RiskRaterReport, WatcherReport,
 } from "./agent-reports";
 import { AgentWorkspace } from "./workspace/agent-workspace";
+import CheckSignals from "../check-signals";
 import type { RunResult } from "../../../API_CONTRACT";
 
 const VALID_IDS = new Set<string>(AGENT_NAV.map((a) => a.id));
+const RISK_TOPICS = [["risk-ratings", "Ratings"], ["risk-signals", "Market signals"], ["risk-action", "Buyer action"], ["risk-scenarios", "Scenarios"]] as const;
 
 export default function ObservabilityDashboard() {
   const searchParams = useSearchParams();
@@ -27,11 +29,31 @@ export default function ObservabilityDashboard() {
   const [now, setNow] = useState<number>(0);
   const [dropBusy, setDropBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [riskUnavailable, setRiskUnavailable] = useState(false);
+  const last = useRef(EMPTY_OBSERVABILITY);
+  const nextFullRead = useRef(0);
+  const reading = useRef(false);
   const refresh = useCallback(async () => {
-    const { snap: next, online: up } = await loadObservabilitySnapshot();
-    setOnline(up);
-    if (up) setSnap(next);
-    setNow(Date.now());
+    if (reading.current) return;
+    reading.current = true;
+    try {
+      const previous = last.current;
+      const allowUnchanged = Date.now() < nextFullRead.current;
+      const { snap: next, online: up, missing } = await loadObservabilitySnapshot(previous, allowUnchanged);
+      setOnline(up);
+      if (up) {
+        last.current = next;
+        setSnap(next);
+        setRiskUnavailable(missing.includes("risk"));
+        if (missing.length) nextFullRead.current = 0;
+        else if (!allowUnchanged || next.health?.activity_version !== previous.health?.activity_version) {
+          nextFullRead.current = Date.now() + 30_000;
+        }
+      } else nextFullRead.current = 0;
+      setNow(Date.now());
+    } finally {
+      reading.current = false;
+    }
   }, []);
 
   useEffect(() => {
@@ -79,22 +101,34 @@ export default function ObservabilityDashboard() {
 
   const activeMeta = agentMeta(selectedId);
   const mock = snap.health?.mockMode ?? true;
+  const riskView = selectedId === "risk";
+  const hasRatings = snap.risk.length > 0;
+  const riskEntity = searchParams.get("entity");
+
+  useEffect(() => {
+    if (!riskView || !hasRatings) return;
+    // A shared link may load before the data-backed section exists.
+    const id = window.location.hash.slice(1);
+    if (RISK_TOPICS.some(([topic]) => topic === id)) {
+      document.getElementById(id)?.scrollIntoView({ block: "start" });
+    }
+  }, [riskView, hasRatings, riskEntity]);
 
   return (
-    <div className="mx-auto min-h-[calc(100dvh-var(--workspace-nav-height,0px))] max-w-[1720px] text-ink md:flex">
-      <aside className="sticky hidden w-[205px] shrink-0 self-start overflow-y-auto border-r border-rule bg-surface p-3 md:block lg:w-[225px]"
+    <div className={`mx-auto min-h-[calc(100dvh-var(--workspace-nav-height,0px))] text-ink md:flex ${riskView ? "max-w-[1376px]" : "max-w-[1720px]"}`}>
+      {!riskView && <aside className="sticky hidden w-[205px] shrink-0 self-start overflow-y-auto border-r border-rule bg-surface p-3 md:block lg:w-[225px]"
         style={{ top: "var(--workspace-nav-height, 0px)", maxHeight: "calc(100dvh - var(--workspace-nav-height, 0px))" }}>
         <ReportNavigation active={selectedId} errors={agentErrors} />
-      </aside>
+      </aside>}
 
-      <main className="min-w-0 flex-1 px-4 pb-16 sm:px-6 lg:px-8">
-        <details key={selectedId} className="group mt-3 rounded-lg border border-rule bg-surface md:hidden">
+      <main className={`min-w-0 flex-1 px-4 pb-16 sm:px-6 lg:px-8 ${riskView ? "risk-workspace" : ""}`}>
+        {!riskView && <details key={selectedId} className="group mt-3 rounded-lg border border-rule bg-surface md:hidden">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm font-semibold">
             <span>Browse team reports</span>
             <span aria-hidden className="text-act group-open:rotate-90">›</span>
           </summary>
           <div className="border-t border-rule p-2"><ReportNavigation active={selectedId} errors={agentErrors} /></div>
-        </details>
+        </details>}
         <header className="flex flex-wrap items-end justify-between gap-3 border-b border-rule py-5">
           <div className="min-w-0">
             {selectedId !== "overview" && <p className="mb-1 text-xs font-semibold text-act">{activeMeta.name}</p>}
@@ -105,6 +139,7 @@ export default function ObservabilityDashboard() {
             {selectedId === "chaser" && <Link className="font-semibold text-act underline underline-offset-2" href="/?view=emails">Open supplier email</Link>}
             {selectedId === "reconciler" && <Link className="font-semibold text-act underline underline-offset-2" href="/?view=findings">Open findings</Link>}
             {snap.health && <span className="text-muted">{snap.health.replayEnabled ? "Replay data" : mock ? "Offline mode" : "Live data"}</span>}
+            {riskView && <CheckSignals online={online === true} mock={mock} refresh={refresh} />}
             {selectedId === "overview" && snap.health?.replayEnabled && <button
               type="button"
               onClick={nextDrop}
@@ -115,6 +150,9 @@ export default function ObservabilityDashboard() {
             </button>}
           </div>
         </header>
+        {riskView && <nav aria-label="Risk report sections" className="risk-topic-nav">
+          {RISK_TOPICS.map(([id, title]) => <a key={id} href={`#${id}`}>{title}</a>)}
+        </nav>}
 
         <div className="mt-5 space-y-6">
           {notice && (
@@ -146,7 +184,14 @@ export default function ObservabilityDashboard() {
           {selectedId === "reconciler" && <ReconcilerReport snap={snap} />}
           {selectedId === "chaser" && <ChaserReport snap={snap} />}
           {selectedId === "planner" && <PlannerReport snap={snap} now={now} />}
-          {selectedId === "risk" && <RiskRaterReport snap={snap} />}
+          {riskView && <>
+            {riskUnavailable && <p role="alert" className="rounded-lg bg-warn-soft px-4 py-3 text-sm text-warn">
+              {snap.risk.length ? "The latest ratings could not be loaded. Showing the last available readings." : "Risk ratings are temporarily unavailable."}
+              {" "}<button className="font-semibold underline" onClick={() => void refresh()}>Retry</button>
+            </p>}
+            {(snap.risk.length > 0 || (online && !riskUnavailable)) ? <RiskRaterReport snap={snap} />
+              : online === null && <p role="status" className="py-3 text-sm text-muted">Loading risk ratings and their sources…</p>}
+          </>}
           {selectedId === "human" && <HumanAuditReport snap={snap} />}
 
           <AgentTimeline trace={snap.trace} agentId={selectedId} now={now} />

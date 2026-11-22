@@ -10,12 +10,13 @@ import {
 } from "@/lib/api";
 import type { ActionRun, BuyerActivity, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
-import { emailDeliveries, OperationsSummary, PackingOutlook, RecoveryOutlook } from "./supply-overview";
+import { emailDeliveries, OperationsSummary, PackingOutlook, RecoveryOutlook, SupplierRiskWatch } from "./supply-overview";
 import DataDrawer from "./data-drawer";
 import { actionLine, entryDetail, humanizeAction } from "./observability/agent-meta";
 import { RiskBoard, SeverityLabel } from "./risk-board";
 import History from "./decision-history";
 import SampleTiming from "./sample-timing";
+import CheckSignals from "./check-signals";
 import BuyerUpdates from "./buyer-updates";
 import { SourceList, SourcePassage } from "./decision-source";
 import { formatMoney, OrderCalculation } from "./approval-details";
@@ -388,6 +389,7 @@ function BuyerWorkspace() {
             )}
           />
 
+          <SupplierRiskWatch scores={snap.risk} queue={snap.queue} waiting={online !== true || missing.includes("risk")} />
           <div className="grid gap-3 md:grid-cols-2">
             <PackingOutlook editions={editions} waiting={online !== true || missing.includes("forecast")} replayEnabled={!!snap.health?.replayEnabled} />
             <RecoveryOutlook queue={snap.queue} waiting={online !== true || missing.includes("queue")} />
@@ -1495,18 +1497,6 @@ function MarketWatch({scores}: {scores: RiskScore[]}) {
 function SignalRefresh({reading, scores, online, mock, refresh, timezone = "UTC"}: {
   reading: HealthCheckResponse["lastRiskCheck"]; scores: RiskScore[]; online: boolean; mock: boolean; refresh: () => Promise<void>; timezone?: string;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const check = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await postData<ActionRun>("/api/risk/refresh");
-      await refresh();
-      if (result.status === "partial") setError("Signal check incomplete. Open the check trace for details.");
-    } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
-  };
   const failed = Object.keys(reading?.unavailable ?? {});
   return <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule bg-surface p-4">
     <div className="text-sm"><h3 className="font-bold">External signal check</h3>
@@ -1514,9 +1504,8 @@ function SignalRefresh({reading, scores, online, mock, refresh, timezone = "UTC"
         ? "previous grades retained" : `${reading.grades_changed} grade ${reading.grades_changed === 1 ? "change" : "changes"}`}</> : "Waiting for the first check."}
         {reading && <> · <a className="text-act underline" target="_blank" rel="noreferrer" href={API_URL + "/api/trace?run_id=" + reading.run_id}>Check trace (JSON)</a></>}</p>
       {failed.length > 0 && <p role="alert" className="text-warn">Unavailable feeds · {failed.join(", ")}</p>}
-      {error && <p role="status" className="text-warn">{error}</p>}</div>
-    <button className="rounded border border-rule px-3 py-2 text-sm font-semibold text-act disabled:opacity-50"
-      disabled={busy || !online} onClick={() => void check()}>{busy ? "Checking signals…" : mock ? "Check signals" : "Refresh live signals"}</button>
+    </div>
+    <CheckSignals online={online} mock={mock} refresh={refresh} />
     <MarketWatch scores={scores} />
   </div>;
 }

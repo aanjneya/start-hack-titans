@@ -43,3 +43,37 @@ def test_viewing_risk_scenarios_reuses_the_recorded_ratings_and_feed_history(mon
     assert {p["product_id"] for p in remaining} == set(scores) - {product}
     assert not calls
     assert before == feed_history()
+
+
+def test_current_market_history_uses_the_adjacent_supplier_publication_only():
+    def observation(price=72, question="Q", live=True, outcome="Yes", **kwargs):
+        return dict(provider="polymarket", evidence={"path": "https://polymarket.com/event/trade"},
+                    title="Will export rules change?", live=live,
+                    market=dict(yes_pct=price, question_id=question, disruption_outcome=outcome), **kwargs)
+
+    def score(supplier, *observations):
+        return RiskScore(entity_type="supplier", entity_id=supplier, grade=4, rating="BBB",
+                         reasons=[dict(signal_inputs={"external_politics": list(observations)})])
+
+    add_all([
+        score("same-grade", observation(12)), score("same-grade", observation(18)), score("same-grade", observation(23)),
+        score("same-price", observation(live=False, question=None)), score("same-price", observation(live=False, question=None)),
+        score("wrong-instrument", observation(50, question="Q1")), score("wrong-instrument", observation(question="Q2")),
+        score("new", observation()),
+        score("reintroduced", observation()), score("reintroduced"), score("reintroduced", observation()),
+        score("mode-change", observation(live=False)), score("mode-change", observation()),
+        score("outcome-change", observation()), score("outcome-change", observation(outcome="No")),
+        score("retained-before", observation(last_known_at="2026-11-21")), score("retained-before", observation()),
+        score("retained-now", observation()), score("retained-now", observation(last_known_at="2026-11-21")),
+        score("missing-price", observation(None)), score("missing-price", observation()),
+        score("unknown-live-id", observation(question=None)), score("unknown-live-id", observation(question=None)),
+    ])
+    client = TestClient(app)
+    rows = client.get("/api/risk?current=true").json()["data"]
+    def markets(rows):
+        return [(r["entity_id"], obs["market"]) for r in rows for obs in r["reasons"][0]["signal_inputs"]["external_politics"]]
+    assert {supplier: m["previous_yes_pct"] for supplier, m in markets(rows) if "previous_yes_pct" in m} == {
+        "same-grade": 18, "same-price": 72}
+    assert len(rows) == 11
+    history = client.get("/api/risk").json()["data"]
+    assert all("previous_yes_pct" not in m for _, m in markets(history))

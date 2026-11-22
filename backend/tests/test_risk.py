@@ -389,6 +389,12 @@ def test_live_market_binds_named_outcome_country_and_active_question(monkeypatch
                                  closes_at=market["endDate"], scope_basis="Country named in the question")
     assert signal.rating_input("CA", set(), set())["market"] == signal.market
     assert collect({"CN"}) == []
+    rows[0]["markets"] = [dict(market, question="Will Canada ban shipping exports?")]
+    assert collect({"CN"}) == []
+    assert collect({"CA", "CN"})[0].countries == ["CA"]
+    rows[0]["markets"] = [dict(market, question="Will Iran block shipping in the Strait of Hormuz?")]
+    regional, = collect({"CN"})
+    assert regional.market["scope_basis"] == "Regional exposure rule" and regional.countries == ["CN"]
     for invalid in [dict(market, outcomes=None), dict(market, outcomes=["No", "No"]),
                     dict(market, outcomePrices=None, bestBid=.9), dict(market, closed=True),
                     dict(market, outcomePrices='["0","nan"]')]:
@@ -498,18 +504,39 @@ def test_preemptive_chase_endpoint_dispatches_via_chaser():
     assert pb["preemptive_alerts"]
     alert = pb["preemptive_alerts"][0]
 
+    # The replay created open Chaser threads. Close this supplier’s old thread as a fixture,
+    # so this test exercises an actual new message instead of passing when zero are produced.
+    with session() as db:
+        for message in db.exec(select(OutboxMessage).where(OutboxMessage.supplier_id == alert["supplier_id"])):
+            message.status = "replied"
+            message.sent_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        db.commit()
     before_count = len(all_rows(OutboxMessage))
+    for changed in [{"shipment_id": "different-shipment"}, {"supplier_id": "different-supplier"}]:
+        stale = client.post("/api/risk/preemptive-chase", json={
+            "alert_id": alert["alert_id"], "supplier_id": alert["supplier_id"], **changed})
+        assert stale.status_code == 409
+    assert len(all_rows(OutboxMessage)) == before_count
     resp = client.post("/api/risk/preemptive-chase", json={
         "alert_id": alert["alert_id"],
         "supplier_id": alert["supplier_id"],
         "shipment_id": alert["shipment_id"],
         "po_number": alert["po_number"],
         "part_id": alert["part_id"],
-        "ask": alert["draft_body_en"],
+        "ask": "An old draft before the warning changed.",
     })
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
-    assert len(all_rows(OutboxMessage)) >= before_count
+    result = resp.json()["data"]
+    assert result["delivery"] == "simulated" and result["outbox_id"]
+    sent = next(row for row in all_rows(OutboxMessage) if row.id == result["outbox_id"])
+    assert alert["signal_title"] in sent.body_en and "An old draft" not in sent.body_en
+    assert len(all_rows(OutboxMessage)) == before_count + 1
+    again = client.post("/api/risk/preemptive-chase", json={"alert_id": alert["alert_id"], "supplier_id": alert["supplier_id"]})
+    assert again.status_code == 409 and len(all_rows(OutboxMessage)) == before_count + 1
+    latest = client.get("/api/risk/playbook").json()["data"]["preemptive_alerts"]
+    handled = next(a for a in latest if a["alert_id"] == alert["alert_id"])
+    assert handled["outbox_id"] == sent.id and handled["status"] == "dispatched"
     logs = [e for e in trace.recent(limit=50) if e.agent == "human" and e.action == "preemptive_chase"]
     assert logs
 

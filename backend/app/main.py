@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_, text
 from sqlmodel import func, select
 
-from ..agents.risk_baseline import current_risk_scores
+from ..agents.risk_baseline import current_risk_response
 from ..agents.planner_history import decision_history
 from ..agents.planner_queue import buyer_queue, current_option, selection_version
 from ..agents.planner_delivery import DeliveryAdvice, SupplierQuote, already_requested
@@ -410,7 +410,7 @@ def buyer_activity() -> dict:
 def risk(current: bool = False) -> dict:
     if current:
         with session() as db:
-            return ok([r.model_dump(mode="json") for r in current_risk_scores(db)])
+            return ok(current_risk_response(db))
     return ok(_rows(RiskScore, order=RiskScore.grade.desc()))
 
 
@@ -430,34 +430,22 @@ def risk_playbook() -> dict:
 class PreemptiveChaseRequest(BaseModel):
     alert_id: str
     supplier_id: str
+    # Existing clients may send these references. The server verifies them before dispatch.
     shipment_id: str = ""
     po_number: str = ""
     part_id: str = ""
-    ask: str
 
 
 @app.post("/api/risk/preemptive-chase")
 def risk_preemptive_chase(req: PreemptiveChaseRequest) -> dict:
-    """Dispatch a policy-gated, rate-limited pre-emptive supplier check triggered by live external risk feeds."""
     if not req.supplier_id:
         raise HTTPException(422, "supplier_id is required")
-    trace.log(
-        "human",
-        "preemptive_chase",
-        f"dispatched pre-emptive corridor check to {req.supplier_id} ({req.alert_id})",
-        data={"alert_id": req.alert_id, "supplier_id": req.supplier_id, "shipment_id": req.shipment_id},
-    )
-    result = system.emit(
-        events.EMAIL_REQUESTED,
-        {
-            "supplier_id": req.supplier_id,
-            "shipment_id": req.shipment_id,
-            "po_number": req.po_number,
-            "part": req.part_id,
-            "ask": f"[Pre-Emptive Corridor Check] {req.ask}",
-        },
-    )
-    return ok({"alert_id": req.alert_id, "supplier_id": req.supplier_id, **result})
+    try:
+        return ok(system.request_supplier_check(req.alert_id, req.supplier_id, {
+            "shipment_id": req.shipment_id, "po_number": req.po_number, "part_id": req.part_id,
+        }))
+    except system.SupplierCheckChanged as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 @app.get("/api/outbox")

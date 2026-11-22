@@ -121,6 +121,7 @@ export interface SampleWindow {
 
 export interface MarketObservation {
   yes_pct: number; disruption_outcome: 'Yes' | 'No'; question_id: string | null; closes_at: string | null; scope_basis?: string;
+  /** On current supplier ratings, the same market's Yes price at the immediately preceding published rating. */
   previous_yes_pct?: number;
 }
 
@@ -484,12 +485,16 @@ export interface PreemptiveChaseAlert {
   provider: string;
   category: string;
   signal_title: string;
+  source_scope: string;
+  source_origin: 'Offline example' | 'Customer record' | 'Public feed at collection';
   signal_score: number;
-  lead_time_advantage_hours: number;
+  lead_time_advantage_hours: number; // Legacy provider heuristic, not a measured deadline.
+  supplier_question: string;
   draft_subject: string;
   draft_body: string;
   draft_body_en: string;
   status: 'ready' | 'dispatched' | 'blocked_anti_spam';
+  outbox_id: number | null;
   evidence: Evidence[];
 }
 
@@ -553,13 +558,19 @@ export interface RiskPlaybookResponse {
   circuit_breakers: CircuitBreakerAction[];
 }
 
+export interface SupplierCheckResult extends ActionRun {
+  alert_id: string; supplier_id: string; outbox_id: number | null;
+  delivery: 'simulated' | 'sent' | 'draft' | 'failed' | 'no_message';
+}
+
 export interface PreemptiveChaseRequest {
   alert_id: string;
   supplier_id: string;
   shipment_id?: string;
   po_number?: string;
   part_id?: string;
-  ask: string;
+  /** Legacy clients included wording. The server generates the draft from the current warning. */
+  ask?: string;
 }
 
 /**

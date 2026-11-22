@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { findingHref, mailHref } from "../buyer-links";
 import { useEffect, useMemo, useState } from "react";
 import { AgentRoster } from "@/components/ui/agent-roster";
@@ -13,6 +14,7 @@ import {
   AGENT_NAV, TONE_CLASS, agentMeta, entryDetail, humanizeAction, isPlumbingEvent, type AgentId,
 } from "./agent-meta";
 import RiskPlaybook from "../risk-playbook";
+import { SupplySignals } from "./supply-signals";
 import { recordedScore, reasonHeadline, riskBands, type RiskNames } from "./risk-explanations";
 import { ForecastPanel } from "./forecast-chart";
 import { buildRosterAgents, plural } from "./roster";
@@ -99,7 +101,7 @@ function EvidenceList({ evidence }: { evidence: Evidence[] }) {
   return (
     <ul className="mt-2 space-y-1 text-xs">
       {evidence.slice(0, 6).map((e, idx) => {
-        const isUrl = /^https?:\/\//i.test(e.path);
+        const isUrl = /^https?:\/\//i.test(e.path) && !/\boffline\b/i.test(e.quote) && e.source_kind !== "Offline example";
         return (
           <li key={idx} className="break-words rounded bg-dock/70 px-2.5 py-1.5 text-muted">
             {isUrl ? (
@@ -574,14 +576,14 @@ export function PlannerReport({ snap, now }: { snap: ObservabilitySnapshot; now:
 // ---------------------------------------------------------------------------
 // 7. Risk Rater Report
 // ---------------------------------------------------------------------------
-function RatingDetails({ row, names }: { row: RiskScore; names: RiskNames }) {
+function RatingDetails({ row, names, selected }: { row: RiskScore; names: RiskNames; selected: boolean }) {
   const reasons: ExtendedRiskReason[] = row.reasons ?? [];
   const score = recordedScore(row);
   const breakdown = Object.entries(reasons[0]?.breakdown ?? {}).filter(([, value]) => value > 0);
   const severity = riskBands.find(band => band.rating === row.rating)?.label;
   const tone = row.grade >= 6 ? "text-stop bg-stop-soft" : row.grade >= 4 ? "text-warn bg-warn-soft" : "text-ok bg-ok-soft";
   return (
-    <details className="group/rating overflow-hidden rounded-xl border border-rule bg-surface">
+    <details open={selected || undefined} className="group/rating overflow-hidden rounded-xl border border-rule bg-surface">
       <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 marker:hidden focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-act">
         <span className={`rounded-md px-2 py-1 text-sm font-bold tabular ${tone}`}>{row.rating}</span>
         <span className="min-w-0 flex-1">
@@ -595,6 +597,9 @@ function RatingDetails({ row, names }: { row: RiskScore; names: RiskNames }) {
       </summary>
       <div className="border-t border-rule px-4 py-3 text-sm">
         <p className="font-semibold">What drives this rating?</p>
+        {row.entity_type === "supplier" && row.reasons[0]?.signal_inputs && <Link
+          href={`/observability?agent=risk&tier=supplier&entity=${encodeURIComponent(row.entity_id)}#risk-signals`}
+          className="mt-1 inline-block text-xs font-semibold text-act underline">See this supplier’s signal sources</Link>}
         {reasons.length === 0 && <p className="mt-2 text-muted">No reasons were recorded for this rating.</p>}
         {reasons.map((reason, idx) => (
           <details key={idx} className="mt-1">
@@ -626,7 +631,18 @@ function RatingDetails({ row, names }: { row: RiskScore; names: RiskNames }) {
 }
 
 export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
-  const [filter, setFilter] = useState<RiskScore["entity_type"] | "all" | null>(null);
+  const params = useSearchParams();
+  const tier = params.get("tier");
+  const initialTier = tier === "product" || tier === "part" || tier === "supplier" ? tier : null;
+  const entity = initialTier ? params.get("entity") ?? "" : "";
+  return <RiskOverview key={JSON.stringify([initialTier, entity])} snap={snap} initialTier={initialTier} entity={entity} />;
+}
+
+function RiskOverview({ snap, initialTier, entity }: {
+  snap: ObservabilitySnapshot; initialTier: RiskScore["entity_type"] | null; entity: string;
+}) {
+  const [filter, setFilter] = useState<RiskScore["entity_type"] | "all" | null>(initialTier);
+  const [showAll, setShowAll] = useState(false);
   const [names, setNames] = useState<RiskNames>({ product: {}, part: {}, supplier: {} });
   const loadedDrop = snap.health?.lastDrop?.run_id;
   const hasRatings = snap.risk.length > 0;
@@ -651,30 +667,35 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
   const activeFilter = filter ?? (snap.risk.some(row => row.entity_type === "product") ? "product" : "all");
   const visible = snap.risk.filter(row => activeFilter === "all" || row.entity_type === activeFilter)
     .sort((a, b) => b.grade - a.grade || (recordedScore(b) ?? -1) - (recordedScore(a) ?? -1) || a.entity_id.localeCompare(b.entity_id));
-  const latestRiskLog = snap.trace.find(e => e.agent === "risk" && e.action === "risk_rated");
-  const extCounts = snap.health?.lastRiskCheck?.sources
-    ?? (latestRiskLog?.data?.external_signals as Record<string, number> | undefined) ?? {};
+  const linkedIndex = visible.findIndex(row => row.entity_type === initialTier && row.entity_id === entity);
+  const firstRows = linkedIndex >= 6 ? [visible[linkedIndex], ...visible.filter((_, index) => index !== linkedIndex).slice(0, 5)] : visible.slice(0, 6);
+  const displayed = showAll ? visible : firstRows;
 
   return (
     <div className="space-y-6">
-      <section aria-label="Rated products, parts and suppliers" className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 flex-1 basis-60 text-sm text-muted">Scores run from 0 to 100. Higher scores mean greater exposure to disruption.</p>
-          <div role="group" aria-label="Filter ratings" className="flex flex-wrap gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
+      <div className="grid min-w-0 items-start gap-x-5 gap-y-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:grid-rows-[min-content_1fr]">
+      <section id="risk-ratings" aria-label="Rated products, parts and suppliers" className="lg:col-start-1 lg:row-start-1 min-w-0 scroll-mt-24 self-start space-y-3 rounded-xl border border-rule bg-surface p-4 sm:p-5">
+        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <h2 className="text-xl font-bold tracking-tight">Current ratings</h2>
+          <div role="group" aria-label="Filter ratings" className="inline-flex flex-wrap gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
             {(["product", "part", "supplier", "all"] as const).map(type => (
-              <button key={type} type="button" aria-pressed={activeFilter === type} onClick={() => setFilter(type)}
+              <button key={type} type="button" aria-pressed={activeFilter === type} onClick={() => {setFilter(type); setShowAll(false);}}
                 className={`rounded-md px-3 py-1.5 capitalize ${activeFilter === type ? "bg-ink text-white" : "text-muted hover:text-ink"}`}>
                 {type === "all" ? "All" : `${type}s`}
               </button>
             ))}
           </div>
-        </div>
+        </header>
+        <p className="text-sm text-muted">Scores run from 0 to 100. Higher scores mean greater exposure to disruption.</p>
         {visible.length === 0 ? <EmptyState text="No ratings available for this view." /> : <div className="space-y-2">
-          {visible.map(row => <RatingDetails key={`${row.entity_type}/${row.entity_id}`} row={row} names={names} />)}
+          {displayed.map(row => <RatingDetails key={`${row.entity_type}/${row.entity_id}`} row={row} names={names}
+            selected={row.entity_type === initialTier && row.entity_id === entity} />)}
         </div>}
+        {visible.length > 6 && <button type="button" onClick={() => setShowAll(expanded => !expanded)} aria-expanded={showAll}
+          className="text-sm font-semibold text-act underline">{showAll ? "Show fewer ratings" : `Show all ${visible.length} ratings`}</button>}
         <aside aria-label="Risk score legend" className="rounded-lg bg-dock/60 px-4 py-3 text-xs text-muted">
           <p className="font-semibold text-ink">Minimum score for each grade</p>
-          <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 sm:grid-cols-6">
+          <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 xl:grid-cols-6">
             {riskBands.map(({ rating, minimum, label }) => <div key={rating}>
               <dt className="font-semibold text-ink">{rating} <span className="font-normal text-muted">· {label}</span></dt>
               <dd>{minimum} points</dd>
@@ -683,13 +704,9 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
         </aside>
       </section>
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-rule py-3 text-xs text-muted">
-          <span className="font-semibold text-ink">{Object.keys(extCounts).length ? "Signals in the latest check" : "External risk signals"}</span>
-          {Object.entries(extCounts).map(([name, count]) => (
-            <span key={name} className="capitalize">{name} <b className="text-ink tabular">{count}</b></span>
-          ))}
-          <Link href="/?view=risk" className="ml-auto py-1 text-sm font-semibold text-act hover:underline">Review signal sources</Link>
-        </div>
+      <SupplySignals scores={snap.risk} names={names.supplier} preferredSupplier={initialTier === "supplier" ? entity : ""}
+        check={snap.health?.lastRiskCheck} trace={snap.trace} version={snap.health?.activity_version} />
+      </div>
       <RiskPlaybook activityVersion={snap.health?.activity_version} />
     </div>
   );

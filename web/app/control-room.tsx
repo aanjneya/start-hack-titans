@@ -7,7 +7,7 @@ import {
   type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
-import type { BuyerQueueEntry, CustomerSetup } from "../../API_CONTRACT";
+import type { BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import DataDrawer from "./data-drawer";
 
 type Snapshot = {
@@ -116,10 +116,11 @@ export default function ControlRoom() {
     setDropBusy(true);
     setNotice("");
     try {
-      const r = await postData<Record<string, number | string | boolean>>("/api/replay/step");
+      const r = await postData<RunResult & {done?: boolean; step: number; of: number; drops?: number}>("/api/replay/step");
       setNotice(
         r.done
-          ? `All ${r.drops} recorded drops are in. Restart the backend to play them again.`
+          ? `All ${r.drops} recorded drops are in.`
+          : r.status === "partial" ? "Drop incomplete. Retry this step after reviewing the trace."
           : `Drop ${r.step} of ${r.of} processed: ${r.added} files added, ${r.changed} changed, ${r.removed} removed. ${r.open_issues} findings open.`,
       );
     } catch (e) {
@@ -138,7 +139,8 @@ export default function ControlRoom() {
   }, [snap.forecast]);
 
   const recovery = snap.queue.filter(entry => entry.on_time_recovery);
-  const other = snap.queue.filter(entry => !entry.on_time_recovery);
+  const future = snap.queue.filter(entry => entry.option.horizon === "future");
+  const other = snap.queue.filter(entry => !entry.on_time_recovery && entry.option.horizon !== "future");
   const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
     {entries.map(entry => <li key={entry.key}>
       <DecisionView entry={entry} snap={snap} onDone={refresh}
@@ -158,8 +160,13 @@ export default function ControlRoom() {
         deadline={deadline}
         now={now}
         busy={dropBusy}
+        replayEnabled={!!snap.health?.replayEnabled}
         onDrop={nextDrop}
       />
+      {snap.health?.lastDrop?.status === "partial" && <p role="alert" className="mb-4 rounded-md bg-warn-soft p-3">
+        Forecast needs review. {snap.health.lastDrop.failures.map(f => f.agent + " failed on " + f.event).join(", ")}.
+        {" "}<a className="underline" href={API_URL + "/api/trace?run_id=" + snap.health.lastDrop.run_id}>Open run trace</a>
+      </p>}
       {notice && (
         <p role="status" className="mb-4 rounded-md border border-rule bg-surface px-4 py-2 text-sm">
           {notice}
@@ -194,7 +201,11 @@ export default function ControlRoom() {
             </p>
           ) : (
             <>
-              {renderActions(recovery.length ? recovery : other)}
+              {renderActions(recovery)}
+              {future.length > 0 && <section aria-label="Future supply" className="my-4">
+                <h3 className="mb-2 font-semibold">Future supply</h3>{renderActions(future)}
+              </section>}
+              {!recovery.length && renderActions(other)}
               {recovery.length > 0 && other.length > 0 && <details className="mt-4">
                 <summary className="cursor-pointer py-2 text-sm font-semibold text-act">
                   Other requests and reviews ({other.length})
@@ -277,7 +288,7 @@ function CaseUpdates({ snap }: { snap: Snapshot }) {
         : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null
           ? "Simulated request sent. Waiting for a test reply." : "Chaser sent the request. Waiting for the supplier.")
         : sent?.status === "escalated" ? "Chaser escalated the unanswered request to the buyer."
-        : option?.actions.some(a => a.type === "human_review") ? "Assigned to the buyer for internal review."
+        : option?.actions.some(a => a.type === "human_review") ? `Assigned to ${d.approver || "the buyer"} for internal review.`
         : "Approved. Waiting for the handoff.";
       const edition = snap.forecast.find(f => d.title.startsWith(f.edition + " ·"))?.edition;
       const outcome = reply && edition ? forecastAfterReply(reply, snap.forecast, edition) : "";
@@ -295,6 +306,7 @@ function TopBar(props: {
   deadline: string | null;
   now: number;
   busy: boolean;
+  replayEnabled: boolean;
   onDrop: () => void;
 }) {
   const end = parseTs(props.deadline);
@@ -306,7 +318,7 @@ function TopBar(props: {
         ? "Packing has closed"
         : `${Math.floor(left / 3_600_000)} h ${Math.floor((left % 3_600_000) / 60_000)} min until packing closes`;
   const closes = end?.toLocaleString("en-GB", {
-    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: props.setup?.timezone || "UTC",
   });
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
@@ -316,11 +328,11 @@ function TopBar(props: {
             Demo view · {props.setup.demo_buyer} · Procurement buyer
           </p>
         )}
-        <h1 className="text-2xl font-bold leading-tight">Grand Heist 6 launch</h1>
+        <h1 className="text-2xl font-bold leading-tight">{props.setup?.customer || "Procurement"} launch control</h1>
         <p className="text-sm text-muted">
-          Soony packing line, Hamburg
+          {props.setup?.site ? props.setup.site + " packing line" : "Packing line"}
           {props.setup && (props.setup.autonomy.mode === "control" ? " · Control mode" :
-            ` · Auto below ${approvalCurrency.format(props.setup.autonomy.auto_execute_below_eur)}`)}
+            ` · Auto below ${formatMoney().format(props.setup.autonomy.auto_execute_below_eur)}`)}
           {countdown && (
             <>
               {", "}
@@ -348,9 +360,9 @@ function TopBar(props: {
         </span>
         <button
           onClick={props.onDrop}
-          disabled={props.busy || !props.online}
+          disabled={props.busy || !props.online || !props.replayEnabled}
           className="rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-act disabled:cursor-not-allowed disabled:opacity-50"
-          title="Sends the next real portal drop (from git history) through all agents. The first click starts from an empty store."
+          title="Resumes the next recorded drop in the dedicated replay database."
         >
           {props.busy ? "Agents are working" : "Play next data drop"}
         </button>
@@ -402,8 +414,8 @@ function Hero({ editions }: { editions: Forecast[] }) {
   );
 }
 
-const approvalCurrency = new Intl.NumberFormat("en-IE", {
-  style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2,
+const formatMoney = (unit = "EUR") => new Intl.NumberFormat("en-IE", {
+  style: "currency", currency: unit, minimumFractionDigits: 0, maximumFractionDigits: 2,
 });
 
 function DecisionView({ entry, snap, current, onDone }: {
@@ -413,6 +425,7 @@ function DecisionView({ entry, snap, current, onDone }: {
   const [error, setError] = useState("");
   const option = entry.option;
   const buyer = snap.setup?.demo_buyer;
+  const approvalCurrency = formatMoney(option.currency || "EUR");
   const assigned = option.approvers ?? [];
   const ownsAction = !!buyer && assigned.length === 1 && assigned[0] === buyer;
   const cost = option.cost_eur;
@@ -424,7 +437,7 @@ function DecisionView({ entry, snap, current, onDone }: {
   const rule = matrix[band];
   const lower = matrix[band - 1]?.below_eur ?? 0;
   const deadline = parseTs(entry.decide_by)?.toLocaleString("en-GB", {
-    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: snap.setup?.timezone || "UTC",
   });
 
   const decide = async (verb: "approve" | "reject") => {
@@ -449,10 +462,10 @@ function DecisionView({ entry, snap, current, onDone }: {
       <h3 className="mt-1 text-lg font-bold leading-snug">{option.label}</h3>
       <p className="mt-2 text-sm">{entry.next_step}</p>
       <dl className="my-4 flex flex-wrap gap-x-7 gap-y-3 text-sm tabular">
-        <div><dt className="text-muted">Conditional gain</dt><dd className="font-semibold">
-          {option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd></div>
-        <div><dt className="text-muted">Cost</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
-        <div><dt className="text-muted">Approval value</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
+        <div><dt className="text-muted">{option.horizon === "future" ? "Time horizon" : "Conditional gain"}</dt><dd className="font-semibold">
+          {option.horizon === "future" ? "Future replenishment" : option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd></div>
+        <div><dt className="text-muted">{option.horizon === "future" ? "Future sourcing cost" : "Cost"}</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
+        <div><dt className="text-muted">{option.horizon === "future" ? "Spend authorized" : "Approval value"}</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
         <div><dt className="text-muted">Assigned to</dt><dd>{assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
       </dl>
       {entry.shared_shipment && <p className="mb-2 text-sm text-muted">
@@ -462,15 +475,16 @@ function DecisionView({ entry, snap, current, onDone }: {
     </div>
     <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
       {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
-        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">Approve</button>
+        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">{option.button_label || (option.description === "supplier stock offer" ? "Start verification" : "Approve")}</button>
         : <strong>Awaiting {role}</strong>}
-      {deadline && <span className="text-muted">Decide by {deadline} Hamburg time</span>}
+      {deadline && <span className="text-muted">Decide by {deadline} {snap.setup?.timezone || "UTC"}</span>}
     </div>
     {error && <p role="alert" className="px-5 pb-3 text-sm text-stop">{error}</p>}
     <details className="border-t border-rule px-5 py-3 text-sm">
       <summary className="cursor-pointer font-semibold text-act">Why? · {issueIds.length} linked {issueIds.length === 1 ? "finding" : "findings"}</summary>
       <p className="mt-3">{option.risk_note}</p>
-      {rule && value != null && <p className="mt-2">
+      {option.horizon === "future" && <p className="mt-2">Opening this review assigns the work to {assigned.join(" + ") || role}. Any purchase requires a separate decision.</p>}
+      {option.horizon !== "future" && rule && value != null && <p className="mt-2">
         {approvalCurrency.format(value)} falls in the {rule.approvers.join(" + ")} approval band
         {" "}from {approvalCurrency.format(lower)}{rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
         {option.actions.some(a => a.quote_inbox_id != null) && " This includes the original PO and the extra quoted charge."}
@@ -495,7 +509,8 @@ function DecisionView({ entry, snap, current, onDone }: {
         </details>}
       <details><summary className="cursor-pointer">Source evidence ({entry.evidence.length})</summary>
         <ul className="mt-2 space-y-1">{entry.evidence.map((e,i) => <li key={i} className="break-words">
-          {e.path} · {e.locator} {e.quote && `· ${e.quote}`}</li>)}</ul>
+          {e.source_kind && <strong>{e.source_kind} · </strong>}
+          {/^https?:\/\//i.test(e.path) ? <a className="underline" href={e.path}>{e.path}</a> : e.path} · {e.locator} {e.quote && `· ${e.quote}`}</li>)}</ul>
       </details>
       {ownsAction && snap.decisions.find(d => d.id === entry.decision_id)?.recommended === entry.option_index &&
         <button className="mt-3 font-semibold text-act" disabled={!current || busy} onClick={() => decide("reject")}>
@@ -716,7 +731,7 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
             onChange={(e) => setText(e.target.value)}
             rows={2}
             className="mt-1 w-full rounded-md border border-rule p-2"
-            placeholder="We confirm revision C, delivery to DC-HAM on 22.11.2026."
+            placeholder="Confirm the order line, revision, quantity and delivery time."
           />
           <button
             onClick={reply}
@@ -740,11 +755,11 @@ function replyOutcome(r: InboxMessage): string {
   const advice = (res.confirmed_delivery ?? res.supplier_quote) as Record<string, unknown> | undefined;
   if (advice) {
     const when = parseTs(String(advice.arrival))?.toLocaleString("en-GB", {
-      weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+      weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC",
     });
     return res.supplier_quote
       ? `Ingest recorded a quote for ${fmt(Number(advice.quantity))} pcs. The Planner can now compare the offer.`
-      : `Ingest confirmed ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, due ${when} Berlin time. The Planner checks dock release and packing time.`;
+      : `Ingest confirmed ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, due ${when} UTC. The Planner checks dock release and packing time.`;
   }
   const fields = Array.isArray(res.fields) ? (res.fields as string[]) : [];
   return fields.length

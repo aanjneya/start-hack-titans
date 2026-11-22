@@ -24,6 +24,8 @@ export interface ApiResponse<T> {
 export interface HealthCheckResponse {
   status: 'ok' | 'degraded';
   mockMode: boolean;
+  replayEnabled?: boolean;
+  lastDrop?: {status: string; run_id: string; failures: RunResult['failures']} | null;
   timestamp: string;
   dataRoot: string;
   agents: string[];
@@ -32,6 +34,7 @@ export interface HealthCheckResponse {
 /** Where a fact or finding comes from (path is relative to the portal data root). */
 export interface Evidence {
   path: string;
+  source_kind?: string;
   locator: string; // e.g. "row 12", "page 2"
   sha256: string;
   quote: string;
@@ -46,6 +49,8 @@ export type ActionType =
   | 'use_old_revision' | 'block_stock' | 'human_review' | 'other';
 
 export interface Impact {
+  owner?: string;
+  horizon?: string;
   product_id: string;
   copies_at_risk: number | null;
   hours_buffer: number | null;
@@ -91,6 +96,9 @@ export interface Issue {
 }
 
 export interface DecisionOption {
+  horizon?: 'future';
+  button_label?: string;
+  currency?: string;
   label: string;
   description: string;
   cost_eur: number | null;
@@ -203,6 +211,9 @@ export interface OutboxMessage {
 
 export interface CustomerSetup {
   demo_buyer?: string;
+  site?: string;
+  timezone?: string;
+  currency?: string;
   customer: string;
   autonomy: { mode: 'control' | 'auto'; auto_execute_below_eur: number };
   approval_matrix: { below_eur: number | null; approvers: string[] }[];
@@ -271,6 +282,8 @@ export interface ReplyRequest {
 }
 
 export interface RunResult {
+  status: 'completed' | 'partial';
+  failures: {agent: string; event: string; trace_id: number}[];
   run_id: string;
   drop_id: number;
   label: string;

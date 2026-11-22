@@ -27,6 +27,9 @@ class CustomerSetup:
     auto_execute_below_eur: float
     approval_matrix: tuple[ApprovalRule, ...]
     demo_buyer: str = ""
+    site: str = ""
+    timezone: str = "UTC"
+    currency: str = "EUR"
 
 
 def _setup_path() -> Path:
@@ -47,6 +50,7 @@ def _load(path: str) -> CustomerSetup:
     return CustomerSetup(
         demo_buyer=raw.get("demo_buyer", ""),
         customer=raw.get("customer", ""),
+        site=raw.get("site", ""), timezone=raw.get("timezone", "UTC"), currency=raw.get("currency", "EUR"),
         autonomy_mode=autonomy.get("mode", "control"),
         auto_execute_below_eur=float(autonomy.get("auto_execute_below_eur") or 0),
         approval_matrix=rules,

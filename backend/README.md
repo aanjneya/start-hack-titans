@@ -18,8 +18,8 @@ Then:
 - `GET  localhost:8000/api/trace`: what every agent did (newest first)
 - `GET  localhost:8000/api/changes`: change log of the source of truth · `POST /api/inbox`: feed a supplier reply into the loop
 - `backend/.venv/bin/python -m backend.core.replay --list`: the real drops found in git history
-- `backend/.venv/bin/python -m backend.core.replay`: reset the DB and replay all drops in order
-- `POST /api/replay/step`: the next real drop arrives (demo button; first call = baseline on an empty store)
+- `backend/.venv/bin/python -m backend.core.replay`: resume historical drops in a separate persistent SQLite database (defaults to a sibling named `truth.replay.db` for `truth.db`)
+- `POST /api/replay/step`: resume the next Git drop on a dedicated replay backend. For example, start `MOCK_MODE=true CHASER_SEND=false REPLAY_DB_PATH=backend/data/demo/replay.db backend/.venv/bin/uvicorn backend.app.main:app --port 8000`. For a new rehearsal use a new replay path. Live instances refuse replay and reset requests.
 - `POST /api/watch/check`: live portal check now (needs `MOCK_MODE=false` + `SOONY_API_TOKEN`; timer via `WATCH_INTERVAL_MIN`)
 
 `MOCK_MODE=true` (default, from `.env`) = fully offline: no Claude calls, no emails, no portal calls.
@@ -69,3 +69,6 @@ backend/
 5. Problems: `self.raise_issue(type=..., kind=IssueKind.MISSING_INFO|COPIES_AT_RISK|HUMAN_CHECK, key=..., evidence=[Evidence(path=..., locator=...)])`.
 6. Claude: `llm.extract(prompt, MyPydanticModel, agent=self.name, task="...")` and register a mock for offline demos.
 7. Add a test in `backend/tests/test_<agent>.py` that replays the real drops (`backend.core.replay`).
+
+
+Drop responses include `status`, `run_id` and a list of failures (agent, event, trace row ID). Inspect `/api/trace?run_id=...` for details. On a partial replay fix the cause and play the same step again. Each completed Git commit is checkpointed in the demo database. The control room opens one future-supply review for a matched supplier exposure and shows which dated order lines fall inside the notice window.

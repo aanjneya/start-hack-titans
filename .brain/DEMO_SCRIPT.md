@@ -2,20 +2,19 @@
 
 > Write the exact judge demo flow early. Every feature we build should map directly to a beat below — cut anything that doesn't appear in the demo.
 
-## 1. The Hook (0:00 – 0:30)
-- **Problem**: _TBD_
-- **Opening visual**: _TBD_
+## Opening (0:00–0:30)
 
-## 2. Live Demo Flow (0:30 – 2:15)
-1. Start the offline sleeve demo from the repository root on `main` with `backend/.venv/bin/python -m backend.planner_demo`. It replays through the 17:23 drop in an isolated database. Open the Standard sleeve Finding and show the blocked PackRight lot alongside the two Karton rev C lots.
-2. Compare the €1,215 fresh print (zero extra copies by Sunday) with confirming the existing delivery. Approve the information request and open the simulated Chaser outbox.
-3. Replay the labeled site release and supplier reply. Show the accepted 20,000 sleeves, unchanged Standard total, and game-card constraint. The decision avoids a rush charge with no on-time benefit.
+“Procurement told us they learned about single-source exposure too late. A new export rule just hit their supplier. Which orders are exposed, and what can the buyer do today?”
 
-**If a judge asks what changed by evening**, show the 21:38 receipt for SHP-2026-04313. The old sleeve request is outdated. The forecast projects 34,800 Standard copies short by Sunday. The card recommends reviewing game-card availability (CMP-GAM-001). Approving it opens one internal buyer review.
+## Live demo (0:30–2:15)
 
-**Buyer approval demo.** Start `backend/.venv/bin/python -m backend.planner_demo --serve-pickup` and open the control room as Paul Winter. The simulated €500 pickup quote raises the PO value to €53,150. Open **Why?** to show the €50,000 threshold and **Awaiting Category lead**, assigned to Sofia Marchetti. Paul can approve his own €0 supplier inquiry. The demo uses an isolated mock database.
+1. Run the buyer screen against a dedicated replay backend on `jivi`. Play through the 17:23 export-control drop. Under **Future supply**, open the backup-source review for the Collector’s box. Source evidence connects PackRight’s notice, its own article number, Soony’s BOM and affected open PO lines. The box lead time rose from 63 to 105 days for later deliveries. Magnets already installed in finished boxes still reach the weekend line.
+2. Click **Start qualification review**. Show the named owner and the internal review. This approval authorizes zero spend. Qualification cost and future order volume remain unknown. Open the risk report for the supplier’s grade and external evidence if asked. Identify offline market examples as simulations.
+3. In the separate historical pickup scenario, show Paul the €500 quote, the €53,150 amended PO and the required signer, Sofia Marchetti. The regression with the isolated mailbox proves that Sofia’s approval sends one request and a matched confirmation increases Standard by 5,200. Label the recount, site release and reply as simulated. Start the quote screen with `backend/.venv/bin/python -m backend.planner_demo --serve-pickup`.
+
+**Evening replay.** At the 21:38 drop Hamburg projects 608,000 Standard (32,000 short, clear cases) and 66,100 Collector’s (5,900 short, art books). Treat the terminal pickup and book offer as conditional recoveries.
 
 ## 3. Backup Plan
-- **Layer 1 (Primary)**: Live deployed cloud URL from `main` (no single-laptop/HDMI failure point).
-- **Layer 2 (Wi-Fi / API drop)**: Flip `MOCK_MODE=true` instantly via runtime toggle (`?mock=1` or UI hotkey with subtle `MOCK` indicator badge).
-- **Layer 3 (Total fallback)**: Tag `demo-safe` on the last green `main` commit 60 min before submission + record a 60–90s backup screen recording.
+- **Layer 1 (Primary)**: Use the verified `jivi` buyer screen with the dedicated demo database.
+- **Layer 2 (Wi-Fi / API drop)**: Open the prepared local replay backend with `MOCK_MODE=true`.
+- **Layer 3 (Total fallback)**: Record a 60–90s backup screen recording.

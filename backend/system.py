@@ -18,13 +18,12 @@ from .agents.base import REGISTRY, Agent
 from .core import events, trace
 from .core.config import get_settings
 from .core.coordinator import Coordinator
-from .core.models import DropRecord, Issue
+from .core.models import AgentLog, DropRecord, Issue
 from .core.store import init_db, reset_db, session
 
 _bus: Coordinator | None = None
 _agents: list[Agent] = []
 _lock = threading.RLock()  # the timer thread and API calls must not run the loop at the same time
-_replay_pos = 0
 
 
 def bus() -> Coordinator:
@@ -43,8 +42,7 @@ def agent_names() -> list[str]:
 
 def reset() -> None:
     """Empty the truth store and rebuild the agents (fresh replay)."""
-    global _bus, _replay_pos
-    _replay_pos = 0
+    global _bus
     reset_db()
     _bus = None
     bus()
@@ -63,31 +61,50 @@ def process_drop(
     label: str = "",
     data_root: Path | None = None,
     mode: str = "manual",
+    git_commit: str = "",
+    retries: list[dict] | None = None,
 ) -> dict:
     """Record a drop and push it through all agents until nothing is left to do."""
     with _lock:
         return _process_drop(added=added, changed=changed, removed=removed, label=label, data_root=data_root,
-                             mode=mode)
+                             mode=mode, git_commit=git_commit, retries=retries)
 
 
-def _process_drop(*, added, changed, removed, label, data_root, mode) -> dict:
+def _process_drop(*, added, changed, removed, label, data_root, mode, git_commit, retries) -> dict:
     b = bus()
     root = Path(data_root or get_settings().data_root)
     added, changed, removed = list(added), list(changed), list(removed)
     run_id = trace.new_run_id()
     with session() as s:
-        rec = DropRecord(label=label, mode=mode, added=added, changed=changed, removed=removed)
+        rec = DropRecord(label=label, mode=mode, git_commit=git_commit, run_id=run_id, added=added, changed=changed, removed=removed)
         s.add(rec)
         s.commit()
         s.refresh(rec)
     trace.log("coordinator", "drop", f"{label or mode}: +{len(added)} ~{len(changed)} -{len(removed)}",
               data={"drop_id": rec.id, "data_root": str(root)})
-    b.emit(events.FILES_CHANGED, {"added": added, "changed": changed, "removed": removed,
-                                  "label": label, "data_root": str(root), "drop_id": rec.id}, source="coordinator")
-    steps = b.run_until_idle()
+    if retries:
+        for retry in retries:
+            payload = dict(retry["payload"])
+            if "data_root" in payload:
+                payload["data_root"] = str(root)
+            if "drop_id" in payload:
+                payload["drop_id"] = rec.id
+            b.emit(retry["name"], payload, retry["source"], target=retry["target"])
+    else:
+        b.emit(events.FILES_CHANGED, {"added": added, "changed": changed, "removed": removed,
+                                      "label": label, "data_root": str(root), "drop_id": rec.id}, source="coordinator")
+    steps = b.run_until_idle(record_retries=mode == "replay")
     with session() as s:
+        errors = s.exec(select(AgentLog).where(AgentLog.run_id == run_id, AgentLog.action == "error")
+                        .order_by(AgentLog.id)).all()
+        failures = [dict(agent=e.agent, event=e.data.get("event", "drop"), trace_id=e.id) for e in errors]
+        status = "partial" if failures else "completed"
+        saved = s.get(DropRecord, rec.id)
+        saved.status, saved.failures = status, failures
+        s.add(saved)
+        s.commit()
         open_issues = s.exec(select(func.count()).select_from(Issue).where(Issue.status != "resolved")).one()
-    return {"run_id": run_id, "drop_id": rec.id, "label": label, "steps": steps,
+    return {"status": status, "failures": failures, "run_id": run_id, "drop_id": rec.id, "label": label, "steps": steps,
             "added": len(added), "changed": len(changed), "removed": len(removed), "open_issues": open_issues}
 
 
@@ -146,20 +163,5 @@ def watch_once() -> dict:
 
 
 def replay_step() -> dict:
-    """Demo: send the NEXT real drop from git history through the agents ("a new drop arrives").
-    First call starts from an empty store with the baseline drop."""
-    global _replay_pos
-    from .core.replay import list_drops, materialize
-
-    with _lock:
-        drops = list_drops()
-        if _replay_pos == 0:
-            reset()
-        if _replay_pos >= len(drops):
-            return {"done": True, "drops": len(drops)}
-        drop = drops[_replay_pos]
-        _replay_pos += 1
-        root = materialize(drop)
-        result = process_drop(added=drop.added, changed=drop.changed, removed=drop.removed, label=drop.label,
-                              data_root=root, mode="replay")
-        return {**result, "step": _replay_pos, "of": len(drops)}
+    from .core.replay import advance
+    return advance()

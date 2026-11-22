@@ -96,3 +96,7 @@
 ### Ranked buyer queue and approval version (jivi)
 
 The control room reads `GET /api/buyer-queue`. Entries retain their source option indexes, decisions, findings and evidence. `GET /api/decisions/{id}` and `GET /api/issues/{id}` open those records directly. Action identity uses the shipment and order line, supplier offer, or Quality lot. The queue keeps separate approval routes visible. Approval accepts the selected option index and version, rechecks the evidence and signer, and serializes competing authorizations for the same physical action. A stale selection returns HTTP 409 and the control room refreshes.
+
+### Future supply and isolated rehearsal (jivi branch)
+
+The buyer queue includes internal reviews with `horizon=future`. A supplier article and affected delivery window can identify exposed open PO lines. A sourcing review requires human approval, authorizes zero spend and records the owner. Replay requires a separate SQLite database. Drop results expose handler failures with trace IDs and only completed Git commits advance replay. These changes are on `jivi` pending explicit release approval.

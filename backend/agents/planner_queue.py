@@ -8,6 +8,7 @@ import re
 
 from sqlmodel import select
 
+from ..core import policy
 from ..core.models import DecisionCard, Issue
 from ..core.parsing import parse_datetime
 
@@ -63,12 +64,15 @@ def selection_version(card, index, option):
 def _instructions(option):
     action = option["actions"][0]
     kind = option["description"]
-    dock = [] if option.get("dock_released") else ["Released Hamburg dock slot"]
+    if option.get("horizon") == "future":
+        return option["risk_note"], option["requirements"]
+    site = policy.setup().site or "receiving site"
+    dock = [] if option.get("dock_released") else [f"Released {site} dock slot"]
     if kind == "port pickup":
         return "Ask Logistics to arrange terminal pickup.", ["Terminal release", "Truck quote and arrival time", *dock]
     if kind == "supplier stock offer":
         return "Ask the buyer to verify the finished stock before placing a new PO.", [
-            "Offer validity and freight cost", "Timed Hamburg arrival", "Released dock slot"]
+            "Offer validity and freight cost", f"Timed arrival at {site}", "Released dock slot"]
     if kind == "quality concession review":
         return "Request a documented Quality concession for this lot.", ["Signed concession", "Recorded lot release"]
     if action["type"] == "human_review":
@@ -128,7 +132,7 @@ def buyer_queue(db):
     entries = sorted(groups.values(), key=_rank)
     specific = {}
     for item in entries:
-        if item["option"]["description"] != "human review":
+        if item["option"]["description"] != "human review" and item["option"].get("horizon") != "future":
             specific.setdefault((item["edition"], item["part"]), item)
     for item in entries:
         target = specific.get((item["edition"], item["part"]))
@@ -164,6 +168,9 @@ def current_option(db, card, index):
     if not issue or issue.status == "resolved":
         return None
     plan = load_plan()
+    if old.get("horizon") == "future":
+        from .planner_regulatory import regulatory_option
+        return old if regulatory_option(issue, plan) == old else None
     row = next((r for r in plan.editions if r.product_id == old.get("product_id")), None) if plan else None
     if row:
         options, _, _ = options_for(issue, plan, simulate(plan)[row.product_id], row)

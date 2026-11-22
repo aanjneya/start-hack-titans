@@ -54,6 +54,7 @@ class Settings:
     customer_setup: str
     watch_interval_min: float
     portal_mirror: Path
+    replay_db_path: Path | None = None
     # Chaser mailbox (shared team mailbox; see .brain/tasks/4-chaser.md)
     mail_address: str = ""
     mail_password: str = ""
@@ -79,7 +80,14 @@ def get_settings() -> Settings:
 
     data_root = Path(get("DATA_ROOT", str(REPO_ROOT / "challenge" / "start-hack-data" / "data")))
     db_path = Path(get("DB_PATH", str(BACKEND_ROOT / "data" / "truth.db")))
+    replay_path = get("REPLAY_DB_PATH")
+    replay_db = (REPO_ROOT / replay_path).resolve() if replay_path else None
+    live_db = (REPO_ROOT / db_path).resolve()
+    if replay_db and (live_db == replay_db or
+                      (live_db.exists() and replay_db.exists() and live_db.samefile(replay_db))):
+        raise ValueError("REPLAY_DB_PATH must be separate from DB_PATH")
     return Settings(
+        replay_db_path=replay_db,
         mock_mode=_flag(env.get("MOCK_MODE"), default=True),
         data_root=data_root if data_root.is_absolute() else REPO_ROOT / data_root,
         db_path=db_path if db_path.is_absolute() else REPO_ROOT / db_path,

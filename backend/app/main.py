@@ -19,6 +19,7 @@ from ..agents.planner_delivery import DeliveryAdvice, SupplierQuote, already_req
 
 from .. import system
 from ..core import events, policy, trace
+from ..core.replay import ReplayUnavailable
 from ..core.config import get_settings
 from ..core.models import (
     Conflict, DecisionCard, DropRecord, FieldChange, Forecast, InboxMessage, Issue, OutboxMessage, RiskScore,
@@ -88,8 +89,12 @@ def _rows(model, *, order=None, where=None, limit: int = 500) -> list[dict]:
 @app.get("/api/health")
 def health() -> dict:
     s = get_settings()
+    with session() as db:
+        last = db.exec(select(DropRecord).order_by(DropRecord.id.desc())).first()
     return ok({
-        "status": "ok",
+        "replayEnabled": bool(s.replay_db_path and s.mock_mode),
+        "lastDrop": (dict(status=last.status, run_id=last.run_id, failures=last.failures or []) if last else None),
+        "status": "degraded" if last and last.status == "partial" else "ok",
         "mockMode": s.mock_mode,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "dataRoot": str(s.data_root),
@@ -110,7 +115,7 @@ def run(req: RunRequest | None = None) -> dict:
     """No body: reprocess the whole current data folder. With file lists: process just that drop."""
     req = req or RunRequest()
     if req.reset:
-        system.reset()
+        raise HTTPException(409, "Use a new dedicated replay database to start a fresh demo.")
     if req.added is None and not req.changed and not req.removed:
         return ok(system.run_full(label=req.label or "full run"))
     return ok(system.process_drop(added=req.added or [], changed=req.changed, removed=req.removed,
@@ -121,13 +126,18 @@ def run(req: RunRequest | None = None) -> dict:
 def replay(upto: Optional[int] = None) -> dict:
     from ..core.replay import replay as do_replay
 
-    return ok(do_replay(upto=upto))
+    try:
+        return ok(do_replay(upto=upto))
+    except ReplayUnavailable as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/replay/step")
 def replay_step() -> dict:
-    """Demo button: the next real drop arrives (first call = baseline on an empty store)."""
-    return ok(system.replay_step())
+    try:
+        return ok(system.replay_step())
+    except ReplayUnavailable as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/watch/check")
@@ -227,7 +237,7 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
             option = card.options[selected]
             if not option.get("available", True):
                 raise HTTPException(409, "The evidence does not support executing this option.")
-            if card.created_by == "planner" and option.get("product_id") and current_option(s, card, selected) is None:
+            if card.created_by == "planner" and (option.get("product_id") or option.get("horizon") == "future") and current_option(s, card, selected) is None:
                 raise ChangedDecision
             if card.created_by == "planner" and already_requested(s, option, card):
                 raise HTTPException(409, "This action was already authorized on a related decision.")
@@ -251,7 +261,7 @@ def approve(decision_id: int, req: DecideRequest | None = None) -> dict:
     try:
         card = _decide(decision_id, "approved", req)
     except ChangedDecision:
-        system.emit(events.TRUTH_UPDATED, {"tables": ["decisions"]}, source="approval_recheck")
+        system.emit(events.PLANNER_RECHECK, {}, source="approval_recheck")
         raise HTTPException(409, "The evidence or approval route changed. Review the refreshed buyer queue.") from None
     trace.log("human", "approve", f"decision {decision_id} by {req.by}", data={"decision_id": decision_id})
     result = system.emit(events.DECISION_APPROVED,
@@ -322,7 +332,8 @@ def post_reply(req: ReplyRequest) -> dict:
 def customer_setup() -> dict:
     s = policy.setup()
     return ok({
-        "customer": s.customer, "demo_buyer": s.demo_buyer,
+        "customer": s.customer, "demo_buyer": s.demo_buyer, "site": s.site,
+        "timezone": s.timezone, "currency": s.currency,
         "autonomy": {"mode": s.autonomy_mode, "auto_execute_below_eur": s.auto_execute_below_eur},
         "approval_matrix": [{"below_eur": r.below_eur, "approvers": list(r.approvers)} for r in s.approval_matrix],
     })

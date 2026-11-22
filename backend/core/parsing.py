@@ -193,8 +193,8 @@ def parse_date(value, order: str = "ymd"):
         return None
 
 
-def parse_datetime(value, tz: str = "Europe/Berlin"):
-    """Timezone-aware datetime; naive values get `tz` (portal times are Europe/Berlin per the API docs)."""
+def parse_datetime(value, tz: str | None = None):
+    """Timezone-aware datetime; naive values use the supplied timezone or the active customer setup."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -207,7 +207,10 @@ def parse_datetime(value, tz: str = "Europe/Berlin"):
         if not d:
             return None
         dt = datetime(d.year, d.month, d.day)
-    return dt if dt.tzinfo else dt.replace(tzinfo=ZoneInfo(tz))
+    if dt.tzinfo:
+        return dt
+    from .policy import setup
+    return dt.replace(tzinfo=ZoneInfo(tz or setup().timezone))
 
 
 def norm_header(h: str) -> str:

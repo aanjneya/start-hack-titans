@@ -139,7 +139,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     with TemporaryDirectory(prefix="launch-planner-") as temp:
         scratch = Path(temp)
-        os.environ.update(MOCK_MODE="true", DB_PATH=str(scratch / "demo.db"), REPLAY_DIR=str(scratch / "replay"))
+        os.environ.update(MOCK_MODE="true", REPLAY_DB_PATH=str(scratch / "demo.db"), CHASER_SEND="false", REPLAY_DIR=str(scratch / "replay"))
         from fastapi.testclient import TestClient
         from .app.main import app
         with TestClient(app) as client:

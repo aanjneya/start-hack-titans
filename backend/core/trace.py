@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextvars
+import json
 import uuid
 from typing import Any, Iterable
 
@@ -11,6 +12,9 @@ from .models import AgentLog, Evidence
 from .store import session
 
 _run_id: contextvars.ContextVar[str] = contextvars.ContextVar("run_id", default="")
+
+
+event_context: contextvars.ContextVar[dict] = contextvars.ContextVar("event", default={})
 
 
 def new_run_id() -> str:
@@ -47,7 +51,7 @@ def log(
         action=action,
         detail=detail,
         evidence=_evidence_dicts(evidence),
-        data=data or {},
+        data={**(json.loads(json.dumps(event_context.get(), default=str)) if action == "error" else {}), **(data or {})},
     )
     with session() as s:
         s.add(entry)

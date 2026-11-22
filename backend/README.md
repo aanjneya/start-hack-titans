@@ -18,18 +18,23 @@ Then:
 - `GET  localhost:8000/api/trace`: what every agent did (newest first)
 - `GET  localhost:8000/api/changes`: change log of the source of truth · `POST /api/inbox`: feed a supplier reply into the loop
 - `backend/.venv/bin/python -m backend.core.replay --list`: the real drops found in git history
-- `backend/.venv/bin/python -m backend.core.replay`: reset the DB and replay all drops in order
-- `POST /api/replay/step`: the next real drop arrives (demo button; first call = baseline on an empty store)
+- `backend/.venv/bin/python -m backend.core.replay`: resume historical drops in a separate persistent SQLite database (defaults to a sibling named `truth.replay.db` for `truth.db`)
+- `POST /api/replay/step`: resume the next Git drop on a dedicated replay backend. For example, start `MOCK_MODE=true CHASER_SEND=false REPLAY_DB_PATH=backend/data/demo/replay.db backend/.venv/bin/uvicorn backend.app.main:app --port 8000`. For a new rehearsal use a new replay path. Live instances refuse replay and reset requests.
 - `POST /api/watch/check`: live portal check now (needs `MOCK_MODE=false` + `SOONY_API_TOKEN`; timer via `WATCH_INTERVAL_MIN`)
+- `POST /api/risk/refresh` checks current external signals against existing customer records. Set `RISK_REFRESH_INTERVAL_MIN` on a live instance for periodic checks independent of portal drops. The public HTTP cache lasts five minutes. Replay reads historical fixtures. An unavailable feed makes the check partial. When prior readings exist, other feeds can still change the grade. A total outage preserves the previous assessment. An open PO and an external warning can trigger an applicability review.
 
 `MOCK_MODE=true` (default, from `.env`) = fully offline: no Claude calls, no emails, no portal calls.
 Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude for real.
 
 ## Launch Planner demo
 
+To present the real Soony warning, start `backend/.venv/bin/python -m backend.planner_demo --serve-soony --port 8000` from the repository root. Open the frontend connected to that API and click **Play next data drop**. The server starts from the recorded drop immediately before the supplier notice and keeps the rehearsal in a temporary database. For the €500 financial follow-up, start the same command with `--serve-pickup` instead.
+
 Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops through the 17:23 sleeve scenario into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID. For the latest data, run the full replay in an isolated database. The 21:38 drop includes the receipt for that shipment.
 
 The baseline uses the workbook timestamp, working shifts, eligible lots and confirmed line-ready inbound. An option’s copies gained measures its effect on finished copies by the deadline. The published print quote excludes freight. For an amendment to an existing PO, approval uses the whole priced PO plus the incremental charge.
+
+For the optional market-only demonstration, start `backend/.venv/bin/python -m backend.planner_demo --serve-market --port 8000` and open the buyer screen pointed at that API. The temporary database contains a fictional Canadian supplier with an initial BBB grade. Click **Check signals**. The same binary question moves from 20% to 85% in a labeled simulation. The Risk Rater updates the grade to B. Rei Ito can open an applicability review for KIT-9/2. All purchasing records remain constant. A second refresh preserves the existing decision.
 
 A decision-linked supplier reply enters `POST /api/inbox` with the outbox ID and either `quote` or `delivery` as specified in `API_CONTRACT.ts`. A plain-text confirmation can also identify one PO/line, shipment, quantity, revision and timezone-qualified arrival. Ambiguous answers remain in the inbox for review. Correcting an accepted answer requires its inbox ID in `supersedes_inbox_id`.
 
@@ -69,3 +74,6 @@ backend/
 5. Problems: `self.raise_issue(type=..., kind=IssueKind.MISSING_INFO|COPIES_AT_RISK|HUMAN_CHECK, key=..., evidence=[Evidence(path=..., locator=...)])`.
 6. Claude: `llm.extract(prompt, MyPydanticModel, agent=self.name, task="...")` and register a mock for offline demos.
 7. Add a test in `backend/tests/test_<agent>.py` that replays the real drops (`backend.core.replay`).
+
+
+Drop responses include `status`, `run_id` and a list of failures (agent, event, trace row ID). Inspect `/api/trace?run_id=...` for details. On a partial replay fix the cause and play the same step again. Each completed Git commit is checkpointed in the demo database. The control room opens one future-supply review for a matched supplier exposure and shows which dated order lines fall inside the notice window.

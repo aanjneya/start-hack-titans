@@ -6,16 +6,19 @@ was after each drop (git archive) and send the changed files to the agents.
 
 CLI (from repo root):
   python -m backend.core.replay --list        # show the drops found in git history
-  python -m backend.core.replay               # reset DB, replay all drops through all agents
+  python -m backend.core.replay               # resume all remaining drops in the dedicated demo database
   python -m backend.core.replay --upto 2      # only the first N drops
 """
 from __future__ import annotations
 
 import argparse
 import io
-import shutil
+import os
+import sqlite3
 import subprocess
 import tarfile
+import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,10 +83,12 @@ def list_drops() -> list[Drop]:
 
 def materialize(drop: Drop, dest: Path | None = None) -> Path:
     """Write the portal data folder exactly as it was after `drop` into dest; return that path."""
-    dest = dest or get_settings().replay_dir / f"{drop.index:03d}"
-    if dest.exists():
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True)
+    if dest is None:
+        parent = get_settings().replay_dir
+        parent.mkdir(parents=True, exist_ok=True)
+        dest = Path(tempfile.mkdtemp(prefix=f"{drop.index:03d}-{drop.commit[:8]}-", dir=parent))
+    else:
+        dest.mkdir(parents=True, exist_ok=False)
     tar_bytes = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "archive", "--format=tar", drop.commit, drop.prefix.rstrip("/")],
         check=True, capture_output=True,
@@ -103,22 +108,63 @@ def materialize(drop: Drop, dest: Path | None = None) -> Path:
     return dest
 
 
-def replay(upto: int | None = None, reset: bool = True) -> list[dict]:
-    """Reset the DB and push every drop through the agents in order. Returns a summary per drop."""
-    from .. import system  # local import: system imports agents
+class ReplayUnavailable(ValueError):
+    pass
 
-    if reset:
-        system.reset()
+
+def advance(upto: int | None = None) -> dict:
+    """Serialize one attempt per demo database, including across API and CLI processes."""
+    from sqlmodel import select
+    from .models import AgentLog, DropRecord
+    from .store import session
+    from .. import system
+
+    if upto is not None and upto < 0:
+        raise ReplayUnavailable("The replay limit must be zero or greater.")
+    settings = get_settings()
+    path = settings.replay_db_path
+    if not path or not settings.mock_mode:
+        raise ReplayUnavailable("Replay requires a dedicated demo backend with REPLAY_DB_PATH and MOCK_MODE=true.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with system._lock, closing(sqlite3.connect(str(path) + ".replay-lock", timeout=60)) as lock:
+        lock.execute("BEGIN IMMEDIATE")
+        system.bus()
+        drops = list_drops()
+        with session() as s:
+            completed = set(s.exec(select(DropRecord.git_commit).where(
+                DropRecord.mode == "replay", DropRecord.status == "completed")).all())
+        for drop in drops[:upto]:
+            if drop.commit in completed:
+                continue
+            with session() as s:
+                last = s.exec(select(DropRecord).where(DropRecord.git_commit == drop.commit)
+                              .order_by(DropRecord.id.desc())).first()
+                retries = []
+                if last and last.status == "partial":
+                    for failure in last.failures:
+                        entry = s.get(AgentLog, failure["trace_id"])
+                        retry = entry.data.get("retry") if entry else None
+                        if not retry:
+                            retries.clear()
+                            break
+                        if retry not in retries:
+                            retries.append(retry)
+            result = system.process_drop(added=drop.added, changed=drop.changed, removed=drop.removed,
+                                         label=drop.label, data_root=materialize(drop),
+                                         mode="replay", git_commit=drop.commit, retries=retries)
+            return {**result, "step": drop.index + 1, "of": len(drops)}
+        return {"done": True, "drops": len(drops)}
+
+
+def replay(upto: int | None = None) -> list[dict]:
     results = []
-    for drop in list_drops()[: upto if upto is not None else None]:
-        root = materialize(drop)
-        results.append(
-            system.process_drop(
-                added=drop.added, changed=drop.changed, removed=drop.removed,
-                label=drop.label, data_root=root, mode="replay",
-            )
-        )
-    return results
+    while True:
+        result = advance(upto)
+        if result.get("done"):
+            return results
+        results.append(result)
+        if result["status"] == "partial":
+            return results
 
 
 def main() -> None:
@@ -130,8 +176,17 @@ def main() -> None:
         for d in list_drops():
             print(f"{d.index:3d}  {d.commit[:8]}  +{len(d.added)} ~{len(d.changed)} -{len(d.removed)}  {d.label}")
         return
-    for r in replay(upto=args.upto):
-        print(r)
+    settings = get_settings()
+    if not settings.replay_db_path:
+        os.environ["REPLAY_DB_PATH"] = str(settings.db_path.with_name(settings.db_path.stem + ".replay.db"))
+    os.environ["MOCK_MODE"] = "true"
+    os.environ["CHASER_SEND"] = "false"
+    from .config import reset_settings
+    reset_settings()
+    for result in replay(upto=args.upto):
+        print(result)
+        if result["status"] == "partial":
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -2,20 +2,28 @@
 
 > Write the exact judge demo flow early. Every feature we build should map directly to a beat below — cut anything that doesn't appear in the demo.
 
-## 1. The Hook (0:00 – 0:30)
-- **Problem**: _TBD_
-- **Opening visual**: _TBD_
+## Opening (0:00–0:30)
 
-## 2. Live Demo Flow (0:30 – 2:15)
-1. Start the offline sleeve demo from the repository root on `main` with `backend/.venv/bin/python -m backend.planner_demo`. It replays through the 17:23 drop in an isolated database. Open the Standard sleeve Finding and show the blocked PackRight lot alongside the two Karton rev C lots.
-2. Compare the €1,215 fresh print (zero extra copies by Sunday) with confirming the existing delivery. Approve the information request and open the simulated Chaser outbox.
-3. Replay the labeled site release and supplier reply. Show the accepted 20,000 sleeves, unchanged Standard total, and game-card constraint. The decision avoids a rush charge with no on-time benefit.
+“Procurement told us they learned about single-source exposure too late. A new export rule just hit their supplier. Which orders are exposed, and what can the buyer do today?”
 
-**If a judge asks what changed by evening**, show the 21:38 receipt for SHP-2026-04313. The old sleeve request is outdated. The forecast projects 34,800 Standard copies short by Sunday. The card recommends reviewing game-card availability (CMP-GAM-001). Approving it opens one internal buyer review.
+## Live demo (0:30–2:15)
 
-**Buyer approval demo.** Start `backend/.venv/bin/python -m backend.planner_demo --serve-pickup` and open the control room as Paul Winter. The simulated €500 pickup quote raises the PO value to €53,150. Open **Why?** to show the €50,000 threshold and **Awaiting Category lead**, assigned to Sofia Marchetti. Paul can approve his own €0 supplier inquiry. The demo uses an isolated mock database.
+Start the API with `backend/.venv/bin/python -m backend.planner_demo --serve-soony --port 8000` and open the buyer screen connected to it. This prepares the first two real drops in a temporary database.
+
+1. Prepare an isolated replay through drop two. On stage, advance the 17:23 drop. **Packing deadline** and **Future supply** appear side by side. Open **Why?** on the qualification card. PackRight moves from A to CCC. The replay’s Polymarket example contributes 11.2 points before and after. Supplier status and trade news change. Show which evidence prompted a closer look and which evidence connects the warning to the customer.
+2. Show PackRight’s notice and the three matching PO lines. They cover 73,000 ordered boxes worth CNY 1,870,260 at their recorded prices, with one delivery in December and two in January. These are order values. The review authorizes €0. Under **Compare sample timing**, requesting samples at the historical snapshot leaves 13 calendar days before the first scheduled PO. Waiting two weeks puts the sample date one day after that delivery. Qualification, transit and production lead times are still open. Click **Start qualification review**, open Paul’s assigned review, and show its **Decision history** with named actors and trace records. Existing boxes already contain magnets. To show the handoff, expand **Open assigned review**, preview the request, and choose **Send sample inquiry**. Chaser asks for terms; a threaded test reply goes to Engineering and Quality as review evidence. The weekend projection stays fixed.
+3. Keep the pre-priced pickup simulation ready for questions about financial control. Open **Review priced offer** in **Decision follow-up**. The €500 fee brings the amended PO to €53,150 and routes to Sofia Marchetti. Approval authorizes one Chaser request. A matched confirmation adds 5,200 Standard copies under the simulated recount and dock release. The full interaction starts with `--serve-inquiry`; `--serve-pickup` starts with the quote received.
+
+
+**Evening replay.** At the 21:38 drop Hamburg projects 608,000 Standard (32,000 short, clear cases) and 66,100 Collector’s (5,900 short, art books). Treat the terminal pickup and book offer as conditional recoveries.
+
+**Why the buyer acts before a delivery is late.** Four of PackRight’s four recorded box orders reached Hamburg on time. Open the historical PO lines on the card, then show the supplier's dated notice raising lead time from 63 to 105 days. Switch the sample comparison from today to two weeks to show the date cross the first open PO. That comparison and opening the review fit the main demonstration. Keep the finance simulation as a second tab. Use **My updates** if asked how much an individual buyer hears about. Company policy still decides who signs.
+
+**If asked whether a market can drive a decision itself**, use the separate `--serve-market` demo. Press **Check signals** and follow the grade change to Rei Ito's action for KIT-9/2. That Canadian customer's records stay fixed while a simulated price moves from 20% to 85%. A separate live public-feed smoke check used Polymarket, weather, news, shipment telemetry and regulatory readings and opened an applicability review for a synthetic customer. Keep the Soony story as the main three-minute demonstration.
+
+**Evidence the presenter can open.** In the magnet case, select **Read the supplier’s delivery notice** under **Why?**. The same card shows the historical grade chain from PackRight (A → CCC) through the magnet (AA → CCC) to Collector’s Edition (BBB → CCC). The ordered box itself moves from AA to B. **Compare sample timing** is available beside the primary action. Under the evening terminal review, the ERP records a discharge while the tracker still reports transit. Contacting the terminal is the next useful check.
 
 ## 3. Backup Plan
-- **Layer 1 (Primary)**: Live deployed cloud URL from `main` (no single-laptop/HDMI failure point).
-- **Layer 2 (Wi-Fi / API drop)**: Flip `MOCK_MODE=true` instantly via runtime toggle (`?mock=1` or UI hotkey with subtle `MOCK` indicator badge).
-- **Layer 3 (Total fallback)**: Tag `demo-safe` on the last green `main` commit 60 min before submission + record a 60–90s backup screen recording.
+- **Layer 1 (Primary)**: Use the verified `jivi` buyer screen with the dedicated demo database.
+- **Layer 2 (Wi-Fi / API drop)**: Open the prepared local replay backend with `MOCK_MODE=true`.
+- **Layer 3 (Total fallback)**: Record a 60–90s backup screen recording.

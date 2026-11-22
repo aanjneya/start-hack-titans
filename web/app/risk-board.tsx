@@ -222,7 +222,7 @@ function queueActions(
           ? supplier === group.key || (!supplier && !!q.part && !!scope?.related.has(q.part))
           : q.sources.some((src) => own.has(src.decision_id));
     const card = cardById.get(q.decision_id);
-    if (!mine || !card) return [];
+    if (!mine || !card || q.option.followup_for != null) return [];
     const o = q.option;
     const value = o.approval_value_eur ?? null;
     const roles = o.approval_roles ?? band(value, matrix)?.rule.approvers ?? [];
@@ -487,9 +487,11 @@ export function RiskBoard({
   forecast,
   setup,
   queue,
+  focus,
   emptyText,
   onChanged,
   renderDecision,
+  renderAction,
 }: {
   decisions: DecisionCard[];
   issues: Issue[];
@@ -499,10 +501,14 @@ export function RiskBoard({
   /** The backend's ranked buyer queue (GET /api/buyer-queue, loaded with the cards); null when the backend has none,
    *  and the tiles then rank the actions themselves. */
   queue: BuyerQueueEntry[] | null;
+  /** Open the tile that holds this buyer-queue action (key of the queue entry); n changes on every request. */
+  focus?: { key: string; n: number } | null;
   emptyText: string;
   onChanged: () => void;
   /** The full decision card, for "More details" inside the dialog. */
   renderDecision?: (card: DecisionCard) => ReactNode;
+  /** The full view of one buyer-queue action (its key), for "More details"; cards it covers are not repeated. */
+  renderAction?: (key: string) => ReactNode;
 }) {
   const [names, setNames] = useState<Record<string, string>>({});
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -540,6 +546,15 @@ export function RiskBoard({
     setOpenKey(null);
     setSnapshot(null);
   }, []);
+  const [focusSeen, setFocusSeen] = useState(focus?.n ?? 0);
+  if (focus && focus.n !== focusSeen) {
+    setFocusSeen(focus.n);
+    const target = groups.find((g) => g.actions.some((a) => a.key === `queue:${focus.key}`));
+    if (target) {
+      setSnapshot(target);
+      setOpenKey(target.key);
+    }
+  }
 
   return (
     <section aria-labelledby="decide">
@@ -579,6 +594,7 @@ export function RiskBoard({
           onClose={close}
           onChanged={onChanged}
           renderDecision={renderDecision}
+          renderAction={renderAction}
         />
       )}
     </section>
@@ -710,6 +726,7 @@ function RiskDialog({
   onClose,
   onChanged,
   renderDecision,
+  renderAction,
 }: {
   /** The group as it was when opened: the three cards stay put while you approve one. */
   group: RiskGroup;
@@ -722,6 +739,7 @@ function RiskDialog({
   onClose: () => void;
   onChanged: () => void;
   renderDecision?: (card: DecisionCard) => ReactNode;
+  renderAction?: (key: string) => ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const downOnBackdrop = useRef(false);
@@ -906,13 +924,17 @@ function RiskDialog({
               </Link>
             )}
             <ApprovalPolicy matrix={matrix} buyer={setup?.demo_buyer} rating={group.rating} />
-            {renderDecision && live && live.cards.length > 0 && (
-              <div className="space-y-4">
-                {live.cards.map((card) => (
-                  <div key={card.id}>{renderDecision(card)}</div>
-                ))}
-              </div>
-            )}
+            {live && (() => {
+              const queued = renderAction ? live.actions.filter((a) => a.key.startsWith("queue:")) : [];
+              const covered = new Set(queued.map((a) => a.card?.id));
+              const cards = renderDecision ? live.cards.filter((c) => !covered.has(c.id)) : [];
+              return queued.length + cards.length > 0 && (
+                <div className="space-y-4">
+                  {queued.map((a) => <div key={a.key}>{renderAction!(a.key.slice("queue:".length))}</div>)}
+                  {cards.map((card) => <div key={card.id}>{renderDecision!(card)}</div>)}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -1003,8 +1025,13 @@ function ActionCard({
   // Same rule as the decision card: the demo seat may decide only cards and options routed to it alone.
   const recommended = card?.options[card.recommended ?? 0];
   const ownsCard = !!buyer && recommended?.approvers?.length === 1 && recommended.approvers[0] === buyer;
+  const unnamed = option?.assignments?.filter((a) => !a.person).map((a) => a.required_role) ?? [];
   const routedHere =
-    !!option && ownsCard && option.approvers?.length === 1 && option.approvers[0] === buyer && option.available !== false;
+    !!option && ownsCard && !unnamed.length && option.approvers?.length === 1 && option.approvers[0] === buyer &&
+    option.available !== false;
+  const step = option?.actions?.[0];
+  const verb = option?.button_label || (step?.type === "human_review" ? "Open review"
+    : step?.quote_inbox_id != null ? "Authorize quote" : step?.type === "email" ? "Send request" : "Approve");
   const canApprove = routedHere && (state === "done" || (!decided && !blocked));
   const approver = [action.roles.join(" + "), action.people.join(" + ")].filter(Boolean).join(" · ");
   const executable = !!option && option.available !== false;
@@ -1097,11 +1124,11 @@ function ActionCard({
               type="button"
               onClick={approve}
               disabled={state === "busy" || state === "done"}
-              aria-label={`Approve: ${action.title}`}
+              aria-label={`${verb}: ${action.title}`}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-2.5 text-[14px] font-semibold text-[#0f4a31] outline-none transition-[background-color,transform] hover:bg-white/90 focus-visible:ring-[3px] focus-visible:ring-white/60 active:scale-[0.98] disabled:opacity-70"
             >
               {state === "busy" && <Loader2 aria-hidden className="size-4 motion-safe:animate-spin" />}
-              {state === "busy" ? "Approving…" : "Approve"}
+              {state === "busy" ? "Sending…" : verb}
             </button>
           ) : (
             <p className="w-full rounded-lg bg-white/10 py-2.5 text-center text-[13px] font-medium text-white/85 ring-1 ring-inset ring-white/20">
@@ -1110,7 +1137,9 @@ function ActionCard({
                 : blocked
                   ? "Already requested"
                   : executable
-                    ? `Waiting for ${action.roles.join(" + ") || action.people.join(" + ") || "approval"}`
+                    ? unnamed.length
+                      ? `Waiting for a named ${unnamed.join(" + ").toLowerCase()}`
+                      : `Waiting for ${action.roles.join(" + ") || action.people.join(" + ") || "approval"}`
                     : option
                       ? "Waiting for evidence"
                       : OWNER_STEP[action.owner] ?? "Suggested next step"}

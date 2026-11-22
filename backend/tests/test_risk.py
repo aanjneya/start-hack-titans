@@ -146,6 +146,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
                         "slug": "strait-of-hormuz-traffic-returns-to-normal",
                         "markets": [{
                             "question": "Strait of Hormuz traffic returns to normal by December 31?",
+                            "outcomes": '["Yes","No"]',
                             "outcomePrices": '["0.03", "0.97"]',
                             "closed": False,
                         }],
@@ -154,7 +155,8 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
                         "slug": "will-china-invade-taiwan-before-2027",
                         "markets": [{
                             "question": "Will China invade Taiwan by end of 2026?",
-                            "outcomePrices": '["0.02", "0.98"]',
+                            "outcomes": ["No", "Yes"],
+                            "outcomePrices": '["0.98", "0.02"]',
                             "closed": False,
                         }],
                     },
@@ -162,6 +164,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
                         "slug": "us-china-rare-earth-tariff-escalation",
                         "markets": [{
                             "question": "Will China restrict rare earth exports to EU/US in 2026?",
+                            "outcomes": ["Yes", "No"],
                             "outcomePrices": '["0.81", "0.19"]',
                             "closed": False,
                         }],
@@ -202,6 +205,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
     by_title = {s.title: s for s in poly_sigs}
     # Relief question inverted: 3% Yes -> 97% disruption score
     assert by_title["Strait of Hormuz traffic returns to normal by December 31?"].score_0_100 == 97.0
+    assert by_title["Strait of Hormuz traffic returns to normal by December 31?"].market["disruption_outcome"] == "No"
     # Disruption question NOT inverted: 81% Yes -> 81% risk score; 2% invasion filtered out (<10%)
     assert by_title["Will China restrict rare earth exports to EU/US in 2026?"].score_0_100 == 81.0
     assert "Will China invade Taiwan by end of 2026?" not in by_title
@@ -253,6 +257,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
     assert any("federalregister.gov" in s.source_url for s in reg_sigs)
     assert any("eur-lex.europa.eu" in s.source_url for s in reg_sigs)
     assert all(s.live and s.category == "regulatory_change" for s in reg_sigs)
+    assert next(s for s in reg_sigs if "federalregister.gov" in s.source_url).published == "2026-11-19"
 
     # Offline MOCK_MODE covers EVERY supplier country + any unseen future country (e.g. JP)
     monkeypatch.setenv("MOCK_MODE", "true")
@@ -338,3 +343,96 @@ def test_external_signal_drives_rollup_and_auto_resolves_when_risk_drops():
     with session() as s:
         refreshed = s.get(Issue, sup_issue.id)
     assert refreshed is not None and refreshed.status == "resolved"
+
+
+def test_general_wto_headline_does_not_create_a_country_exposure(monkeypatch):
+    from backend.agents import risk_signals
+    xml = """<rss><channel>
+      <item><title>WTO reviews global tariff monitoring</title><link>https://www.wto.org/general</link></item>
+      <item><title>Japan changes export rules</title><link>https://www.wto.org/japan</link></item>
+    </channel></rss>"""
+    monkeypatch.setattr(risk_signals, "_cached_get_json", lambda *a, **k: None)
+    monkeypatch.setattr(risk_signals, "_cached_get_text", lambda url, *a, **k: xml if url == risk_signals.WTO_RSS_URL else None)
+    ok, signals = risk_signals.RegulationChangeProvider()._fetch_live({"DE", "JP", "CN", "VN"})
+    assert ok
+    assert {s.source_url: s.countries for s in signals} == {
+        "https://www.wto.org/general": [], "https://www.wto.org/japan": ["JP"]}
+
+
+def test_current_ratings_survive_more_than_one_page_of_older_alerts():
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+    with session() as db:
+        db.add_all([RiskScore(entity_type="supplier", entity_id="S", grade=6, rating="CCC") for _ in range(501)])
+        db.add_all([RiskScore(entity_type="supplier", entity_id="S", grade=2, rating="AA"),
+                    RiskScore(entity_type="part", entity_id="S", grade=4, rating="BBB")])
+        db.commit()
+    current = TestClient(app).get("/api/risk?current=true").json()["data"]
+    assert [(r["entity_type"], r["entity_id"], r["rating"]) for r in current] == [
+        ("part", "S", "BBB"), ("supplier", "S", "AA")]
+
+
+def test_live_market_binds_named_outcome_country_and_active_question(monkeypatch):
+    monkeypatch.setattr(risk_signals.llm, "is_mock", lambda: False)
+    now = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    market = dict(question="Will Canada increase export tariffs?", outcomes='["No","Yes"]',
+                  outcomePrices='["0.19","0.81"]', id="Q-7", endDate="2026-12-02T10:00:00Z")
+    rows = [dict(slug="group", markets=[
+        dict(market, question="Who won the football match?", outcomes=["Red", "Blue"]),
+        dict(market, endDate="2026-11-20T10:00:00Z"), market, dict(market, id="later-threshold")])]
+    monkeypatch.setattr(risk_signals, "_cached_get_json", lambda *a, **k: rows)
+    def collect(countries):
+        return PolymarketProvider().fetch(countries=countries, ports={}, shipments=[], documents=[], reference_now=now)
+    signal, = collect({"CA", "CN"})
+    assert signal.countries == ["CA"] and signal.score_0_100 == 81
+    assert signal.market == dict(yes_pct=81.0, disruption_outcome="Yes", question_id="Q-7",
+                                 closes_at=market["endDate"], scope_basis="Country named in the question")
+    assert signal.rating_input("CA", set(), set())["market"] == signal.market
+    assert collect({"CN"}) == []
+    for invalid in [dict(market, outcomes=None), dict(market, outcomes=["No", "No"]),
+                    dict(market, outcomePrices=None, bestBid=.9), dict(market, closed=True),
+                    dict(market, outcomePrices='["0","nan"]')]:
+        rows[0]["markets"] = [invalid]
+        assert collect({"CA"}) == []
+    rows.clear()
+    assert not collect({"CA"})
+
+
+def test_new_supplier_country_is_used_by_name_in_public_news_search(monkeypatch):
+    queries = []
+    def search(url, params=None):
+        if params and "q" in params:
+            queries.append(params["q"])
+        return "<rss><channel/></rss>"
+    monkeypatch.setattr(risk_signals, "_cached_get_text", search)
+    monkeypatch.setattr(risk_signals, "_cached_get_json", lambda *a, **k: {})
+    PoliticalNewsProvider()._fetch_google_news({"PT"})
+    RegulationChangeProvider()._fetch_live({"PT"})
+    assert len(queries) == 2 and all('"Portugal"' in q for q in queries)
+
+
+def test_follow_exact_market_after_it_leaves_volume_ranking(monkeypatch):
+    from dataclasses import asdict
+    import pytest
+
+    now = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    market = dict(question="Will Canada increase export tariffs?", outcomes=["No", "Yes"], outcomePrices=[.20, .80], id="m42")
+    event = dict(slug="canadian-tariffs", markets=[market])
+    listing, detail = [event], [event]
+    def request(url, params=None):
+        if params:
+            return listing
+        assert url.endswith("/events/slug/canadian-tariffs")
+        return detail[0]
+    monkeypatch.setattr(risk_signals, "_cached_get_json", request)
+    provider = PolymarketProvider()
+    watched = [asdict(s) for s in provider._fetch_live({"CA"}, now)]
+    listing.clear()
+    event["markets"] = [dict(market, id="different-contract", outcomePrices=[.99, .01]), dict(market, outcomePrices=[.11, .89])]
+    reading, = provider._fetch_live({"CA"}, now, watched)
+    assert reading.market["question_id"] == "m42" and reading.market["yes_pct"] == 89
+    detail[0] = None
+    with pytest.raises(risk_signals.RiskFeedUnavailable):
+        provider._fetch_live({"CA"}, now, watched)
+    detail[0] = dict(event, closed=True)
+    assert provider._fetch_live({"CA"}, now, watched) == []

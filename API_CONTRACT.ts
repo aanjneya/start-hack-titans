@@ -24,6 +24,13 @@ export interface ApiResponse<T> {
 export interface HealthCheckResponse {
   status: 'ok' | 'degraded';
   mockMode: boolean;
+  replayEnabled?: boolean;
+  /** Changes with new agent activity or drop status. Polling clients may reuse a recent complete snapshot. */
+  activity_version?: string;
+  lastDrop?: {mode?: string; label?: string; status: string; run_id: string; failures: RunResult['failures']} | null;
+  lastRiskCheck?: {at: string; run_id: string; trigger?: string | null; grades_changed: number | null;
+    suppliers: number | null; sources: Record<string, number>;
+    unavailable: Record<string, {reason: string; last_known_at: string | null}>; failures?: ActionRun['failures']} | null;
   timestamp: string;
   dataRoot: string;
   agents: string[];
@@ -32,9 +39,18 @@ export interface HealthCheckResponse {
 /** Where a fact or finding comes from (path is relative to the portal data root). */
 export interface Evidence {
   path: string;
+  source_kind?: string;
   locator: string; // e.g. "row 12", "page 2"
   sha256: string;
   quote: string;
+}
+
+/** The decision-time citation plus a bounded excerpt when its words match an ingested source. */
+export interface DecisionSource {
+  evidence: Evidence;
+  title: string;
+  excerpt: string | null;
+  published: string | null;
 }
 
 export type IssueKind = 'missing_info' | 'copies_at_risk' | 'human_check';
@@ -46,6 +62,8 @@ export type ActionType =
   | 'use_old_revision' | 'block_stock' | 'human_review' | 'other';
 
 export interface Impact {
+  owner?: string;
+  horizon?: string;
   product_id: string;
   copies_at_risk: number | null;
   hours_buffer: number | null;
@@ -90,7 +108,76 @@ export interface Issue {
   updated_at: string;
 }
 
+export interface ApprovalAssignment {
+  required_role: string; signing_role: string; person: string | null; basis: string;
+  org_source: string | null; policy_source?: string;
+}
+
+export interface SampleWindow {
+  as_of: string; requested_on?: string; sample_days: number; sample_by: string; first_delivery: string;
+  days_between: number; source: string;
+  request_by_for_delivery?: string;
+}
+
+export interface MarketObservation {
+  yes_pct: number; disruption_outcome: 'Yes' | 'No'; question_id: string | null; closes_at: string | null; scope_basis?: string;
+  previous_yes_pct?: number;
+}
+
+export interface SupplyExposure {
+  supplier: string;
+  /** Last stored grades for the named supplier, sourced material and products connected by the effective BOM. */
+  rating_path?: {tier: 'supplier' | 'part' | 'product'; id: string; name: string;
+    rating: string; previous: string | null; reason: string}[];
+  /** Open buying records the buyer can check while external applicability is unverified. */
+  verification_orders?: {po: string; line: number | null; material: string; promised: string | null}[];
+  component: string;
+  component_name?: string;
+  assembly: string | null;
+  assembly_name?: string;
+  share: number | null;
+  effective_after: string | null;
+  packing_closes_before_notice?: string | null;
+  uncertainties?: string[];
+  qualification_gate?: {
+    assessment: string; signers: ApprovalAssignment[]; effective: string; evidence: Evidence;
+  } | null;
+  sample_offers?: {text: string; source: string; days?: number}[];
+  /** Scenario using the supplier's quoted sample interval and earliest open PO date. */
+  sample_window?: SampleWindow | null;
+  lead_days: number | null;
+  previous_lead_days: number | null;
+  order_value?: {amount: number; currency: string} | null;
+  delivery_history?: {material:string; site:string; count:number; on_time:number; first:string; last:string;
+    recent:{po:string; line:number; promised:string; arrived:string; days_from_promise:number; source:string}[]} | null;
+  orders: {po: string; line: number | null; quantity: number | null; promised: string; status?: string}[];
+  supplier_rating: string | null;
+  score_basis?: {internal: number; external_raw: number; external_cap: number; external: number; total: number} | null;
+  last_grade_change?: {
+    previous: string; current: string;
+    drivers: {factor: string; before: number; after: number}[];
+  } | null;
+  other_drivers?: {factor: string; points: number}[];
+  signals: {factor: string; text: string; points: number; sources: {
+    evidence: Evidence; origin: string; title?: string; published: string | null;
+    provider?: string; scope?: string; observed_at?: string | null; last_known_at?: string | null; market?: MarketObservation | null;
+    material_matches?: {part:string; description:string; term:string; evidence:Evidence[]}[];
+  }[]}[];
+}
+
 export interface DecisionOption {
+  launch_priority?: { evidence: Evidence; preordered: number | null; all_demand_preordered: boolean; rationale: string | null };
+  shipment_checks?: {field: 'status' | 'eta'; readings: {value: string; source: string; note: string}[]}[];
+  approval_basis?: {po: string; order_eur: number; fee_eur: number; total_eur: number;
+    lines: {line: number; material: string; quantity: number; unit_price: number; value_eur: number}[]};
+  /** Optional, separately authorized correspondence on an assigned internal review. */
+  followup_for?: number;
+  exposure?: SupplyExposure;
+  product_id?: string;
+  horizon?: 'future';
+  review_brief?: string;
+  button_label?: string;
+  currency?: string;
   label: string;
   description: string;
   cost_eur: number | null;
@@ -102,6 +189,7 @@ export interface DecisionOption {
   approval_value_eur?: number | null;
   approvers?: string[];
   approval_roles?: string[];
+  assignments?: ApprovalAssignment[];
   needs_approval?: boolean;
   available?: boolean;
   evidence?: Evidence[];
@@ -133,6 +221,16 @@ export interface DecisionCard {
 
 /** A ranked, actionable option and every source card supporting it. */
 export interface BuyerQueueEntry {
+  latest_grade_change?: {supplier: string; previous: string; current: string; run_id: string; trace_id: number};
+  tracking_signal?: {supplier_rating: string; title: string; text: string; observed_at: string | null;
+    evidence: Evidence; same_shipment_source: boolean; selected_for_rating: boolean};
+  freight_comparison?: {
+    fee_per_additional_copy: number | null;
+    preferred: boolean;
+    alternatives: {label: string; fee: number; gain: number}[];
+    /** Chosen fee and copies minus the best other service for this same line. */
+    difference?: {alternative: string; fee_eur: number; copies: number};
+  };
   on_time_recovery: boolean;
   shared_shipment: string | null; // Alternatives using the same edition and shipment line share capacity
   key: string;
@@ -164,12 +262,27 @@ export interface Forecast {
 
 export interface RiskScore {
   id: number;
-  entity_type: 'part' | 'supplier';
+  entity_type: 'part' | 'supplier' | 'product';
   entity_id: string;
   grade: number; // 1 safe .. 6 critical
   rating: string; // AAA..CCC
-  reasons: { text: string; evidence?: Evidence[] }[];
+  reasons: { text: string; evidence?: Evidence[]; shipment_observations?: {
+    shipment_ids: string[]; title: string; summary: string; evidence: Evidence; observed_at: string | null; selected_for_rating: boolean;
+  }[]; signal_inputs?: Record<string, {
+    provider: string; title: string; summary: string; evidence: Evidence; live: boolean; scope: string;
+    published: string | null; observed_at: string | null; last_known_at?: string; shipment_ids?: string[]; market?: MarketObservation;
+  }[]> }[];
   computed_at: string;
+}
+
+/** Decision-specific records. Each milestone comes from a linked finding, decision, mail, reply or forecast. */
+export interface DecisionHistory {
+  decision_id: number;
+  events: {
+    at: string; actor: string; title: string; detail: string;
+    record: {type: 'issue' | 'decision' | 'outbox' | 'inbox' | 'forecast'; id: number};
+    trace_id?: number; run_id?: string;
+  }[];
 }
 
 export interface AgentLogEntry {
@@ -182,6 +295,9 @@ export interface AgentLogEntry {
   evidence: Evidence[];
   data: Record<string, unknown>;
 }
+
+/** Values used in the buyer's activity lanes. Full evidence remains at /api/trace?trace_id=. */
+export type BuyerActivity = Pick<AgentLogEntry, 'id' | 'run_id' | 'ts' | 'agent' | 'action' | 'detail' | 'data'>;
 
 export interface OutboxMessage {
   id: number;
@@ -203,6 +319,9 @@ export interface OutboxMessage {
 
 export interface CustomerSetup {
   demo_buyer?: string;
+  site?: string;
+  timezone?: string;
+  currency?: string;
   customer: string;
   autonomy: { mode: 'control' | 'auto'; auto_execute_below_eur: number };
   approval_matrix: { below_eur: number | null; approvers: string[] }[];
@@ -227,6 +346,12 @@ export interface FieldChange {
 }
 
 export interface InboxMessage {
+  /** First projection in the acceptance run that cites this message, by product. */
+  forecast_at_confirmation?: {
+    product_id: string; edition: string; forecast_id: number; projected_packed: number | null; shortfall: number | null;
+    change_from_previous: number | null; joint_confirmations: number; dock_released: boolean | null;
+    recorded_at: string; trace_id: number; run_id: string;
+  }[];
   id: number;
   supplier_id: string;
   outbox_id: number | null;
@@ -238,7 +363,9 @@ export interface InboxMessage {
   language: string;
   received_at: string;
   processed: boolean;
-  result: Record<string, unknown>;
+  result: Record<string, unknown> & {
+    qualification_correspondence?: {review_id: number; decision_id: number};
+  };
 }
 
 /** Structured supplier advice on the approved PO line. A supplier cannot release the receiving dock. */
@@ -270,11 +397,16 @@ export interface ReplyRequest {
   language?: string;
 }
 
-export interface RunResult {
+export interface ActionRun {
+  status: 'completed' | 'partial';
+  failures: {agent: string; event: string; trace_id: number}[];
   run_id: string;
+  steps: number;
+}
+
+export interface RunResult extends ActionRun {
   drop_id: number;
   label: string;
-  steps: number;
   added: number;
   changed: number;
   removed: number;
@@ -315,20 +447,25 @@ export const API_ROUTES = {
   DROPS: '/api/drops', // GET
   ISSUES: '/api/issues', // GET ?status= -> Issue[]
   CONFLICTS: '/api/conflicts', // GET
-  FORECAST: '/api/forecast', // GET -> Forecast[]
+  FORECAST: '/api/forecast', // GET -> Forecast[]; ?current=true -> compact latest projection per product
   ISSUE: '/api/issues/:id', // GET -> Issue
   DECISION: '/api/decisions/:id', // GET -> DecisionCard
+  SAMPLE_WINDOW: '/api/decisions/:id/sample-window', // GET ?requested_on=YYYY-MM-DD&option= -> SampleWindow, read-only comparison
+  DECISION_HISTORY: '/api/decisions/:id/history', // GET ?option= -> DecisionHistory, including the request that supplied a priced quote
+  DECISION_SOURCE: '/api/decisions/:id/evidence/:index', // GET -> DecisionSource, index in the stored card evidence
   BUYER_QUEUE: '/api/buyer-queue', // GET -> BuyerQueueEntry[] in execution priority order
-  DECISIONS: '/api/decisions', // GET ?status= -> DecisionCard[]
+  DECISIONS: '/api/decisions', // GET ?status= or ?for_buyer=true (current decisions and follow-up records)
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
-  DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest
-  TRACE: '/api/trace', // GET ?limit=&agent=&run_id= -> AgentLogEntry[]
-  RISK: '/api/risk', // GET -> RiskScore[]
+  DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest, an assigned signer can decline the recommendation
+  TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]. Defaults to the full selected run or 200 recent entries.
+  BUYER_ACTIVITY: '/api/buyer-activity', // GET -> BuyerActivity[]; latest 400 steps without document payloads
+  RISK: '/api/risk', // GET -> RiskScore[]; ?current=true selects the latest grade per entity before ranking
+  RISK_REFRESH: '/api/risk/refresh', // POST -> ActionRun; recheck external signals against current orders
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)
   CHANGES: '/api/changes', // GET ?table= -> FieldChange[] (change log of the source of truth)
-  INBOX: '/api/inbox', // GET -> InboxMessage[]; POST ReplyRequest -> feeds a supplier reply into the loop
+  INBOX: '/api/inbox', // GET ?with_forecast=true adds linked historical outcomes; POST records a supplier reply
   TRUTH: '/api/truth', // GET -> TruthTableInfo[] (clean data tables built by Watcher + Ingest, with row counts)
   TRUTH_ROWS: '/api/truth/:table', // GET ?limit=&q= -> rows of one data table (source = first file, last_source = file that changed it last)
 } as const;

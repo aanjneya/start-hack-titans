@@ -50,7 +50,8 @@ LEFT JOIN goods_receipts gr
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
-        path = get_settings().db_path
+        settings = get_settings()
+        path = settings.replay_db_path or settings.db_path
         path.parent.mkdir(parents=True, exist_ok=True)
         _engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
     return _engine

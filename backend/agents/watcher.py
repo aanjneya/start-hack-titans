@@ -18,6 +18,7 @@ from pathlib import Path
 
 from sqlmodel import select
 
+from ..core import events, trace
 from ..core.config import get_settings
 from ..core.models import PortalFile, utcnow
 from ..core.parsing import safe_rel
@@ -39,7 +40,13 @@ class Watcher(Agent):
 
     def _get(self, url: str) -> bytes:
         s = get_settings()
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {s.soony_api_token}"})
+        target = urllib.parse.urljoin(s.soony_base_url.rstrip("/") + "/", url)
+        endpoint, portal = urllib.parse.urlsplit(target), urllib.parse.urlsplit(s.soony_base_url)
+        if endpoint.scheme not in {"https", "http"}:
+            raise ValueError("Expected an HTTP portal download.")
+        req = urllib.request.Request(target)
+        if (endpoint.scheme, endpoint.netloc) == (portal.scheme, portal.netloc):
+            req.add_unredirected_header("Authorization", f"Bearer {s.soony_api_token}")
         with urllib.request.urlopen(req, timeout=60, context=_ssl_ctx()) as r:
             return r.read()
 
@@ -61,6 +68,7 @@ class Watcher(Agent):
     def check(self) -> dict:
         """One live check (T1.1–T1.4). Returns a summary; in MOCK mode or without a token it does nothing."""
         s = get_settings()
+        run_id = trace.new_run_id()
         if s.mock_mode or not (s.soony_api_token and s.soony_base_url):
             self.log("skip", "live portal check skipped (MOCK_MODE or no SOONY_API_TOKEN); use the replay")
             return {"skipped": True}
@@ -83,7 +91,11 @@ class Watcher(Agent):
         from .. import system  # local import: system imports the agents
 
         result = system.process_drop(added=[f["path"] for f in added], changed=[f["path"] for f in changed],
-                                   removed=removed, label=label, data_root=mirror, mode="live")
+                                   removed=removed, label=label, data_root=mirror, mode="live", watcher_run=run_id)
+
+        if result["status"] != "completed":
+            # Keep the last successful manifest so the next poll delivers these files again.
+            return result
 
         # Advance the manifest only once downstream processing has succeeded.
         with session() as db:
@@ -101,3 +113,10 @@ class Watcher(Agent):
                     db.add(row)
             db.commit()
         return result
+
+    def replay_manifest(self, payload):
+        """Hand the actual Git manifest to the same subscribers used after a live portal diff."""
+        self.log("replay_manifest", f"Read historical portal drop: +{len(payload['added'])} files, "
+                 f"{len(payload['changed'])} changed, {len(payload['removed'])} removed.",
+                 data={"drop_id": payload["drop_id"]})
+        self.emit(events.FILES_CHANGED, payload)

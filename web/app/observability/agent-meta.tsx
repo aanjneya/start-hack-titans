@@ -200,6 +200,7 @@ export type ActionTone = "ok" | "warn" | "stop" | "act" | "muted";
 const ACTION_MAP: Record<string, { label: string; tone: ActionTone }> = {
   error: { label: "Error", tone: "stop" },
   drop: { label: "Drop received", tone: "act" },
+  replay_manifest: { label: "Drop loaded", tone: "act" },
   drop_ingested: { label: "Drop ingested", tone: "ok" },
   table_ingested: { label: "Table loaded", tone: "act" },
   update_row: { label: "Field updated", tone: "act" },

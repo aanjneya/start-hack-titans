@@ -1,16 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  ago, API_URL, clock, eur, fmt, getData, parseTs, postData,
-  type AgentLogEntry, type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
+  ago, API_URL, ApiHttpError, clock, eur, fmt, getData, parseTs, postData,
+  type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
   type Issue, type OutboxMessage, type RiskScore,
 } from "@/lib/api";
-import type { BuyerQueueEntry, CustomerSetup } from "../../API_CONTRACT";
+import type { ActionRun, BuyerActivity, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
+import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
 import DataDrawer from "./data-drawer";
 import { actionLine, entryDetail, humanizeAction } from "./observability/agent-meta";
 import { RiskBoard, SeverityLabel } from "./risk-board";
+import History from "./decision-history";
+import SampleTiming from "./sample-timing";
+import BuyerUpdates from "./buyer-updates";
+import { SourceList, SourcePassage } from "./decision-source";
+import { formatMoney, OrderCalculation } from "./approval-details";
 
 type Snapshot = {
   /** The backend's ranked buyer queue. Null until it first loads: an older backend has none, and the tiles then
@@ -24,7 +30,7 @@ type Snapshot = {
   outbox: OutboxMessage[];
   inbox: InboxMessage[];
   risk: RiskScore[];
-  trace: AgentLogEntry[];
+  trace: BuyerActivity[];
 };
 
 const EMPTY: Snapshot = { queue: null, setup: null, health: null, forecast: [], decisions: [], issues: [], outbox: [], inbox: [], risk: [], trace: [] };
@@ -59,16 +65,22 @@ function actionTargets(actions: Record<string, unknown>[] | undefined): string[]
   });
 }
 
-async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missing: string[] }> {
-  const [health, forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue] = await Promise.allSettled([
-    getData<HealthCheckResponse>("/api/health"),
-    getData<Forecast[]>("/api/forecast"),
-    getData<DecisionCard[]>("/api/decisions"),
+function runWarning(run: ActionRun) {
+  if (run.status !== "partial") return "";
+  const steps = [...new Set(run.failures.map(f => `${f.agent} on ${f.event}`))].join(", ");
+  return `Agent work needs review (${steps}). Open the decision history for the trace.`;
+}
+
+
+async function loadSnapshot(health: HealthCheckResponse): Promise<{ snap: Snapshot; missing: string[] }> {
+  const [forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue] = await Promise.allSettled([
+    getData<Forecast[]>("/api/forecast?current=true"),
+    getData<DecisionCard[]>("/api/decisions?for_buyer=true"),
     getData<Issue[]>("/api/issues"),
     getData<OutboxMessage[]>("/api/outbox"),
-    getData<InboxMessage[]>("/api/inbox"),
-    getData<RiskScore[]>("/api/risk"),
-    getData<AgentLogEntry[]>("/api/trace?limit=500"),
+    getData<InboxMessage[]>("/api/inbox?with_forecast=true"),
+    getData<RiskScore[]>("/api/risk?current=true"),
+    getData<BuyerActivity[]>("/api/buyer-activity"),
     getData<CustomerSetup>("/api/setup"),
     getData<BuyerQueueEntry[]>("/api/buyer-queue"),
   ]);
@@ -76,11 +88,10 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missin
   return {
     missing: Object.entries({forecast, decisions, issues, outbox, inbox, risk, trace, setup, queue})
       .filter(([, response]) => response.status === "rejected").map(([name]) => name),
-    online: health.status === "fulfilled",
     snap: {
       setup: val(setup, null),
       queue: val(queue, null),
-      health: val(health, null),
+      health,
       forecast: val(forecast, []),
       decisions: val(decisions, []),
       issues: val(issues, []),
@@ -94,6 +105,7 @@ async function loadSnapshot(): Promise<{ snap: Snapshot; online: boolean; missin
 
 export default function ControlRoom() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY);
+  const describeReply = useCallback((message: InboxMessage) => replyOutcome(message, snap.setup?.timezone), [snap.setup?.timezone]);
   const [missing, setMissing] = useState<string[]>([]);
   const [online, setOnline] = useState<boolean | null>(null);
   const [now, setNow] = useState<number>(0);
@@ -101,44 +113,99 @@ export default function ControlRoom() {
   /** When the running drop started: agents that log after this are working on it. */
   const [dropStartedAt, setDropStartedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string>("");
+  const [playedRun, setPlayedRun] = useState("");
+  const announceAction = useCallback((message: string) => {
+    setPlayedRun("");
+    setNotice(message);
+  }, []);
   const [tab, setTab] = useState<"activity" | "findings" | "emails" | "risk">("activity");
+  const [activeMail, setActiveMail] = useState<number | null>(null);
+  const [mailVisit, setMailVisit] = useState(0);
+  const openMail = (id:number) => { setActiveMail(id); setTab("emails"); setMailVisit(n => n + 1); };
+  useEffect(() => {
+    if (tab === "emails" && activeMail != null && mailVisit) {
+      document.querySelector<HTMLButtonElement>(`#mail-${activeMail} button`)?.focus();
+    }
+  }, [tab, activeMail, mailVisit]);
+  /** Opens the risk tile that holds a buyer-queue action (from My updates, the notice line and Decided). */
+  const [focus, setFocus] = useState<{ key: string; n: number } | null>(null);
+  const openAction = useCallback((key: string) => setFocus((f) => ({ key, n: (f?.n ?? 0) + 1 })), []);
   const [showData, setShowData] = useState(false);
   const closeData = useCallback(() => setShowData(false), []);
 
-  const refresh = useCallback(async () => {
-    const { snap: next, online: up, missing: failed } = await loadSnapshot();
-    setOnline(up);
+  const lastSnapshot = useRef({version: "", fetched: 0});
+  const request = useRef(0);
+  const focusDecision = useRef<number | null>(null);
+  const followDecision = useCallback((id: number) => { focusDecision.current = id; }, []);
+  const nextRequest = useCallback(() => ++request.current, []);
+  const refresh = useCallback(async (force = true) => {
+    const id = nextRequest();
+    let health: HealthCheckResponse;
+    try {
+      health = await getData<HealthCheckResponse>("/api/health");
+    } catch {
+      if (id === request.current) {
+        setOnline(false);
+        lastSnapshot.current.fetched = 0;
+      }
+      return;
+    }
+    if (id !== request.current) return;
+    // Force a full read after user actions and periodically for unlogged external changes.
+    if (!force && health.activity_version && health.activity_version === lastSnapshot.current.version
+      && Date.now() - lastSnapshot.current.fetched < 30_000) return;
+    const { snap: next, missing: failed } = await loadSnapshot(health);
+    if (id !== request.current) return;
+    setOnline(true);
     setMissing(failed);
-    if (up) setSnap(previous => ({...next, ...Object.fromEntries(
+    setSnap(previous => ({...next, ...Object.fromEntries(
       failed.map(name => [name, previous[name as keyof Snapshot]]))}));
+    lastSnapshot.current = {version: health.activity_version ?? "", fetched: failed.length ? 0 : Date.now()};
     setNow(Date.now());
-  }, []);
+  }, [nextRequest]);
 
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      if (alive) await refresh();
+      await refresh(false);
+      if (alive) timer = setTimeout(tick, 3000);
     };
     void tick();
-    const poll = setInterval(tick, 3000);
     const second = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       alive = false;
-      clearInterval(poll);
+      nextRequest();
+      clearTimeout(timer);
       clearInterval(second);
     };
-  }, [refresh]);
+  }, [refresh, nextRequest]);
+
+  useEffect(() => {
+    if (focusDecision.current == null) return;
+    const followup = document.getElementById(`followup-${focusDecision.current}`);
+    if (followup) {
+      focusDecision.current = null;
+      const review = followup.querySelector<HTMLDetailsElement>("details[data-assigned-review]");
+      if (review) review.open = true;
+      followup.focus({preventScroll:true});
+      followup.scrollIntoView({block:"start"});
+    }
+  }, [snap]);
 
   const nextDrop = async () => {
     setDropStartedAt(Date.now());
     setDropBusy(true);
     setNotice("");
+    setPlayedRun("");
     try {
-      const r = await postData<Record<string, number | string | boolean>>("/api/replay/step");
+      const r = await postData<RunResult & {done?: boolean; step: number; of: number; drops?: number}>("/api/replay/step");
+      if (r.status === "completed") setPlayedRun(r.run_id);
       setNotice(
         r.done
-          ? `All ${r.drops} recorded drops are in. Restart the backend to play them again.`
-          : `Drop ${r.step} of ${r.of}: ${r.added} new files, ${r.changed} changed, ${r.removed} removed · ${r.open_issues} open findings`,
+          ? `All ${r.drops} recorded drops are in.`
+          : r.status === "partial" ? "Drop incomplete. Retry this step after reviewing the trace."
+          : `Drop ${r.step} of ${r.of} processed: ${r.added} files added, ${r.changed} changed, ${r.removed} removed. ${r.open_issues} findings open.`,
       );
     } catch (e) {
       setNotice(`The drop could not be processed: ${(e as Error).message}`);
@@ -148,10 +215,10 @@ export default function ControlRoom() {
     }
   };
 
-  // Newest forecast per edition.
+  // Product IDs also distinguish two customers' SKUs with the same edition label.
   const editions = useMemo(() => {
     const seen = new Map<string, Forecast>();
-    for (const f of snap.forecast) if (!seen.has(f.edition)) seen.set(f.edition, f);
+    for (const f of snap.forecast) if (!seen.has(f.product_id)) seen.set(f.product_id, f);
     return [...seen.values()].sort((a, b) => (b.shortfall ?? 0) - (a.shortfall ?? 0));
   }, [snap.forecast]);
 
@@ -166,6 +233,19 @@ export default function ControlRoom() {
     return [...groups.values()].map((cards) => ({ card: cards[0], similar: cards.slice(1) }));
   }, [snap.decisions]);
 
+  const queue = snap.queue ?? [];
+  const riskCheck = snap.health?.lastRiskCheck;
+  const marketRun = riskCheck?.trigger === "risk.refresh.requested" ? riskCheck.run_id : null;
+  const latestDrop = !notice && snap.health?.lastDrop?.status === "completed" ? snap.health.lastDrop.run_id : null;
+  // One line for a supplier grade change from this drop or signal check, or for the newest supplier quote.
+  const updated = queue.find(entry => entry.option.horizon === "future" && !entry.option.followup_for &&
+    entry.latest_grade_change && [playedRun, marketRun, latestDrop].includes(entry.latest_grade_change.run_id));
+  const newestQuote = snap.inbox.find(reply => reply.processed && reply.result.supplier_quote);
+  const quoted = newestQuote && queue.find(entry => entry.option.available !== false &&
+    entry.option.actions.some(action => action.quote_inbox_id === newestQuote.id));
+  const current = online === true && !dropBusy && !missing.includes("queue") && !missing.includes("setup");
+
+  const snapshotTime = editions.map(f => f.details?.as_of).find((t): t is string => typeof t === "string");
   const deadline = editions.find((f) => f.deadline)?.deadline ?? null;
   const mock = snap.health?.mockMode ?? true;
 
@@ -173,19 +253,49 @@ export default function ControlRoom() {
     <div className="theme-green min-h-screen bg-dock">
     <div className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
-        autonomy={snap.setup?.autonomy ?? null}
-        matrix={snap.setup?.approval_matrix ?? []}
-        buyer={snap.setup?.demo_buyer}
+        setup={snap.setup}
         online={online}
         mock={mock}
         deadline={deadline}
         now={now}
+        snapshotTime={snapshotTime}
+        retry={snap.health?.lastDrop?.status === "partial" && snap.health?.lastDrop?.mode === "replay"}
         busy={dropBusy}
+        replayEnabled={!!snap.health?.replayEnabled}
         onDrop={nextDrop}
+        updates={snap.setup?.demo_buyer && <BuyerUpdates key={snap.setup.customer + "/" + snap.setup.demo_buyer}
+          setup={snap.setup} activity={snap.trace} queue={queue} inbox={snap.inbox} decisions={snap.decisions} describeReply={describeReply} onMail={openMail}
+          onAction={key => {
+            const parent = queue.find(e => e.key === key)?.option.followup_for;
+            if (!parent) return openAction(key);
+            const section = document.getElementById("followup-" + parent);
+            const detail = section?.querySelector("details");
+            if (detail) detail.open = true;
+            section?.focus();
+          }} />}
       />
-      {notice && (
+      {snap.health?.lastDrop?.mode === "simulation" && <p className="mb-3 border-l-4 border-warn bg-warn-soft px-4 py-2 text-sm font-semibold">
+        {snap.health.lastDrop.label}
+      </p>}
+      {snap.health?.lastDrop?.status === "partial" && <p role="alert" className="mb-4 rounded-md bg-warn-soft p-3">
+        Forecast needs review. {snap.health.lastDrop.failures.map(f => f.agent + " failed on " + f.event).join(", ")}.
+        {" "}<a className="underline" href={API_URL + "/api/trace?run_id=" + snap.health.lastDrop.run_id}>Open run trace</a>
+      </p>}
+      {riskCheck && (Object.keys(riskCheck.unavailable).length > 0 || !!riskCheck.failures?.length) && <p role="alert" className="mb-4 rounded-md bg-warn-soft p-3">
+        Risk check incomplete · {Object.keys(riskCheck.unavailable).length ? Object.keys(riskCheck.unavailable).join(", ") + " unavailable."
+          : riskCheck.failures?.map(f => f.agent + " failed on " + f.event).join(", ") + "."}
+        {riskCheck.grades_changed == null && " The previous supplier grades still apply."}{" "}
+        <a className="font-semibold underline" href={API_URL + "/api/trace?run_id=" + riskCheck.run_id}>View check</a>
+      </p>}
+      {(notice || updated || quoted) && (
         <p role="status" className="mb-4 rounded-md border border-rule bg-surface px-4 py-2 text-sm">
-          {notice}
+          {updated?.latest_grade_change ? <>{updated.latest_grade_change.supplier} moved from {updated.latest_grade_change.previous} to {updated.latest_grade_change.current} {marketRun === updated.latest_grade_change.run_id ? "after a signal refresh" : "in this drop"}.
+            {" "}<button className="font-semibold text-act underline" onClick={() => openAction(updated.key)}>See the action</button>
+            </> : notice || (quoted && <>Supplier {quoted.option.description} quote received
+              {quoted.option.cost_eur != null && <> · <strong>{formatMoney().format(quoted.option.cost_eur)}</strong> fee</>}
+              {quoted.option.approval_basis && <> · <strong>{formatMoney().format(quoted.option.approval_basis.total_eur)}</strong> amended PO</>}.
+              {quoted.option.approvers?.length ? ` Assigned to ${quoted.option.approvers.join(" + ")}. ` : " "}
+              <button className="font-semibold text-act underline" onClick={() => openAction(quoted.key)}>See approval route</button></>)} {notice.includes("decision follow-up") && <a className="font-semibold text-act underline" href="#decision-follow-up">View follow-up</a>}
         </p>
       )}
       {online === false && (
@@ -198,7 +308,9 @@ export default function ControlRoom() {
       {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
         Couldn&apos;t refresh {missing.join(", ")}. Showing the last data.
       </p>}
-      {(!missing.includes("forecast") || editions.length > 0) && <Hero editions={editions} loading={online === null} />}
+      {(!missing.includes("forecast") || editions.length > 0) && (
+        <Hero editions={editions} loading={online === null} ready={online === true} replayEnabled={!!snap.health?.replayEnabled} />
+      )}
 
       <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <RiskBoard
@@ -208,10 +320,17 @@ export default function ControlRoom() {
           forecast={snap.forecast}
           setup={snap.setup}
           queue={snap.queue}
+          focus={focus}
           emptyText={missing.includes("decisions") || online !== true ? "Waiting for current decisions." : "No decisions are waiting for approval."}
           onChanged={refresh}
+          renderAction={(key) => {
+            const entry = queue.find((e) => e.key === key);
+            return entry && (
+              <DecisionView entry={entry} snap={snap} current={current} onDone={refresh} onNotice={announceAction} onDecided={followDecision} />
+            );
+          }}
           renderDecision={(card) => (
-            <DecisionView
+            <CardDetails
               setup={snap.setup}
               card={card}
               similar={decisionGroups.find((g) => g.card.id === card.id)?.similar ?? []}
@@ -228,7 +347,8 @@ export default function ControlRoom() {
             since={dropStartedAt}
             onOpenData={() => setShowData(true)}
           />
-          <CaseUpdates snap={snap} />
+          <CaseUpdates snap={snap} refresh={refresh} current={online === true && !dropBusy && !missing.length}
+            openMail={openMail} onAction={openAction} />
         </aside>
       </div>
 
@@ -257,8 +377,8 @@ export default function ControlRoom() {
         </div>
         {tab === "activity" && <LiveLog trace={snap.trace} />}
         {tab === "findings" && <Findings issues={snap.issues} />}
-        {tab === "emails" && <Emails outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
-        {tab === "risk" && <Risk rows={snap.risk} />}
+        {tab === "emails" && <Emails activeMail={activeMail} mailVisit={mailVisit} snap={snap} mock={mock} onSent={refresh} />}
+        {tab === "risk" && <><SignalRefresh reading={riskCheck} scores={snap.risk} timezone={snap.setup?.timezone} online={online === true} mock={mock} refresh={refresh} /><Risk rows={snap.risk} /></>}
       </section>
       {showData && <DataDrawer onClose={closeData} />}
     </div>
@@ -266,67 +386,135 @@ export default function ControlRoom() {
   );
 }
 
-type InboundEvidence = { eligible?: boolean; dock_released?: boolean; evidence?: {path: string}[] };
-
-function forecastAfterReply(reply: InboxMessage, forecasts: Forecast[], edition: string) {
-  if (!reply.result?.confirmed_delivery) return "";
-  const history = forecasts.filter(f => f.edition === edition).sort((a, b) => a.id - b.id);
-  for (const [index, f] of history.entries()) {
-    const inbound = f.details.inbound;
-    if (!Array.isArray(inbound)) continue;
-    const arrival = (inbound as InboundEvidence[]).find(row => row.evidence?.some(e => e.path === `inbox/${reply.id}`));
-    if (!arrival) continue;
-    if (!arrival.dock_released) return "Waiting for the site to release a dock slot.";
-    const previous = history[index - 1];
-    if (f.projected_packed == null || f.shortfall == null || previous?.projected_packed == null) return "";
-    const change = f.projected_packed - previous.projected_packed;
-    return `${edition} forecast at confirmation: ${fmt(f.projected_packed)} by close (${change > 0 ? "+" : ""}${fmt(change)}), ${fmt(f.shortfall)} short.`;
-  }
-  return "";
+function forecastAfterReply(reply: InboxMessage, product?: string) {
+  const outcome = reply.forecast_at_confirmation?.find(f => f.product_id === product);
+  if (!outcome) return "";
+  if (outcome.dock_released === false) return "Waiting for the site to release a dock slot.";
+  const change = outcome.change_from_previous;
+  if (outcome.projected_packed == null || outcome.shortfall == null) return "Waiting for enough evidence for a packing projection.";
+  const delta = change == null ? "" : ` (${change > 0 ? "+" : ""}${fmt(change)})`;
+  const shared = outcome.joint_confirmations > 1 ? ` This projection includes ${outcome.joint_confirmations} confirmations together.` : "";
+  return `${outcome.edition} forecast at confirmation: ${fmt(outcome.projected_packed)} by close${delta}, ${fmt(outcome.shortfall)} short.${shared}`;
 }
 
-function CaseUpdates({ snap }: { snap: Snapshot }) {
-  const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed"].includes(d.status)))
-    .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id).slice(0, 4);
+function CaseUpdates({ snap, openMail, refresh, current, onAction }: {
+  snap: Snapshot; openMail: (id: number) => void; refresh: () => Promise<void>; current: boolean; onAction: (key: string) => void;
+}) {
+  const [all, setAll] = useState(false);
+  const queue = snap.queue ?? [];
+  const decided = snap.decisions.filter(d => d.status === "rejected" || (d.chosen_option != null && ["approved", "executed", "outdated"].includes(d.status)))
+    .sort((a, b) => (b.decided_at ?? "").localeCompare(a.decided_at ?? "") || b.id - a.id);
   if (!decided.length) return null;
   return (
-    <section aria-labelledby="decided">
+    <section id="decision-follow-up" aria-labelledby="decided">
       <h2 id="decided" className="mb-3 text-xl font-bold">
         Decided
       </h2>
       <ul className="divide-y divide-rule rounded-lg border border-rule bg-surface">
-        {decided.map((d) => {
+        {(all ? decided : decided.slice(0, 4)).map((d) => {
           const option = d.options[d.chosen_option!];
           const sent = snap.outbox.find((o) => o.decision_id === d.id);
           const reply = sent && snap.inbox.filter((i) => i.outbox_id === sent.id).sort((a, b) => b.id - a.id)[0];
+          const review = snap.issues.find(i => i.type === "recovery_review" && i.evidence.some(e => e.path === `decisions/${d.id}`));
+          const problem = snap.trace.find(log => log.action === "error" &&
+            ((d.status === "approved" && !review && sent?.status !== "sent" && !reply && log.data?.decision_id === d.id)
+              || (reply && !reply.processed && log.data?.inbox_id === reply.id)));
           const state = d.status === "rejected" ? "Rejected"
-            : reply ? replyOutcome(reply)
+            : d.status === "outdated" ? "Outdated, see its history"
+            : reply ? replyOutcome(reply, snap.setup?.timezone)
             : sent?.status === "failed" ? "Email failed, check it"
             : sent?.status === "draft" ? "Email draft ready"
             : sent?.status === "sent" ? (snap.health?.mockMode && sent.sent_copy_pending == null ? "Simulated email sent" : "Email sent, waiting for reply")
             : sent?.status === "escalated" ? "Escalated to the buyer"
-            : option?.actions.some((a) => a.type === "human_review") ? "With the buyer for review"
+            : review ? `Review with ${d.approver || "the buyer"}`
             : "Approved";
-          const edition = snap.forecast.find((f) => d.title.startsWith(f.edition + " ·"))?.edition;
-          const outcome = reply && edition ? forecastAfterReply(reply, snap.forecast, edition) : "";
+          const accepted = sent && snap.inbox.find(i => i.outbox_id === sent.id && i.result?.confirmed_delivery);
+          const outcome = accepted ? forecastAfterReply(accepted, option?.product_id) : "";
+          const pendingInquiry = queue.find(e => e.option.followup_for === d.id);
+          const child = snap.decisions.find(c => c.chosen_option != null && c.options[c.chosen_option].followup_for === d.id);
+          const lastInquiry = snap.decisions.find(c => c.options.some(o => o.followup_for === d.id));
+          const inquiryMail = child && snap.outbox.find(o => o.decision_id === child.id);
+          const correspondence = inquiryMail && snap.inbox.find(i => i.outbox_id === inquiryMail.id && i.result.qualification_correspondence);
+          const priced = reply && reply.result?.supplier_quote ? queue.find(e => e.option.actions.some(a => a.quote_inbox_id === reply.id)) : undefined;
           return (
-            <li key={d.id} className="px-4 py-2.5">
+            <li key={d.id} id={`followup-${d.id}`} tabIndex={-1} className="scroll-mt-4 px-4 py-2.5 outline-none">
               <p className="flex items-baseline justify-between gap-3">
                 <span className="min-w-0 truncate text-sm font-semibold" title={option?.label ?? d.title}>
                   {option?.label ?? d.title}
                 </span>
-                <span className={`shrink-0 text-xs font-semibold ${d.status === "rejected" ? "text-stop" : "text-ok"}`}>
+                <span className={`shrink-0 text-xs font-semibold ${d.status === "rejected" ? "text-stop" : d.status === "outdated" ? "text-muted" : "text-ok"}`}>
                   {d.status === "rejected" ? "✕" : "✓"} {d.decided_by}
                 </span>
               </p>
-              <p className="mt-0.5 text-xs text-muted">{state}</p>
+              <p className="mt-0.5 text-xs text-muted">
+                {problem ? `${agentName(problem.agent)} reported an error on ${String(problem.data?.event ?? "this step")}` : state}
+              </p>
               {outcome && <p className="mt-0.5 text-xs font-semibold">{outcome}</p>}
+              {(priced || sent || problem) && (
+                <p className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                  {priced && <button className="font-semibold text-act hover:underline" onClick={() => onAction(priced.key)}>Review priced offer</button>}
+                  {sent && <a className="text-act hover:underline" href={`#mail-${sent.id}`} onClick={() => openMail(sent.id)}>Supplier thread</a>}
+                  {problem && <a className="font-semibold text-warn hover:underline" href={API_URL + "/api/trace?trace_id=" + problem.id}>Agent error</a>}
+                </p>
+              )}
+              {review && (
+                <details className="mt-1 text-xs" data-assigned-review>
+                  <summary className="cursor-pointer font-semibold text-act">Open assigned review #{review.id}</summary>
+                  <p className="mt-1 font-semibold">{review.impact.note}</p>
+                  <p>{review.reason}</p>
+                  <p className="text-muted">Review status · {review.status}</p>
+                  {pendingInquiry && <SampleInquiry entry={pendingInquiry} buyer={snap.setup?.demo_buyer} current={current} refresh={refresh} />}
+                  {!pendingInquiry && !child && lastInquiry?.status === "outdated" && <p className="my-2 text-warn">
+                    The earlier sample inquiry is outdated. Verify the current terms with the review owner.</p>}
+                  {inquiryMail && <p className="my-2">{correspondence ? "Supplier response recorded for Engineering and Quality." :
+                    inquiryMail.status === "failed" ? "The sample inquiry failed to send." : inquiryMail.status === "draft" ? "Sample inquiry drafted." :
+                    "Sample inquiry recorded in the supplier thread."}
+                    {" "}<a className="text-act underline" href={`#mail-${inquiryMail.id}`} onClick={() => openMail(inquiryMail.id)}>Open sample correspondence</a></p>}
+                  <a className="text-act underline" href={API_URL + "/api/issues/" + review.id}>View review record</a>
+                </details>
+              )}
+              <History decision={d.id} activity={snap.health?.activity_version} />
             </li>
           );
         })}
       </ul>
+      {decided.length > 4 && <button className="mt-2 text-sm font-semibold text-act hover:underline" onClick={() => setAll(!all)}>
+        {all ? "Show fewer" : `Show all ${decided.length}`}</button>}
     </section>
   );
+}
+
+function SampleInquiry({ entry, buyer, current, refresh }: {
+  entry: BuyerQueueEntry; buyer?: string; current: boolean; refresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const owners = entry.option.approvers || [];
+  const send = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await postData<ActionRun>(`/api/decisions/${entry.decision_id}/approve`, {
+        by: buyer, option: entry.option_index, version: entry.version,
+      });
+      setError(runWarning(result));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      await refresh();
+      setBusy(false);
+    }
+  };
+  return <section className="my-3 max-w-2xl rounded border border-rule p-3">
+    <h3 className="font-semibold">{entry.option.label}</h3>
+    <p>{entry.next_step}</p>
+    <details className="my-2"><summary className="cursor-pointer text-act">Preview the request</summary>
+      <p className="mt-2">{String(entry.option.actions[0].ask)}</p></details>
+    {owners.length === 1 && owners[0] === buyer
+      ? <button className="rounded bg-act px-3 py-1.5 font-semibold text-white disabled:opacity-50" disabled={!current || busy} onClick={send}>
+        {busy ? "Sending…" : "Send sample inquiry"}</button> : <p>Awaiting {owners.join(" + ") || "assignment"}</p>}
+    {error && <p role="alert" className="text-stop">{error}</p>}
+  </section>;
 }
 
 /** The human-in-the-loop switch as it is set in the customer setup, and who approves which amount (Soony's matrix). */
@@ -402,26 +590,34 @@ function ApprovalsChip({ autonomy, matrix, buyer }: {
 }
 
 function TopBar(props: {
-  autonomy: CustomerSetup["autonomy"] | null;
-  matrix: CustomerSetup["approval_matrix"];
-  buyer?: string;
+  updates?: React.ReactNode;
+  setup: CustomerSetup | null;
   online: boolean | null;
   mock: boolean;
   deadline: string | null;
+  snapshotTime?: string;
+  retry: boolean;
   now: number;
   busy: boolean;
+  replayEnabled: boolean;
   onDrop: () => void;
 }) {
   const end = parseTs(props.deadline);
-  const left = end && props.now ? end.getTime() - props.now : null;
+  // A replay shows a recorded snapshot: count down from the snapshot time, not from today's clock.
+  const from = props.replayEnabled ? parseTs(props.snapshotTime)?.getTime() : props.now;
+  const left = end && from ? end.getTime() - from : null;
   const closes = end?.toLocaleString("en-GB", {
-    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: props.setup?.timezone || "UTC",
+  });
+  const snapshot = parseTs(props.snapshotTime)?.toLocaleString("en-GB", {
+    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: props.setup?.timezone || "UTC",
   });
   const status = props.online ? "Backend online" : props.online === false ? "Backend offline" : "Connecting";
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       {/* The one number that matters up here: time left until packing closes. */}
-      <h1 className="flex items-baseline gap-2" title={closes ? `Packing closes ${closes}` : undefined}>
+      <h1 className="flex items-baseline gap-2"
+        title={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}>
         {left == null ? (
           <span className="text-lg font-semibold text-muted">Packing deadline</span>
         ) : left <= 0 ? (
@@ -436,12 +632,15 @@ function TopBar(props: {
         )}
       </h1>
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-        {props.autonomy && <ApprovalsChip autonomy={props.autonomy} matrix={props.matrix} buyer={props.buyer} />}
+        {props.updates}
+        {props.setup && (
+          <ApprovalsChip autonomy={props.setup.autonomy} matrix={props.setup.approval_matrix} buyer={props.setup.demo_buyer} />
+        )}
         <span
-          title={props.mock ? "MOCK_MODE=true: no AI calls, no real emails" : "Live: real AI calls and emails"}
+          title={props.mock ? "Historical or simulated inputs. Email delivery is simulated." : "Live data. Email delivery follows the Chaser configuration."}
           className={`rounded px-2 py-1 text-xs font-bold ${props.mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
         >
-          {props.mock ? "Mock" : "Live"}
+          {props.replayEnabled ? "Replay" : props.mock ? "Mock" : "Live"}
         </span>
         <span
           role="img"
@@ -451,21 +650,23 @@ function TopBar(props: {
             props.online ? "bg-ok" : props.online === false ? "bg-stop" : "bg-rule"
           }`}
         />
-        <button
+        {props.replayEnabled && <button
           onClick={props.onDrop}
           disabled={props.busy || !props.online}
           className="rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-act disabled:cursor-not-allowed disabled:opacity-50"
-          title="Sends the next real portal drop (from git history) through all agents. The first click starts from an empty store."
+          title="Resumes the next recorded drop in the dedicated replay database."
         >
           {props.busy ? (
             "Agents are working"
+          ) : props.retry ? (
+            "Retry drop"
           ) : (
             <>
               <span className="sm:hidden">Next drop</span>
               <span className="hidden sm:inline">Play next data drop</span>
             </>
           )}
-        </button>
+        </button>}
         <Link
           href="/observability"
           className="rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-semibold text-ink hover:border-act hover:text-act"
@@ -479,7 +680,9 @@ function TopBar(props: {
   );
 }
 
-function Hero({ editions, loading }: { editions: Forecast[]; loading: boolean }) {
+function Hero({ editions, loading, ready, replayEnabled }: {
+  editions: Forecast[]; loading: boolean; ready: boolean; replayEnabled: boolean;
+}) {
   // First paint, before the backend has answered: quiet placeholders, not "no forecast yet".
   if (editions.length === 0 && loading) {
     return (
@@ -496,7 +699,9 @@ function Hero({ editions, loading }: { editions: Forecast[]; loading: boolean })
   if (editions.length === 0) {
     return (
       <section className="rounded-xl bg-surface px-6 py-10 text-muted">
-        No forecast yet. Press <strong className="text-ink">Play next data drop</strong> to load the first drop.
+        {!ready ? "Waiting for the latest packing forecast." : replayEnabled
+          ? <>No forecast yet. Press <strong className="text-ink">Play next data drop</strong> to load the next snapshot.</>
+          : "A packing forecast needs a dated launch snapshot and shift calendar. Supplier reviews can proceed independently."}
       </section>
     );
   }
@@ -505,12 +710,14 @@ function Hero({ editions, loading }: { editions: Forecast[]; loading: boolean })
       {editions.map((f) => {
         const short = (f.shortfall ?? 0) > 0;
         return (
-          <div key={f.edition} className="bg-surface px-6 py-6">
-            <p className={`figure text-[clamp(64px,10vw,124px)] ${short ? "text-stop" : "text-ok"}`}>
+          <div key={f.product_id} className="bg-surface px-5 py-4">
+            <p className={`figure text-[clamp(40px,5vw,64px)] ${short ? "text-stop" : "text-ok"}`}>
               {f.shortfall == null ? "—" : fmt(f.shortfall)}
             </p>
             <p className="mt-2 text-lg font-semibold">
-              {f.shortfall == null ? `${f.edition}: no forecast yet` : short ? `${f.edition} copies short` : `${f.edition} on track`}
+              {f.edition}
+              {editions.some((o) => o.product_id !== f.product_id && o.edition === f.edition) && ` (${f.product_id})`}
+              {f.shortfall == null ? ": no forecast yet" : short ? " copies short" : " on track"}
             </p>
           </div>
         );
@@ -523,7 +730,193 @@ const approvalCurrency = new Intl.NumberFormat("en-IE", {
   style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 2,
 });
 
-function DecisionView({ setup, card, similar, onDone }: { setup: CustomerSetup | null; card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
+const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, onNotice, onDecided }: {
+  entry: BuyerQueueEntry; snap: Snapshot; current: boolean; onDone: () => Promise<void>; onNotice: (message: string) => void;
+  onDecided: (id: number) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const option = entry.option;
+  const buyer = snap.setup?.demo_buyer;
+  const approvalCurrency = formatMoney(option.currency || "EUR");
+  const assigned = option.approvers ?? [];
+  const pendingRoles = option.assignments?.filter(a => !a.person).map(a => a.required_role) ?? [];
+  const ownsAction = !!buyer && !pendingRoles.length && assigned.length === 1 && assigned[0] === buyer;
+  const cost = option.cost_eur;
+  const value = option.approval_value_eur;
+  const card = snap.decisions.find(d => d.id === entry.decision_id);
+  const noticeIndex = card?.evidence.findIndex(e => e.locator === "delivery window") ?? -1;
+  const comparison = entry.freight_comparison;
+  const alternative = comparison?.alternatives[0];
+  const tradeoff = comparison?.difference;
+  const baseline = card?.options.find(o => o.description === "baseline");
+  const action = option.actions[0];
+  const button = option.button_label || (action?.type === "human_review" ? "Open review" :
+    action?.quote_inbox_id ? "Authorize quote" : action?.type === "email" ? "Send supplier request" : "Approve");
+  const signingRoles = option.assignments?.map(a => a.signing_role) ?? option.approval_roles ?? [];
+  const role = [...new Set(signingRoles)].join(" + ") || "Unassigned role";
+  const issueIds = [...new Set(entry.sources.flatMap(s => s.issue_ids))];
+  const matrix = snap.setup?.approval_matrix ?? [];
+  const band = value == null ? -1 : matrix.findIndex(r => r.below_eur == null || value < r.below_eur);
+  const rule = matrix[band];
+  const lower = matrix[band - 1]?.below_eur ?? 0;
+  const deadline = parseTs(entry.decide_by)?.toLocaleString("en-GB", {
+    weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: snap.setup?.timezone || "UTC",
+  });
+
+  const decide = async (verb: "approve" | "reject") => {
+    if (!current || !ownsAction) return;
+    setBusy(true);
+    onNotice("");
+    try {
+      const result = await postData<ActionRun>(`/api/decisions/${entry.decision_id}/${verb}`, {
+        by: buyer, option: entry.option_index, version: entry.version,
+      });
+      onDecided(entry.decision_id);
+      onNotice(runWarning(result) || (verb === "reject" ? "Decision rejected." : action?.type === "human_review"
+        ? `Internal review authorized. See decision follow-up for the owner and record.`
+        : "Supplier request authorized. See decision follow-up for delivery status."));
+    } catch (e) {
+      onNotice(e instanceof ApiHttpError && e.status === 409
+        ? `${e.message.replace(/[.!]$/, "")}. Check the current buyer queue before acting again.` : (e as Error).message);
+    } finally {
+      await onDone();
+      setBusy(false);
+    }
+  };
+
+  return <article className={`rounded-lg border border-rule border-t-[3px] bg-surface ${option.horizon === "future" ? "border-t-warn" : "border-t-act"}`}>
+    <div className="px-5 pt-4">
+      <p className="text-sm text-muted">{entry.edition}{entry.part ? " · " + entry.part : option.horizon !== "future" ? " · Packing capacity" : ""}</p>
+      <h3 className="mt-1 text-lg font-bold leading-snug">{option.label}</h3>
+      {option.exposure ? <ExposureSummary exposure={option.exposure} /> :
+        <p className="mt-2 text-sm">{entry.next_step}</p>}
+      {!!option.shipment_checks?.length && <p className="mt-2 text-sm font-semibold text-warn">
+        Shipment records disagree on {option.shipment_checks.map(c => c.field === "eta" ? "arrival date" : "location status").join(" and ")}.
+      </p>}
+      {action?.quote_inbox_id != null && <p className="mt-1 text-sm font-semibold text-act">Quote received · Awaiting authorization</p>}
+      {option.launch_priority?.all_demand_preordered && !!option.copies_gained && <p className="mt-3 text-sm font-medium text-act">
+        Customer priority · All {fmt(option.launch_priority.preordered)} {entry.edition} copies are preordered.
+      </p>}
+      <dl className="my-4 flex flex-wrap gap-x-7 gap-y-3 text-sm tabular">
+        {option.horizon !== "future" && <>
+          <div><dt className="text-muted">Conditional gain</dt><dd className="font-semibold">
+            {option.copies_gained == null ? "Unknown" : `Up to ${fmt(option.copies_gained)} copies`}</dd>
+            {!!option.copies_gained && option.remaining_shortfall != null && baseline?.remaining_shortfall != null &&
+              <dd className="text-xs text-muted">{fmt(baseline.remaining_shortfall)} → {fmt(option.remaining_shortfall)} short</dd>}</div>
+          <div><dt className="text-muted">{option.description === "supplier stock offer" ? "Quoted goods" : "Cost"}</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
+        </>}
+        <div><dt className="text-muted">{option.horizon === "future" ? "Spend authorized" : "Approval value"}</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
+        <div><dt className="text-muted">Assigned to</dt><dd>{pendingRoles.length ? "Pending assignment" : assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
+      </dl>
+      {comparison && comparison.fee_per_additional_copy != null && <p className="mb-2 text-sm">
+        {tradeoff && <strong>{tradeoff.fee_eur === 0 ? "Same fee" :
+          `${approvalCurrency.format(Math.abs(tradeoff.fee_eur))} ${tradeoff.fee_eur < 0 ? "less" : "more"}`}
+          {tradeoff.copies === 0 ? " for the same on-time gain" : ` for ${fmt(Math.abs(tradeoff.copies))} ${tradeoff.copies > 0 ? "more" : "fewer"} copies`}
+          {" versus “"}{tradeoff.alternative}”. </strong>}
+        The fee works out to {approvalCurrency.format(comparison.fee_per_additional_copy)} per additional copy if the delivery is confirmed on time.
+        {alternative && !tradeoff && ` ${alternative.label} would cost ${approvalCurrency.format(alternative.fee)} for up to ${fmt(alternative.gain)} copies.`}
+      </p>}
+      {entry.shared_shipment && <p className="mb-2 text-sm text-muted">
+        Other options use this shipment ({entry.shared_shipment}). Count its copy gain once.
+      </p>}
+      {option.horizon === "future" && option.exposure?.sample_window
+        ? <p className="text-sm"><strong>First move</strong> · Check the incumbent’s {option.exposure.sample_window.sample_days}-day sample offer with Engineering and Quality.</p>
+        : <p className="text-sm"><strong>Still needed</strong> · {entry.requirements.join(" · ")}</p>}
+    </div>
+    <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
+      {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
+        className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">{button}</button>
+        : <strong>{pendingRoles.length ? `Awaiting named ${pendingRoles.join(" + ").toLowerCase()}` :
+          assigned.length ? `Awaiting ${assigned.join(" + ")}` : "Awaiting assignment"}{!pendingRoles.length && assigned.length > 0 && assigned.join(" + ") !== role && ` · ${role}`}</strong>}
+      {deadline && <span className="text-muted">Decide by {deadline} {snap.setup?.timezone || "UTC"}</span>}
+    </div>
+    {option.exposure?.sample_window && <div className="border-t border-rule px-5 pb-3">
+      <SampleTiming key={entry.version} decision={entry.decision_id} option={entry.option_index} window={option.exposure.sample_window} />
+    </div>}
+    <details className="border-t border-rule px-5 py-3 text-sm">
+      <summary className="cursor-pointer font-semibold text-act">Why? · {issueIds.length} linked {issueIds.length === 1 ? "finding" : "findings"}</summary>
+      {option.exposure ? <>
+        {card && noticeIndex >= 0 && <SourcePassage decision={card.id} index={noticeIndex}
+          evidence={card.evidence[noticeIndex]} label="Read the supplier’s delivery notice" />}
+        <ExposureEvidence exposure={option.exposure} />
+      </> : <>
+        <p className="mt-3">{option.risk_note}</p>
+        {option.launch_priority && <section className="mt-3">
+          <h4 className="font-bold">Why this edition comes first</h4>
+          <blockquote className="mt-1 border-l-2 border-act pl-3">{option.launch_priority.evidence.quote}
+            {option.launch_priority.rationale && <p className="mt-1">{option.launch_priority.rationale}</p>}</blockquote>
+          <p className="mt-1 text-xs text-muted">{option.launch_priority.evidence.path.split("/").pop()}</p>
+        </section>}
+        {!!option.shipment_checks?.length && <section className="mt-3">
+          <h4 className="font-bold">What the shipment records say</h4>
+          {option.shipment_checks.map(check => <ul key={check.field} className="mt-1 divide-y divide-rule">
+            {check.readings.map(r => <li key={r.source} className="py-2">
+              <strong className="capitalize">{r.value.replaceAll("_", " ")}</strong>{r.note && ` · ${r.note}`}
+              <span className="block break-words text-xs text-muted">{r.source.split("/").pop()?.split("#")[0]}</span>
+            </li>)}</ul>)}
+        </section>}
+        {entry.tracking_signal && <section className="mt-3">
+          <h4 className="font-bold">Why the Risk Rater flagged this shipment</h4>
+          <p>{entry.tracking_signal.text}</p>
+          {entry.tracking_signal.selected_for_rating && <p className="text-muted">
+            This was the tracking input used in the supplier’s {entry.tracking_signal.supplier_rating} rating.</p>}
+          <p className="mt-1 break-words text-muted">{entry.tracking_signal.same_shipment_source &&
+            "The signal uses one of the two records above. "}Source · {entry.tracking_signal.evidence.path.split("/").pop()}
+            {entry.tracking_signal.observed_at && ` · Updated ${entry.tracking_signal.observed_at}`}</p>
+        </section>}
+        {option.description === "supplier stock offer" && <p className="mt-2">Opening this review commits no spend. A new PO needs separate approval.</p>}
+        {baseline?.remaining_shortfall != null && <section className="mt-3">
+          <h4 className="font-bold">Compare by packing deadline</h4>
+          <table className="mt-1 w-full text-left text-sm">
+            <thead><tr className="text-muted"><th>Option</th><th className="text-right">Copies still short</th></tr></thead>
+            <tbody>{[baseline, option, ...(card?.options ?? []).filter(o => o !== baseline &&
+              o !== card?.options[entry.option_index] && o.remaining_shortfall != null)].map((o, i) =>
+              <tr className="border-t border-rule" key={i}><td className="py-1">{o.label}
+                {o.available === false && " · unavailable"}</td>
+                <td className="text-right tabular">{o.remaining_shortfall == null ? "Unknown" : fmt(o.remaining_shortfall)}</td></tr>)}</tbody>
+          </table><p className="text-muted">Each alternative assumes its requirements are met.</p>
+        </section>}
+      </>}
+      {option.review_brief && <p className="mt-2 font-medium">{option.review_brief}</p>}
+      {option.horizon === "future" && <p className="mt-2">Opening this review assigns the work to {assigned.join(" + ") || role}. Future sourcing cost is {cost == null ? "unknown" : approvalCurrency.format(cost)}. Any purchase requires a separate decision.</p>}
+      {option.horizon !== "future" && rule && value != null && <p className="mt-2">
+        {approvalCurrency.format(value)} falls in the {rule.approvers.join(" + ")} approval band
+        {" "}from {approvalCurrency.format(lower)}{rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
+        {option.actions.some(a => a.quote_inbox_id != null) && " This includes the original PO and the extra quoted charge."}
+      </p>}
+      {option.approval_basis && <OrderCalculation basis={option.approval_basis} />}
+      {!!option.assignments?.length && <div className="mt-2">
+        {option.assignments.map(a => <p key={a.required_role}>{a.person || a.required_role} · {a.basis}
+          {a.org_source && <span className="text-muted"> {a.org_source.split("/").pop()}</span>}</p>)}
+      </div>}
+      <History decision={entry.decision_id} option={entry.option_index} activity={snap.health?.activity_version} />
+      <details className="my-3"><summary className="cursor-pointer">Linked decisions and findings</summary><ul className="mt-2 space-y-2">{entry.sources.map(source => {
+        const card = snap.decisions.find(d => d.id === source.decision_id);
+        return <li key={`${source.decision_id}-${source.option_index}`}>
+          <a className="text-act underline" href={`${API_URL}/api/decisions/${source.decision_id}`}>Decision #{source.decision_id}</a>
+          {" · "}{card?.options[source.option_index]?.label ?? `Option ${source.option_index + 1}`}
+          {source.related_review && " · Related internal review"}
+          {source.issue_ids.map(id => <div key={id}><a className="text-act underline" href={`${API_URL}/api/issues/${id}`}>Finding #{id}</a>
+            {" · "}{snap.issues.find(i => i.id === id)?.summary}</div>)}
+        </li>;
+      })}</ul></details>
+      {snap.decisions.find(d => d.id === entry.decision_id)?.options.some(o => o.available === false) &&
+        <details className="mb-2"><summary className="cursor-pointer">Options ruled out</summary>
+          <ul className="mt-2 space-y-2">{snap.decisions.find(d => d.id === entry.decision_id)?.options
+            .filter(o => o.available === false).map((o, index) => <li key={index}>
+              <strong>{o.label}</strong>{o.copies_gained != null && ` · ${fmt(o.copies_gained)} additional copies`}
+              <p>{o.risk_note}</p>
+            </li>)}</ul>
+        </details>}
+      <SourceList evidence={entry.evidence} cards={snap.decisions.filter(c => entry.sources.some(s => s.decision_id === c.id))} />
+      {ownsAction && snap.decisions.find(d => d.id === entry.decision_id)?.recommended === entry.option_index &&
+        <button className="mt-3 font-semibold text-act" disabled={!current || busy} onClick={() => decide("reject")}>
+          Reject source decision #{entry.decision_id}</button>}
+    </details>
+  </article>;
+});
+
+function CardDetails({ setup, card, similar, onDone }: { setup: CustomerSetup | null; card: DecisionCard; similar: DecisionCard[]; onDone: () => void }) {
   const [choice, setChoice] = useState<number>(card.recommended ?? 0);
   const [why, setWhy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -681,7 +1074,7 @@ function AgentLanes({
   since,
   onOpenData,
 }: {
-  trace: AgentLogEntry[];
+  trace: BuyerActivity[];
   now: number;
   /** A data drop is running right now. */
   busy: boolean;
@@ -690,7 +1083,7 @@ function AgentLanes({
   onOpenData: () => void;
 }) {
   const stats = useMemo(() => {
-    const out = new Map<string, { last?: AgentLogEntry; count: number }>();
+    const out = new Map<string, { last?: BuyerActivity; count: number }>();
     for (const e of trace) {
       // In replay mode the coordinator hands the drop over; detecting drops is the Watcher's job, so show it there.
       const agent = e.agent === "coordinator" && e.action === "drop" ? "watcher" : e.agent;
@@ -769,13 +1162,13 @@ function AgentLanes({
   );
 }
 
-type LogRow = { key: string; e: AgentLogEntry; count: number; details: string[]; oldest: number };
+type LogRow = { key: string; e: BuyerActivity; count: number; details: string[]; oldest: number };
 
 /** One agent doing the same thing within one run becomes one row with a count: a drop re-checks every finding, and the
  *  Planner words each card with an AI call between the cards. Entries without a run id fold only with their neighbour.
  *  The trace is newest first, so a row shows its newest entry; its key (run + agent + action, or the oldest entry id)
  *  stays the same while newer entries of that run arrive, so an opened "+N more" list stays open. */
-function foldLog(trace: AgentLogEntry[], max = 40): LogRow[] {
+function foldLog(trace: BuyerActivity[], max = 40): LogRow[] {
   const rows: LogRow[] = [];
   const byRun = new Map<string, LogRow>();
   let last: LogRow | undefined; // the row the previous entry went into
@@ -805,7 +1198,7 @@ function foldLog(trace: AgentLogEntry[], max = 40): LogRow[] {
   return rows;
 }
 
-function LiveLog({ trace }: { trace: AgentLogEntry[] }) {
+function LiveLog({ trace }: { trace: BuyerActivity[] }) {
   const rows = useMemo(() => foldLog(trace), [trace]);
   return (
     <section aria-label="What the agents just did">
@@ -864,6 +1257,7 @@ function Findings({ issues }: { issues: Issue[] }) {
         </thead>
         <tbody>
           {rows.map((i) => {
+
             return (
               <tr key={i.id} className={`border-b border-rule last:border-b-0 ${i.status === "resolved" ? "opacity-50" : ""}`}>
                 <td className="px-4 py-2 align-top">
@@ -884,21 +1278,25 @@ function Findings({ issues }: { issues: Issue[] }) {
   );
 }
 
-function Emails({ outbox, inbox, mock, onSent }: { outbox: OutboxMessage[]; inbox: InboxMessage[]; mock: boolean; onSent: () => void }) {
+function Emails({ activeMail, mailVisit, snap, mock, onSent }: { activeMail: number | null; mailVisit: number; snap: Snapshot; mock: boolean; onSent: () => void }) {
+  const {outbox, inbox} = snap;
+  const sampleDecisions = new Set(snap.decisions.filter(d => d.chosen_option != null &&
+    d.options[d.chosen_option]?.actions.some(a => a.purpose === "verify_sample_terms")).map(d => d.id));
   if (outbox.length === 0) return <p className="text-muted">No supplier emails yet. The Chaser writes one when a finding needs an answer.</p>;
   return (
     <ul className="space-y-3">
       {outbox.map((m) => (
-        <li key={m.id}>
-          <EmailView m={m} replies={inbox.filter((r) => r.outbox_id === m.id)} mock={mock} onSent={onSent} />
+        <li id={`mail-${m.id}`} key={m.id}>
+          <EmailView key={activeMail === m.id ? mailVisit : 0} focus={activeMail === m.id} m={m} replies={inbox.filter((r) => r.outbox_id === m.id)} mock={mock} onSent={onSent}
+            timezone={snap.setup?.timezone} samples={m.decision_id != null && sampleDecisions.has(m.decision_id)} />
         </li>
       ))}
     </ul>
   );
 }
 
-function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: InboxMessage[]; mock: boolean; onSent: () => void }) {
-  const [open, setOpen] = useState(false);
+function EmailView({ focus, m, replies, mock, onSent, timezone, samples }: { focus: boolean; m: OutboxMessage; replies: InboxMessage[]; mock: boolean; onSent: () => void; timezone?: string; samples: boolean }) {
+  const [open, setOpen] = useState(focus);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -908,11 +1306,12 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
     setBusy(true);
     setError("");
     try {
-      await postData("/api/inbox", {
+      const result = await postData<ActionRun>("/api/inbox", {
         supplier_id: m.supplier_id, body: text, issue_id: m.issue_id ?? undefined, outbox_id: m.id,
         subject: `Re: ${m.subject}`,
       });
       setText("");
+      setError(runWarning(result));
       onSent();
     } catch (e) {
       setError((e as Error).message);
@@ -941,13 +1340,13 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
           <p className="whitespace-pre-line">{m.body_en || m.body}</p>
           {replies.map((r) => (
             <div key={r.id} className="mt-4 border-l-2 border-ok pl-3">
-              <p className="text-xs text-muted">Reply from {r.supplier_id}, {clock(r.received_at)}</p>
+              <p className="text-xs text-muted">Reply from {r.supplier_id}, {clock(r.received_at, timezone || "UTC")} {timezone || "UTC"}</p>
               <p className="whitespace-pre-line">{r.body}</p>
-              <p className="mt-1 text-xs text-muted">{replyOutcome(r)}</p>
+              <p className="mt-1 text-xs text-muted">{replyOutcome(r, timezone)}</p>
             </div>
           ))}
           <label className="mt-4 block text-xs font-semibold text-muted" htmlFor={`reply-${m.id}`}>
-            Test: answer as the supplier
+            {mock ? "Test: answer as the supplier" : "Record a reply received from the supplier"}
           </label>
           <textarea
             id={`reply-${m.id}`}
@@ -955,14 +1354,14 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
             onChange={(e) => setText(e.target.value)}
             rows={2}
             className="mt-1 w-full rounded-md border border-rule p-2"
-            placeholder="We confirm revision C, delivery to DC-HAM on 22.11.2026."
+            placeholder={samples ? "Give sample availability, specifications, freight and qualification terms." : "Confirm the order line, revision, quantity and delivery time."}
           />
           <button
             onClick={reply}
             disabled={busy || !text.trim()}
             className="mt-2 rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-white hover:bg-act disabled:opacity-50"
           >
-            Send test reply
+            {mock ? "Send test reply" : "Record supplier reply"}
           </button>
           {error && <p className="mt-2 text-stop">{error}</p>}
         </div>
@@ -972,23 +1371,81 @@ function EmailView({ m, replies, mock, onSent }: { m: OutboxMessage; replies: In
 }
 
 /** What Ingest did with a supplier reply, in one sentence. */
-function replyOutcome(r: InboxMessage): string {
+function replyOutcome(r: InboxMessage, timezone = "UTC"): string {
   const res = r.result ?? {};
   if (!r.processed) return "Waiting for Ingest.";
+  if (typeof res.review === "string" && res.review.startsWith("Duplicate of inbox/"))
+    return "Duplicate reply. The original evidence and forecast still apply.";
   if (typeof res.review === "string") return `Held for review: ${res.review}`;
+  if (res.qualification_correspondence) return `Ingest attached this response to review #${res.qualification_correspondence.review_id}. Engineering and Quality assessment is pending.`;
   const advice = (res.confirmed_delivery ?? res.supplier_quote) as Record<string, unknown> | undefined;
   if (advice) {
-    const when = parseTs(String(advice.arrival))?.toLocaleString("en-GB", {
-      weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+    const time = (value: unknown) => parseTs(String(value))?.toLocaleString("en-GB", {
+      weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: timezone,
     });
     return res.supplier_quote
-      ? `Ingest recorded a quote for ${fmt(Number(advice.quantity))} pcs. The Planner can now compare the offer.`
-      : `Ingest confirmed ${fmt(Number(advice.quantity))} pcs, revision ${String(advice.revision)}, due ${when} Berlin time. The Planner checks dock release and packing time.`;
+      ? `Supplier quoted ${formatMoney().format(Number(advice.incremental_cost_eur))} for ${String(advice.mode)} of ${fmt(Number(advice.quantity))} units. Offer expires ${time(advice.valid_until)} ${timezone}.`
+      : `Ingest confirmed ${fmt(Number(advice.quantity))} units, revision ${String(advice.revision)}, due ${time(advice.arrival)} ${timezone}. The Planner checks dock release and packing time.`;
   }
   const fields = Array.isArray(res.fields) ? (res.fields as string[]) : [];
   return fields.length
     ? `Ingest filled ${fields.join(" and ")} on ${String(res.rows)} order line(s).`
     : "Read by Ingest; nothing to fill.";
+}
+
+function MarketWatch({scores}: {scores: RiskScore[]}) {
+  type Source = NonNullable<RiskScore["reasons"][number]["signal_inputs"]>[string][number];
+  const watches = new Map<string, {source: Source; suppliers: Set<string>}>();
+  for (const row of scores) {
+    if (row.entity_type !== "supplier") continue;
+    for (const source of row.reasons[0]?.signal_inputs?.external_politics ?? []) {
+      if (source.provider !== "polymarket" || !source.market) continue;
+      const key = JSON.stringify([source.market.question_id || source.title, source.market.yes_pct, source.live, source.observed_at, source.last_known_at]);
+      if (!watches.has(key)) watches.set(key, {source, suppliers:new Set()});
+      watches.get(key)!.suppliers.add(row.entity_id + " · " + row.rating);
+    }
+  }
+  if (!watches.size) return null;
+  return <details className="basis-full border-t border-rule pt-2 text-sm" open={watches.size === 1 || undefined}>
+    <summary className="cursor-pointer font-semibold text-act">Polymarket questions in supplier ratings ({watches.size})</summary>
+    <ul className="mt-2 divide-y divide-rule">{[...watches].map(([key, {source, suppliers}]) => <li key={key} className="py-2">
+      <p><strong className="mr-2 tabular">{source.market!.yes_pct}% Yes</strong>{" "}
+        {source.live && /^https?:\/\//i.test(source.evidence.path)
+          ? <a className="text-act underline" href={source.evidence.path} target="_blank" rel="noreferrer">{source.title} ↗</a> : source.title}</p>
+      <p className="text-xs text-muted">{source.live ? "Public market at collection" : "Offline example"} · {source.market!.scope_basis || source.scope}
+        {source.market!.disruption_outcome === "No" && " · The No side measures disruption"} · {Array.from(suppliers).sort().join(", ")}</p>
+      {source.last_known_at && <p className="text-xs text-warn">Last successful reading {source.last_known_at.slice(0,16).replace("T"," ")} UTC.</p>}
+    </li>)}</ul>
+  </details>;
+}
+
+function SignalRefresh({reading, scores, online, mock, refresh, timezone = "UTC"}: {
+  reading: HealthCheckResponse["lastRiskCheck"]; scores: RiskScore[]; online: boolean; mock: boolean; refresh: () => Promise<void>; timezone?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const check = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await postData<ActionRun>("/api/risk/refresh");
+      await refresh();
+      if (result.status === "partial") setError("Signal check incomplete. Open the check trace for details.");
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const failed = Object.keys(reading?.unavailable ?? {});
+  return <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule bg-surface p-4">
+    <div className="text-sm"><h3 className="font-bold">External signal check</h3>
+      <p>{reading ? <>{mock ? "Offline evidence" : "Live monitoring"} · Checked {clock(reading.at, timezone)} {timezone} · {reading.grades_changed == null
+        ? "previous grades retained" : `${reading.grades_changed} grade ${reading.grades_changed === 1 ? "change" : "changes"}`}</> : "Waiting for the first check."}
+        {reading && <> · <a className="text-act underline" href={API_URL + "/api/trace?run_id=" + reading.run_id}>Check trace</a></>}</p>
+      {failed.length > 0 && <p role="alert" className="text-warn">Unavailable feeds · {failed.join(", ")}</p>}
+      {error && <p role="status" className="text-warn">{error}</p>}</div>
+    <button className="rounded border border-rule px-3 py-2 text-sm font-semibold text-act disabled:opacity-50"
+      disabled={busy || !online} onClick={() => void check()}>{busy ? "Checking signals…" : mock ? "Check signals" : "Refresh live signals"}</button>
+    <MarketWatch scores={scores} />
+  </div>;
 }
 
 function Risk({ rows }: { rows: RiskScore[] }) {

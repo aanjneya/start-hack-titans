@@ -16,6 +16,7 @@ from .planner_inputs import load_plan
 from .planner_options import options_for, paid_window_open
 from .planner_regulatory import regulatory_option, relevant
 from .planner_sample import sample_inquiry
+from .planner_risk import same_review_option
 
 llm.register_mock("planner.wording", lambda prompt, **_: prompt.splitlines()[0])
 DISPATCH_CHECK = "planner.dispatch.checked"
@@ -128,6 +129,7 @@ class LaunchPlanner(Agent):
                 self._refreshed[issue.id] = (trace.current_run_id(), issue.updated_at)
         closed = {i.id for i in issues if i.status == "resolved"}
         future_issues = {i.id for i in issues if relevant(i)} | followups
+        withdrawn = []
         with session() as s:
             for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed",
                                                          DecisionCard.created_by == self.name)).all():
@@ -136,7 +138,20 @@ class LaunchPlanner(Agent):
                 if closed.intersection(card.issue_ids) or obsolete_review:
                     card.status = "outdated"
                     s.add(card)
+                    selected = card.options[card.recommended] if card.recommended is not None else {}
+                    exposure = selected.get("exposure")
+                    if exposure:
+                        supplier = selected["actions"][0].get("supplier_id")
+                        latest = s.exec(select(RiskScore).where(RiskScore.entity_type == "supplier",
+                            RiskScore.entity_id == supplier).order_by(RiskScore.id.desc()).limit(1)).first()
+                        detail = f"The supporting finding for {exposure['supplier']} closed or changed."
+                        prior = exposure.get("supplier_rating")
+                        if prior and latest and latest.rating != prior:
+                            detail = f"{exposure['supplier']} moved from {prior} to {latest.rating}."
+                        withdrawn.append((card.id, detail + " The pending supply review was withdrawn."))
             s.commit()
+        for card_id, detail in withdrawn:
+            self.log("review_withdrawn", detail, data={"decision_id": card_id})
 
     def on_issue(self, event):
         if event.payload.get("kind") not in (IssueKind.COPIES_AT_RISK, IssueKind.HUMAN_CHECK):
@@ -202,7 +217,8 @@ class LaunchPlanner(Agent):
                 if (previous.evidence == proof and previous.reasoning == reasoning and
                         all(old.get(k) == selected.get(k) for k in ("actions", "cost_eur", "copies_gained"))):
                     return
-            if (previous and previous.status != "outdated" and previous.options == options
+            if (previous and previous.status != "outdated" and len(previous.options) == len(options)
+                    and all(same_review_option(a, b) for a, b in zip(previous.options, options))
                     and previous.reasoning == reasoning and previous.evidence == proof
                     and previous.recommended == recommended and parse_datetime(previous.decide_by) == due):
                 return
@@ -251,8 +267,8 @@ class LaunchPlanner(Agent):
                 return
             exists = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).first()
             expired = not exists and not paid_window_open(selected)
-            sourced_handoff = selected.get("followup_for") or any(a.get("quote_inbox_id") for a in selected["actions"])
-            changed = not exists and not expired and sourced_handoff and current_option(s, card, card.chosen_option) is None
+            managed = bool(selected.get("product_id") or selected.get("horizon") == "future")
+            changed = not exists and not expired and managed and current_option(s, card, card.chosen_option) is None
             if expired or changed:
                 card.status = "outdated"
                 s.add(card)

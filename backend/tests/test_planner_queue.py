@@ -32,6 +32,10 @@ def test_evening_queue_preserves_findings_and_ranks_conditional_actions():
     assert books["option"]["description"] == "supplier stock offer"
     assert (books["option"]["cost_eur"], books["option"]["copies_gained"]) == (16800, 2500)
     assert books["option"]["approval_value_eur"] == 0  # price of goods versus authority to verify the offer
+    priority = books["option"]["launch_priority"]
+    assert priority["all_demand_preordered"] and priority["preordered"] == 72000
+    assert priority["evidence"]["path"].endswith("memo_launch_priorities.docx") and "refunded" in priority["rationale"]
+    assert "launch_priority" not in pickup["option"]
     assert "freight" in " ".join(books["requirements"]) and "dock" in " ".join(books["requirements"])
     assert pickup["option"]["description"] == "port pickup" and pickup["option"]["copies_gained"] == 25200
     assert pickup["option"]["cost_eur"] is None and pickup["shared_shipment"] == "SHP-2026-04276"

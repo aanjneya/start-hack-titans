@@ -1,4 +1,6 @@
 """Convert a documented future-supply finding into an internal, non-spending review."""
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 import re
@@ -17,15 +19,14 @@ def relevant(issue):
     if issue.raised_by == "planner":
         return False
     actions = issue.suggested_actions or []
-    if issue.kind != m.IssueKind.HUMAN_CHECK:
-        if (issue.raised_by != "risk" or issue.subject_type != "supplier"
-                or issue.kind != m.IssueKind.COPIES_AT_RISK):
-            return False
+    if issue.raised_by == "risk" and issue.subject_type == "supplier" and issue.type == "high_risk_rating":
         evidence = [e.get("locator", "") for e in issue.evidence]
         if any(loc.startswith("regulations:") for loc in evidence) and any(a.get("type") == "human_review" for a in actions):
             return True
         return (any(loc.startswith(("polymarket:", "gnews:", "gdelt:", "portal_news:")) for loc in evidence)
                 and any(a.get("type") in {"second_source", "safety_stock"} for a in actions))
+    if issue.kind != m.IssueKind.HUMAN_CHECK:
+        return False
     return any(a.get("type") == "second_source" or
                (a.get("type") == "human_review" and
                 ("compliance" in a.get("label", "").lower() or any(
@@ -33,19 +34,85 @@ def relevant(issue):
                for a in actions)
 
 
+@dataclass
+class OrderScope:
+    lines: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
+    proof: list = field(default_factory=list)
+    disputed_buyer: bool = False
+
+
+def current_order_lines(supplier_id, dated):
+    rows = find_rows(m.PurchaseOrder, supplier_id=supplier_id)
+    grouped = defaultdict(list)
+    for po in latest_by(rows, "po_number", "po_line", "source"):
+        if not po.order_date or po.order_date <= dated:
+            grouped[po.po_number, po.po_line].append(po)
+    return grouped
+
+
 def open_orders(supplier_id, dated, part=None, after=None):
-    """Only open purchasing records already known by the snapshot time, with optional notice scope."""
-    stmt = select(m.PurchaseOrder).where(m.PurchaseOrder.supplier_id == supplier_id)
-    if part:
-        stmt = stmt.where(m.PurchaseOrder.material_id == part)
-    if after:
-        stmt = stmt.where(m.PurchaseOrder.promised_date > after)
-    with session() as db:
-        rows = db.exec(stmt.order_by(m.PurchaseOrder.promised_date.is_(None), m.PurchaseOrder.promised_date,
-                                     m.PurchaseOrder.po_number, m.PurchaseOrder.po_line, m.PurchaseOrder.id)).all()
-    return [po for po in rows if (po.status or "").lower() in {"open", "awaiting_approval", "pending_approval"}
-            and (not po.order_date or po.order_date <= dated)
-            and (not po.actual_delivery_date or po.actual_delivery_date > dated)]
+    """Resolve representations of each physical line before testing the notice window."""
+    result = OrderScope()
+    grouped = current_order_lines(supplier_id, dated)
+
+    def eligible(po):
+        return ((po.status or "").lower() in {"open", "awaiting_approval", "pending_approval"}
+                and (not part or po.material_id == part)
+                and (not after or (po.promised_date and po.promised_date > after))
+                and (not po.actual_delivery_date or po.actual_delivery_date > dated))
+
+    for (number, line), copies in grouped.items():
+        if not any(eligible(po) for po in copies):
+            continue
+        key = f"{number or '?'}/{line if line is not None else '?'}"
+        merged, disputed = {}, []
+        for name in ("status", "material_id", "plant", "promised_date", "actual_delivery_date", "quantity", "unit_price", "currency", "buyer"):
+            values = {getattr(po, name) for po in copies if getattr(po, name) not in (None, "")}
+            if name == "status":
+                values = {v.lower() for v in values}
+            if len(values) > 1:
+                disputed.append(name)
+            merged[name] = next(iter(values)) if len(values) == 1 else None
+        if disputed or not number or line is None:
+            why = ", ".join(s.replace("_", " ") for s in disputed) if disputed else "PO line identifier"
+            result.notes.append(f"Verify {key} against the purchasing records ({why}).")
+        if disputed or len(copies) > 1 or not number or line is None:
+            for po in copies:
+                fields = disputed or ("status", "promised_date", "quantity", "unit_price", "currency")
+                quote = ", ".join(f"{f.replace('_', ' ')}: {getattr(po, f)}" for f in fields if getattr(po, f) is not None)
+                result.proof.append(dict(evidence(po.source, key, quote), source_kind="Order record"))
+        if not number or line is None or set(disputed) & {"status", "material_id", "plant", "promised_date", "actual_delivery_date"}:
+            continue
+        result.disputed_buyer |= "buyer" in disputed
+        record = copies[0].model_copy(update=merged)
+        if eligible(record):
+            result.lines.append(record)
+    result.lines.sort(key=lambda po: (po.promised_date or date.max, po.po_number, po.po_line))
+    return result
+
+
+def delivery_history(supplier_id, part, site, as_of):
+    """Compare the same supplier, ordered material and receiving site using completed, dated lines."""
+    if not site:
+        return None
+    observed = []
+    for (po, line), rows in current_order_lines(supplier_id, as_of).items():
+        if not po or line is None or not all(r.material_id == part and r.plant == site for r in rows):
+            continue
+        terms = {(r.promised_date, r.actual_delivery_date) for r in rows}
+        if len(terms) != 1 or any((r.status or "").lower() in {"cancelled", "canceled", "open", "awaiting_approval", "pending_approval"} for r in rows):
+            continue
+        promise, arrived = terms.pop()
+        if not promise or not arrived or arrived > as_of or any(r.order_date and min(promise, arrived) < r.order_date for r in rows):
+            continue
+        observed.append(dict(po=po, line=line, promised=promise.isoformat(), arrived=arrived.isoformat(),
+                             days_from_promise=(arrived - promise).days, source=rows[0].source))
+    if not observed:
+        return None
+    observed.sort(key=lambda r: (r["arrived"], r["po"], r["line"]), reverse=True)
+    return dict(material=part, site=site, count=len(observed), on_time=sum(r["days_from_promise"] <= 0 for r in observed),
+                first=observed[-1]["arrived"], last=observed[0]["arrived"], recent=observed[:5])
 
 
 def order_value(orders):
@@ -81,7 +148,8 @@ def project_sample_date(window, requested_on):
         raise ValueError("That date is outside the supported calendar.") from None
     first = date.fromisoformat(window["first_delivery"])
     return dict(window, requested_on=requested_on.isoformat(), sample_by=sample_by.isoformat(),
-                days_between=(first - sample_by).days)
+                days_between=(first - sample_by).days,
+                request_by_for_delivery=(first - timedelta(days=window["sample_days"])).isoformat())
 
 
 def mentions(text, identifiers):
@@ -224,18 +292,38 @@ def regulatory_option(issue, plan=None):
     as_of = plan.as_of if plan else issue.created_at
     dated = as_of.date()
     # These are scheduled PO quantities. Partial receipts do not establish a remaining balance.
-    pos = open_orders(mapping.supplier_id, dated, part=target, after=cutoff) if mapping and cutoff else []
-    verify = []
-    if supplier and not pos and not qualify and not cutoff:
-        verify = open_orders(supplier.supplier_id, dated, part=target or None)
+    scope = OrderScope()
+    if supplier and ((mapping and cutoff) or (not qualify and not cutoff)):
+        scope = open_orders(supplier.supplier_id, dated, part=target or None, after=cutoff)
+    pos = scope.lines if cutoff else []
+    verify = scope.lines if not cutoff else []
+    if verify and not target:
+        # Country-level alerts allow a general check. An article match narrows it to the supplier's relevant lines.
+        rated = buyer_risk([("supplier", supplier.supplier_id, supplier.name)], documents)
+        matches = [m for factor in rated["signals"] if factor["factor"] == "regulatory_change"
+                   for signal in factor["sources"] for m in signal.get("material_matches", [])]
+        if matches:
+            relevant_parts = {m["part"] for m in matches}
+            verify = [po for po in verify if po.material_id in relevant_parts]
+            proof.extend(dict(e, source_kind="Customer sourcing record") for m in matches for e in m["evidence"])
+    proof.extend(scope.proof)
+    uncertainty.extend(scope.notes)
+    facts.extend(scope.notes)
     for po in verify[:3]:
         proof.append(dict(evidence(po.source, f"{po.po_number}/{po.po_line}",
                                    f"Open PO for {po.material_id}. Applicability still needs confirmation."),
                           source_kind="Order record"))
     for po in pos:
-        proof.append(dict(evidence(po.source, f"{po.po_number}/{po.po_line}", f"Promised {po.promised_date}, quantity {po.quantity}, unit price {po.unit_price} {po.currency}"), source_kind="Order record"))
+        key = f"{po.po_number}/{po.po_line}"
+        if not any(e["locator"] == key for e in scope.proof):
+            proof.append(dict(evidence(po.source, key, f"Promised {po.promised_date}, quantity {po.quantity}, unit price {po.unit_price} {po.currency}"), source_kind="Order record"))
     if pos:
         facts.append("Open order lines in that window include " + ", ".join(f"{p.po_number}/{p.po_line}" for p in pos) + ".")
+    sites = {p.plant for p in pos}
+    history = delivery_history(supplier.supplier_id, target, next(iter(sites)), dated) if len(sites) == 1 else None
+    for line in (history or {}).get("recent", []):
+        proof.append(dict(evidence(line["source"], f"{line['po']}/{line['line']}",
+            f"Promised {line['promised']}, delivered {line['arrived']}."), source_kind="Completed order"))
     bom = [b for b in find_rows(m.BomLine, child_id=target) if source
            and (not b.valid_from or b.valid_from <= dated) and (not b.valid_to or b.valid_to >= dated)]
     products = {p.product_id: p.name for p in all_rows(m.Product)}
@@ -248,7 +336,7 @@ def regulatory_option(issue, plan=None):
         nodes.extend(("product", pid, products[pid]) for pid in pids)
     roles = policy.approvers_for(0)
     buyers = {po.buyer for po in (pos or verify) if po.buyer}
-    buyer = next(iter(buyers), "") if len(buyers) <= 1 else None
+    buyer = next(iter(buyers), "") if len(buyers) <= 1 and not scope.disputed_buyer else None
     assignments = approval_assignments(roles, material.category if material else "", dated,
                                        documents.values(), buyer=buyer)
     owners = signer_names(assignments)
@@ -271,11 +359,14 @@ def regulatory_option(issue, plan=None):
                     lead_days=mapping.lead_time_days if mapping else None, previous_lead_days=previous,
                     uncertainties=uncertainty, qualification_gate=gate, sample_offers=sample_offers, sample_window=sample_window(sample_offers, dated, pos),
                     order_value=order_value(pos),
+                    delivery_history=history,
+                    packing_closes_before_notice=(plan.deadline.date().isoformat() if plan and cutoff
+                        and plan.deadline.date() <= cutoff and assembly else None),
                     effective_after=cutoff.isoformat() if cutoff else None, **buyer_risk(nodes, documents),
                     verification_orders=[dict(po=o.po_number, line=o.po_line, material=o.material_id,
                                               promised=o.promised_date.isoformat() if o.promised_date else None)
                                          for o in verify[:3]],
-                    orders=[dict(po=o.po_number, line=o.po_line, promised=o.promised_date.isoformat(),
+                    orders=[dict(po=o.po_number, line=o.po_line, status=o.status, promised=o.promised_date.isoformat(),
                                  quantity=o.quantity) for o in pos])
     return dict(exposure=exposure, review_brief=brief, horizon="future", button_label=action, label=label, description="future supply review",
                 edition=", ".join(products[p] or p for p in pids) or "Supplier review", product_id=pids[0] if pids else "",

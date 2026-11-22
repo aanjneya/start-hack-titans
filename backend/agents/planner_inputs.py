@@ -48,6 +48,43 @@ def clock(text, anchor):
     return parse_datetime(iso[1]) if iso else None
 
 
+def launch_priorities(editions, documents, as_of):
+    """Identify an edition named first by the customer and retain its actual purchasing rationale."""
+    directives = []
+    for doc in documents:
+        if doc.kind not in {"memo", "note"} or (doc.published_at and doc.published_at.date() > as_of.date()):
+            continue
+        text = html.unescape(doc.text or "").replace("’", "'")
+        for row in editions:
+            edition = re.escape((row.edition or "").replace("’", "'"))
+            if not edition:
+                continue
+            match = re.search(r"(?<![\w'])" + edition + r"(?: edition| pre-orders)? first\b[^.\n]*[.]?", text, re.I)
+            if not match:
+                continue
+            instruction = match[0].strip()
+            following = text[match.end():].lstrip(" \t")
+            orders = re.match(r"All ([\d,]+) copies are pre-?ordered\b[^.\n]*[.]?", following, re.I)
+            committed = int(orders[1].replace(",", "")) if orders else None
+            cited = instruction + (" " + orders[0] if orders else "")
+            rationale = re.search(r"(?im)^rationale\s*:\s*(.+)$", text) if orders else None
+            directives.append((doc.published_at.date() if doc.published_at else None, row.product_id,
+                dict(evidence=evidence(doc.path, "launch priority", cited), preordered=committed,
+                     all_demand_preordered=committed is not None and committed == row.day_one_demand,
+                     rationale=rationale[1].strip() if rationale else None)))
+    if not directives:
+        return {}
+    # Undated conflicting instructions cannot be ordered in time.
+    latest = max((d for d, _, _ in directives if d is not None), default=None)
+    current = [(pid, source) for d, pid, source in directives if d is None or d == latest]
+    if len({pid for pid, _ in current}) != 1:
+        return {}
+    pid, source = max(current, key=lambda pair: len(pair[1]["evidence"]["quote"]))
+    if len({s["preordered"] for _, s in current if s["preordered"] is not None}) > 1:
+        source = dict(source, preordered=None, all_demand_preordered=False, rationale=None)
+    return {pid: source}
+
+
 def load_plan():
     editions = list(all_rows(m.LaunchStatus))
     products = {r.product_id: r for r in all_rows(m.Product)}
@@ -114,11 +151,8 @@ def load_plan():
                 deadline = min(deadline, parse_datetime(f"{launch_day}T{match[1]}"))
                 ev.append(evidence(doc.path, "launch deadline", match[0]))
     ev.append(evidence(status_doc.path, "edition rows", status_doc.text.splitlines()[0]))
-    priority_text = " ".join(d.text.lower() for d in documents if d.kind in {"memo", "note"})
-    def priority(row):
-        name = re.escape(row.edition.casefold().replace("’", "'"))
-        return 0 if re.search(name + r"(?: edition| pre-orders)? first", priority_text) else 1
-    editions.sort(key=lambda r: (priority(r), r.product_id))
+    priorities = launch_priorities(editions, documents, as_of)
+    editions.sort(key=lambda r: (r.product_id not in priorities, r.product_id))
     bom = defaultdict(dict)
     for row in all_rows(m.BomLine):
         if (not row.valid_from or row.valid_from <= as_of.date()) and (not row.valid_to or row.valid_to >= as_of.date()):
@@ -131,6 +165,7 @@ def load_plan():
                 parts.pop(part.component_id)
                 ev.append(evidence(part.source, part.component_id, note))
     plan = Plan(as_of, deadline, shifts, editions, dict(bom), Counter(), evidence=ev)
+    plan.launch_priorities = priorities
     plan.material_names = {material.component_id: material.description
                            for material in latest_by(all_rows(m.Material), "component_id") if material.description}
     changes = {}

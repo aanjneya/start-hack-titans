@@ -409,3 +409,30 @@ def test_new_supplier_country_is_used_by_name_in_public_news_search(monkeypatch)
     PoliticalNewsProvider()._fetch_google_news({"PT"})
     RegulationChangeProvider()._fetch_live({"PT"})
     assert len(queries) == 2 and all('"Portugal"' in q for q in queries)
+
+
+def test_follow_exact_market_after_it_leaves_volume_ranking(monkeypatch):
+    from dataclasses import asdict
+    import pytest
+
+    now = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    market = dict(question="Will Canada increase export tariffs?", outcomes=["No", "Yes"], outcomePrices=[.20, .80], id="m42")
+    event = dict(slug="canadian-tariffs", markets=[market])
+    listing, detail = [event], [event]
+    def request(url, params=None):
+        if params:
+            return listing
+        assert url.endswith("/events/slug/canadian-tariffs")
+        return detail[0]
+    monkeypatch.setattr(risk_signals, "_cached_get_json", request)
+    provider = PolymarketProvider()
+    watched = [asdict(s) for s in provider._fetch_live({"CA"}, now)]
+    listing.clear()
+    event["markets"] = [dict(market, id="different-contract", outcomePrices=[.99, .01]), dict(market, outcomePrices=[.11, .89])]
+    reading, = provider._fetch_live({"CA"}, now, watched)
+    assert reading.market["question_id"] == "m42" and reading.market["yes_pct"] == 89
+    detail[0] = None
+    with pytest.raises(risk_signals.RiskFeedUnavailable):
+        provider._fetch_live({"CA"}, now, watched)
+    detail[0] = dict(event, closed=True)
+    assert provider._fetch_live({"CA"}, now, watched) == []

@@ -26,6 +26,7 @@ class Plan:
     shipment_checks: dict[str, list[dict]] = field(default_factory=dict)
     line_balances: dict[tuple, float] = field(default_factory=dict)
     material_names: dict[str, str] = field(default_factory=dict)
+    launch_priorities: dict[str, dict] = field(default_factory=dict)
 
 
 def simulate(plan: Plan, overrides=None, *, priority=None) -> dict[str, Forecast]:

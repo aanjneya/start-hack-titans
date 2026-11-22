@@ -177,9 +177,16 @@ def link_latest_grade_change(db, entries):
     from .risk_scoring import GRADE_TO_RATING
 
     drop = db.exec(select(DropRecord).order_by(DropRecord.id.desc()).limit(1)).first()
-    if not drop or drop.status != "completed" or not drop.run_id:
+    reading = db.exec(select(AgentLog).where(AgentLog.agent == "risk", AgentLog.action == "risk_rated")
+                      .order_by(AgentLog.id.desc()).limit(1)).first()
+    if (reading and reading.data.get("trigger") == "risk.refresh.requested"
+            and (not drop or reading.ts > drop.checked_at)):
+        run_id = reading.run_id
+    elif drop and drop.status == "completed":
+        run_id = drop.run_id
+    else:
         return
-    logs = db.exec(select(AgentLog).where(AgentLog.run_id == drop.run_id,
+    logs = db.exec(select(AgentLog).where(AgentLog.run_id == run_id,
                    AgentLog.action.in_(["decision_created", "grade_changed"])).order_by(AgentLog.id)).all()
     new_cards = {r.data.get("decision_id") for r in logs if r.agent == "planner" and r.action == "decision_created"}
     changed = {r.data["entity_id"]: r for r in logs if r.agent == "risk" and r.action == "grade_changed"
@@ -194,7 +201,7 @@ def link_latest_grade_change(db, entries):
             previous = GRADE_TO_RATING.get(log.data.get("old_grade"))
             current = GRADE_TO_RATING.get(log.data.get("new_grade"))
             if previous and current == exposure.get("supplier_rating") and current != previous:
-                entry["latest_grade_change"] = dict(run_id=drop.run_id, trace_id=log.id, previous=previous,
+                entry["latest_grade_change"] = dict(run_id=run_id, trace_id=log.id, previous=previous,
                                                     current=current, supplier=exposure["supplier"])
 
 
@@ -284,7 +291,8 @@ def current_option(db, card, index):
         return old if sample_inquiry(db, issue, plan) == old else None
     if old.get("horizon") == "future":
         from .planner_regulatory import regulatory_option
-        return old if regulatory_option(issue, plan) == old else None
+        from .planner_risk import same_review_option
+        return old if same_review_option(old, regulatory_option(issue, plan)) else None
     row = next((r for r in plan.editions if r.product_id == old.get("product_id")), None) if plan else None
     if row:
         options, _, _ = options_for(issue, plan, simulate(plan)[row.product_id], row)

@@ -21,6 +21,7 @@ Then:
 - `backend/.venv/bin/python -m backend.core.replay`: resume historical drops in a separate persistent SQLite database (defaults to a sibling named `truth.replay.db` for `truth.db`)
 - `POST /api/replay/step`: resume the next Git drop on a dedicated replay backend. For example, start `MOCK_MODE=true CHASER_SEND=false REPLAY_DB_PATH=backend/data/demo/replay.db backend/.venv/bin/uvicorn backend.app.main:app --port 8000`. For a new rehearsal use a new replay path. Live instances refuse replay and reset requests.
 - `POST /api/watch/check`: live portal check now (needs `MOCK_MODE=false` + `SOONY_API_TOKEN`; timer via `WATCH_INTERVAL_MIN`)
+- `POST /api/risk/refresh` checks current external signals against existing customer records. Set `RISK_REFRESH_INTERVAL_MIN` on a live instance for periodic checks independent of portal drops. The public HTTP cache lasts five minutes. Replay reads its historical fixtures. An unavailable feed marks the check partial and preserves the previous independent assessment. A current open PO and an external warning can open an applicability review without changing the packing forecast.
 
 `MOCK_MODE=true` (default, from `.env`) = fully offline: no Claude calls, no emails, no portal calls.
 Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude for real.

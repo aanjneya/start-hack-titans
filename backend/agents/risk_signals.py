@@ -19,17 +19,21 @@ import json
 import re
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol
+from urllib.parse import quote, urlsplit
 
 import httpx
 from iso3166 import countries as iso_countries
+from sqlmodel import select
 
 from ..core import llm
 from ..core.config import get_settings
-from ..core.models import Document, Evidence, Shipment
+from ..core.models import Document, Evidence, RiskFeedSnapshot, Shipment, utcnow
+from ..core.store import session
 
 HTTP_TIMEOUT_SEC = 5.0
 CACHE_TTL_SEC = 300.0  # 5-minute in-memory cache so reruns stay fast & polite
@@ -61,6 +65,7 @@ class ExternalSignal:
     published: str | None = None
     observed_at: str | None = None
     market: dict | None = None
+    last_known_at: str | None = None
 
     def as_evidence(self) -> Evidence:
         return Evidence(
@@ -85,7 +90,17 @@ class ExternalSignal:
                     shipment_ids=matched_ships)
         if self.market:
             record["market"] = self.market
+        if self.last_known_at:
+            record["last_known_at"] = self.last_known_at
         return record
+
+
+class RiskFeedUnavailable(RuntimeError):
+    """The provider could not establish whether any relevant signals exist."""
+
+    def __init__(self, message, *, portal_signals=None):
+        super().__init__(message)
+        self.portal_signals = portal_signals
 
 
 class SignalProvider(Protocol):
@@ -142,7 +157,8 @@ def load_ports_from_root(data_root: Optional[Path] = None) -> dict[str, dict[str
     """Read port coordinates (locode -> {name, country, lat, lon, mode}) from master/ports.csv if present."""
     root = Path(data_root or get_settings().data_root)
     ports: dict[str, dict[str, Any]] = {}
-    for candidate in (root / "soony/master/ports.csv", *root.rglob("ports.csv")):
+    conflicting = set()
+    for candidate in sorted(root.rglob("ports.csv")):
         if not candidate.is_file():
             continue
         try:
@@ -152,10 +168,14 @@ def load_ports_from_root(data_root: Optional[Path] = None) -> dict[str, dict[str
                     if not code:
                         continue
                     try:
-                        lat = float(row.get("lat") or 0)
-                        lon = float(row.get("lon") or 0)
-                    except ValueError:
+                        lat = float(row["lat"])
+                        lon = float(row["lon"])
+                    except (KeyError, TypeError, ValueError):
                         continue
+                    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                        continue
+                    if code in ports and (lat, lon) != (ports[code]["lat"], ports[code]["lon"]):
+                        conflicting.add(code)
                     ports[code] = {
                         "locode": code,
                         "name": (row.get("name") or code).strip(),
@@ -165,10 +185,9 @@ def load_ports_from_root(data_root: Optional[Path] = None) -> dict[str, dict[str
                         "mode": (row.get("mode") or "").strip().lower(),
                         "source": candidate.relative_to(root).as_posix(),
                     }
-            break
-        except Exception:
+        except (OSError, UnicodeError, csv.Error):
             continue
-    return ports
+    return {code: port for code, port in ports.items() if code not in conflicting}
 
 
 # ---------------------------------------------------------------------------
@@ -334,15 +353,15 @@ class PolymarketProvider:
 
     def fetch(self, *, countries: set[str], ports: dict[str, dict[str, Any]],
               shipments: list[Shipment], documents: list[Document],
-              reference_now: datetime) -> list[ExternalSignal]:
+              reference_now: datetime, previous: list[dict] | None = None) -> list[ExternalSignal]:
         if llm.is_mock():
             return self._mock_signals(countries)
         # A real search can return no relevant market. Offline examples belong to a replay.
-        return self._fetch_live(countries, reference_now)
+        return self._fetch_live(countries, reference_now, previous)
 
-    def _fetch_live(self, countries: set[str], reference_now: datetime) -> list[ExternalSignal]:
-        signals = []
-        seen = set()
+    def _fetch_live(self, countries: set[str], reference_now: datetime, previous=None) -> list[ExternalSignal]:
+        listed = {}
+        reached = False
         for tag in ("geopolitics", "economy"):
             events = _cached_get_json(POLYMARKET_EVENTS_URL, {
                 "active": "true", "closed": "false", "tag_slug": tag,
@@ -350,21 +369,50 @@ class PolymarketProvider:
             })
             if not isinstance(events, list):
                 continue
+            reached = True
             for event in events:
-                if not isinstance(event, dict) or not event.get("slug") or event["slug"] in seen:
-                    continue
-                # A group can include closed or non-binary questions. One relevant question per event
-                # keeps correlated dates and thresholds from filling both scoring slots.
-                for market in event.get("markets") or [event]:
-                    if not isinstance(market, dict):
-                        continue
+                if isinstance(event, dict) and event.get("slug"):
+                    listed[event["slug"]] = event
+        if not reached:
+            raise RiskFeedUnavailable("No market feed responded")
+        signals = []
+        for old in previous or []:
+            question_id = (old.get("market") or {}).get("question_id")
+            if not question_id or not countries.intersection(old.get("countries", [])):
+                continue
+            slug = urlsplit(old.get("source_url", "")).path.rsplit("/", 1)[-1]
+            if not slug:
+                continue
+            event = listed.get(slug)
+            if event is None:
+                # Volume ranking is discovery, not evidence that a watched instrument closed.
+                event = _cached_get_json(POLYMARKET_EVENTS_URL + "/slug/" + quote(slug, safe=""))
+            if not isinstance(event, dict) or event.get("slug") != slug:
+                raise RiskFeedUnavailable(f"Could not verify the previously watched market {slug}")
+            if event.get("closed") or event.get("archived"):
+                listed.pop(slug, None)
+                continue
+            instrument = next((m for m in event.get("markets") or [] if isinstance(m, dict)
+                and str(m.get("conditionId") or m.get("id")) == question_id), None)
+            if instrument is None or (not instrument.get("closed") and not instrument.get("archived")
+                                      and _extract_yes_prob(instrument) is None):
+                raise RiskFeedUnavailable(f"Missing current reading for instrument {question_id}")
+            signal = _market_signal(instrument, event, countries, reference_now)
+            if signal:
+                signals.append(signal)
+                listed.pop(slug, None)
+        # One active question per event. Keep previously watched questions first, up to twelve in total.
+        for event in listed.values():
+            if len(signals) >= 12:
+                break
+            if event.get("closed") or event.get("archived"):
+                continue
+            for market in event.get("markets") or [event]:
+                if isinstance(market, dict):
                     signal = _market_signal(market, event, countries, reference_now)
                     if signal:
-                        seen.add(event["slug"])
                         signals.append(signal)
                         break
-                if len(signals) >= 12:
-                    return signals
         return signals
 
     def _mock_signals(self, countries: set[str]) -> list[ExternalSignal]:
@@ -450,10 +498,13 @@ class OpenMeteoWeatherProvider:
         if not active_ports:
             active_ports = {k: v for k, v in ports.items() if not countries or v["country"] in countries}
 
-        if not llm.is_mock() and active_ports:
+        if not llm.is_mock():
+            if not active_ports:
+                return []
             live_ok, live_signals = self._fetch_live(active_ports)
             if live_ok:
                 return live_signals
+            raise RiskFeedUnavailable("No weather station responded")
         return self._mock_signals(active_ports, countries)
 
     def _fetch_live(self, active_ports: dict[str, dict[str, Any]]) -> tuple[bool, list[ExternalSignal]]:
@@ -496,15 +547,13 @@ class OpenMeteoWeatherProvider:
         signals: list[ExternalSignal] = []
         for code, wx in _MOCK_PORT_WEATHER.items():
             info = active_ports.get(code)
-            country = info["country"] if info else code[:2]
-            if countries and country not in countries and code != "DEHAM":
+            if not info:
                 continue
+            country = info["country"]
             sev = _weather_severity(wx["wind_kmh"], wx["gust_kmh"], wx["precip_mm"], wx["wmo"])
             if sev < 20.0:
                 continue
-            name = info["name"] if info else code
-            lat = info["lat"] if info else 0.0
-            lon = info["lon"] if info else 0.0
+            name, lat, lon = info["name"], info["lat"], info["lon"]
             signals.append(ExternalSignal(
                 provider=self.name,
                 category="weather",
@@ -576,16 +625,22 @@ class PoliticalNewsProvider:
 
         # 3b. Live Google News RSS geopolitical/trade headlines (zero API key, fast XML)
         if not llm.is_mock() and countries:
-            signals.extend(self._fetch_google_news(countries))
+            try:
+                signals.extend(self._fetch_google_news(countries))
+            except RiskFeedUnavailable as failure:
+                # The customer's own news is still authoritative during a public news outage.
+                raise RiskFeedUnavailable(str(failure), portal_signals=signals) from failure
 
         return signals
 
     def _fetch_google_news(self, countries: set[str]) -> list[ExternalSignal]:
         signals: list[ExternalSignal] = []
+        queried = reached = False
         for code in sorted(countries):
             cname = country_name(code)
             if not cname:
                 continue
+            queried = True
             query = f'"{cname}" (tariffs OR "export controls" OR "port strike" OR sanctions OR "supply chain")'
             xml_text = _cached_get_text(
                 GOOGLE_NEWS_RSS_URL,
@@ -597,6 +652,9 @@ class PoliticalNewsProvider:
                 root = ET.fromstring(xml_text)
             except ET.ParseError:
                 continue
+            if root.tag.rsplit("}", 1)[-1].lower() not in {"rss", "rdf", "feed"}:
+                continue
+            reached = True
             items = root.findall(".//item")
             if not items:
                 continue
@@ -621,6 +679,8 @@ class PoliticalNewsProvider:
                 published=pub or None,
                 live=True,
             ))
+        if queried and not reached:
+            raise RiskFeedUnavailable("No public political news feed responded")
         return signals
 
 
@@ -725,17 +785,29 @@ _COUNTRY_REGULATORS: dict[str, tuple[str, str]] = {
     "GB": ("United Kingdom", '"export control" OR "UK tariff" OR "border customs regulation"'),
 }
 
-_REG_RULES: list[tuple[tuple[str, ...], list[str], list[str], float]] = [
-    (("china", "chinese", "uyghur", "mofcom", "rare earth", "magnet"), ["CN"], ["export-control", "tariffs"], 78.0),
-    (("maritime", "shipbuilding", "port", "shipping", "vessel"), ["CN", "KR", "IN"], ["maritime", "section-301"], 72.0),
-    (("semiconductor", "chip", "memory", "end-user", "entity list"), ["CN", "KR", "US"], ["semiconductors", "bis"], 74.0),
-    (("section 301", "tariff", "customs", "anti-dumping", "duties"), ["CN", "US", "IN", "KR"], ["tariffs"], 65.0),
-    (("packaging", "labelling", "labeling", "age-rating", "usk", "rohs", "reach", "cbam"), ["DE", "PL", "CN"], ["eu-compliance"], 62.0),
+_REG_TOPICS = [
+    (("rare earth", "magnet", "mofcom", "uyghur"), ["export-control"], 78.0),
+    (("maritime", "shipbuilding", "port", "shipping", "vessel"), ["maritime"], 72.0),
+    (("semiconductor", "chip", "memory", "end-user", "entity list"), ["semiconductors"], 74.0),
+    (("section 301", "tariff", "customs", "anti-dumping", "duties", "export control", "import restriction"), ["tariffs"], 65.0),
+    (("packaging", "labelling", "labeling", "age-rating", "usk", "rohs", "reach", "cbam"), ["compliance"], 62.0),
 ]
 
 _REG_HIGH_WORDS = ("export control", "export-control", "export ban", "export licence", "export license",
                    "sanction", "entity list", "section 301", "anti-dumping", "restriction", "prohibition")
 _REG_SKIP = ("information collection", "binational panels", "appointing a member", "appointing an alternate")
+
+
+def official_regulation(title, countries):
+    """A named country can start a watch. An unnamed sector needs a match in the customer's own sourcing."""
+    for terms, tags, points in _REG_TOPICS:
+        if any(re.search(r"\b" + re.escape(term) + r"(?:s|es)?\b", title, re.I) for term in terms):
+            named = named_countries(title, (c.alpha2 for c in iso_countries))
+            matched = [code for code in named if code in countries]
+            if named and not matched:
+                return None
+            return matched, tags, points
+    return None
 
 _MOCK_REGULATIONS: list[dict[str, Any]] = [
     {
@@ -809,6 +881,7 @@ class RegulationChangeProvider:
             live_ok, live_signals = self._fetch_live(countries)
             if live_ok:
                 return live_signals
+            raise RiskFeedUnavailable("No regulatory feed responded")
         return self._mock_signals(countries)
 
     def _fetch_live(self, countries: set[str]) -> tuple[bool, list[ExternalSignal]]:
@@ -840,10 +913,10 @@ class RegulationChangeProvider:
                 pub_date = str(doc.get("publication_date") or "")
                 doc_type = str(doc.get("type") or "Rule")
                 url = str(doc.get("html_url") or FEDERAL_REGISTER_URL)
-                for keywords, rule_countries, tags, base_score in _REG_RULES:
-                    hit = [c for c in rule_countries if not countries or c in countries]
-                    if hit and any(kw in t_low for kw in keywords):
-                        signals.append(ExternalSignal(
+                scope = official_regulation(title, countries)
+                if scope:
+                    hit, tags, base_score = scope
+                    signals.append(ExternalSignal(
                             provider=self.name,
                             category="regulatory_change",
                             title=title,
@@ -855,8 +928,7 @@ class RegulationChangeProvider:
                             quote=f"{doc_type} published {pub_date}: {title[:140]} (live Federal Register API)",
                             published=pub_date or None,
                             live=True,
-                        ))
-                        break
+                    ))
 
         # 5b. EUR-Lex official EU adopted legislation RSS
         xml_text = _cached_get_text(EURLEX_RSS_URL, {"rssId": "162"})
@@ -870,10 +942,10 @@ class RegulationChangeProvider:
                     t_low = title.lower()
                     if not title or any(sk in t_low for sk in _REG_SKIP):
                         continue
-                    for keywords, rule_countries, tags, base_score in _REG_RULES:
-                        hit = [c for c in rule_countries if not countries or c in countries]
-                        if hit and any(kw in t_low for kw in keywords):
-                            signals.append(ExternalSignal(
+                    scope = official_regulation(title, countries)
+                    if scope:
+                        hit, tags, base_score = scope
+                        signals.append(ExternalSignal(
                                 provider=self.name,
                                 category="regulatory_change",
                                 title=title[:140],
@@ -885,8 +957,7 @@ class RegulationChangeProvider:
                                 quote=f"{title[:160]} (live EUR-Lex RSS)",
                                 published=(item.findtext("pubDate") or "").strip() or None,
                                 live=True,
-                            ))
-                            break
+                        ))
                     if len(signals) >= 12:
                         break
             except ET.ParseError:
@@ -1027,22 +1098,51 @@ def collect_external_signals(
     reference_now: datetime,
     data_root: Optional[Path] = None,
     providers: tuple[SignalProvider, ...] = DEFAULT_PROVIDERS,
-) -> tuple[list[ExternalSignal], dict[str, int]]:
-    """Run all configured external providers safely (one provider failure never stops scoring)."""
+) -> tuple[list[ExternalSignal], dict[str, int], dict]:
+    """A successful empty search can clear exposure. An unavailable source keeps its last reading."""
     ports = load_ports_from_root(data_root)
     all_signals: list[ExternalSignal] = []
     counts: dict[str, int] = {}
-    for provider in providers:
+    unavailable = {}
+    mode = "replay" if llm.is_mock() else "live"
+    keys = {p.name: f"{mode}/{p.name}" for p in providers}
+    with session() as db:
+        snapshots = {r.key: r for r in db.exec(select(RiskFeedSnapshot).where(RiskFeedSnapshot.key.in_(keys.values())))}
+
+    def read(provider):
+        snapshot = snapshots.get(keys[provider.name])
+        history = {"previous": snapshot.signals} if snapshot and isinstance(provider, PolymarketProvider) else {}
         try:
             sigs = provider.fetch(
                 countries=countries,
                 ports=ports,
                 shipments=shipments,
                 documents=documents,
-                reference_now=reference_now,
+                reference_now=datetime.now(timezone.utc) if mode == "live" and provider.name == "polymarket" else reference_now,
+                **history,
             )
+        except Exception as error:
+            prior = snapshot.collected_at.isoformat() if snapshot else None
+            sigs = [ExternalSignal(**s, last_known_at=prior) for s in snapshot.signals] if snapshot else []
+            if isinstance(error, RiskFeedUnavailable) and error.portal_signals is not None:
+                sigs = error.portal_signals + [s for s in sigs if s.provider != "portal_news"]
+            return provider.name, sigs, dict(reason=str(error), last_known_at=prior)
+        return provider.name, sigs, None
+
+    if mode == "live" and len(providers) > 1:
+        # Independent public lookups run together. Publish their results in configured order.
+        with ThreadPoolExecutor(max_workers=min(5, len(providers)), thread_name_prefix="risk-feed") as pool:
+            results = list(pool.map(read, providers))
+    else:
+        results = [read(provider) for provider in providers]
+    with session() as db:
+        for name, sigs, failure in results:
+            if failure:
+                unavailable[name] = failure
+            else:
+                db.merge(RiskFeedSnapshot(key=keys[name], collected_at=utcnow(), signals=[
+                    {k: v for k, v in asdict(s).items() if k != "last_known_at"} for s in sigs]))
             all_signals.extend(sigs)
-            counts[provider.name] = len(sigs)
-        except Exception:
-            counts[provider.name] = 0
-    return all_signals, counts
+            counts[name] = len(sigs)
+        db.commit()
+    return all_signals, counts, unavailable

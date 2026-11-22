@@ -162,6 +162,10 @@ def options_for(issue, plan, forecast, row):
                             needs_approval=(value is None or policy.needs_approval(value)
                                             or (air and air_freight_limit(docs) is not None)), available=available))
         shipment = actions[0].get("shipment_id") if actions else None
+        if pid in plan.launch_priorities and actions:
+            priority_source = plan.launch_priorities[pid]
+            choices[-1]["launch_priority"] = priority_source
+            choices[-1]["evidence"].append(priority_source["evidence"])
         checks = plan.shipment_checks.get(shipment)
         if checks:
             choices[-1]["shipment_checks"] = checks

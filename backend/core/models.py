@@ -476,6 +476,14 @@ class Forecast(SQLModel, table=True):
     details: dict = _json(dict)
 
 
+class RiskFeedSnapshot(SQLModel, table=True):
+    """Last successful provider reading in this customer database, kept across restarts."""
+    __tablename__ = "risk_feed_snapshots"
+    key: str = Field(primary_key=True)
+    collected_at: datetime = Field(default_factory=utcnow)
+    signals: list = _json(list)
+
+
 class RiskScore(SQLModel, table=True):
     __tablename__ = "risk_scores"
     id: Optional[int] = Field(default=None, primary_key=True)

@@ -28,6 +28,9 @@ export interface HealthCheckResponse {
   /** Changes with new agent activity or drop status. Polling clients may reuse a recent complete snapshot. */
   activity_version?: string;
   lastDrop?: {mode?: string; label?: string; status: string; run_id: string; failures: RunResult['failures']} | null;
+  lastRiskCheck?: {at: string; run_id: string; trigger?: string | null; grades_changed: number | null;
+    suppliers: number | null; sources: Record<string, number>;
+    unavailable: Record<string, {reason: string; last_known_at: string | null}>; failures?: ActionRun['failures']} | null;
   timestamp: string;
   dataRoot: string;
   agents: string[];
@@ -113,10 +116,12 @@ export interface ApprovalAssignment {
 export interface SampleWindow {
   as_of: string; requested_on?: string; sample_days: number; sample_by: string; first_delivery: string;
   days_between: number; source: string;
+  request_by_for_delivery?: string;
 }
 
 export interface MarketObservation {
   yes_pct: number; disruption_outcome: 'Yes' | 'No'; question_id: string | null; closes_at: string | null; scope_basis?: string;
+  previous_yes_pct?: number;
 }
 
 export interface SupplyExposure {
@@ -132,6 +137,7 @@ export interface SupplyExposure {
   assembly_name?: string;
   share: number | null;
   effective_after: string | null;
+  packing_closes_before_notice?: string | null;
   uncertainties?: string[];
   qualification_gate?: {
     assessment: string; signers: ApprovalAssignment[]; effective: string; evidence: Evidence;
@@ -142,7 +148,9 @@ export interface SupplyExposure {
   lead_days: number | null;
   previous_lead_days: number | null;
   order_value?: {amount: number; currency: string} | null;
-  orders: {po: string; line: number | null; quantity: number | null; promised: string}[];
+  delivery_history?: {material:string; site:string; count:number; on_time:number; first:string; last:string;
+    recent:{po:string; line:number; promised:string; arrived:string; days_from_promise:number; source:string}[]} | null;
+  orders: {po: string; line: number | null; quantity: number | null; promised: string; status?: string}[];
   supplier_rating: string | null;
   score_basis?: {internal: number; external_raw: number; external_cap: number; external: number; total: number} | null;
   last_grade_change?: {
@@ -152,11 +160,13 @@ export interface SupplyExposure {
   other_drivers?: {factor: string; points: number}[];
   signals: {factor: string; text: string; points: number; sources: {
     evidence: Evidence; origin: string; title?: string; published: string | null;
-    provider?: string; scope?: string; observed_at?: string | null; market?: MarketObservation | null;
+    provider?: string; scope?: string; observed_at?: string | null; last_known_at?: string | null; market?: MarketObservation | null;
+    material_matches?: {part:string; description:string; term:string; evidence:Evidence[]}[];
   }[]}[];
 }
 
 export interface DecisionOption {
+  launch_priority?: { evidence: Evidence; preordered: number | null; all_demand_preordered: boolean; rationale: string | null };
   shipment_checks?: {field: 'status' | 'eta'; readings: {value: string; source: string; note: string}[]}[];
   approval_basis?: {po: string; order_eur: number; fee_eur: number; total_eur: number;
     lines: {line: number; material: string; quantity: number; unit_price: number; value_eur: number}[]};
@@ -450,6 +460,7 @@ export const API_ROUTES = {
   TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]
   BUYER_ACTIVITY: '/api/buyer-activity', // GET -> BuyerActivity[]; latest 400 steps without document payloads
   RISK: '/api/risk', // GET -> RiskScore[]; ?current=true selects the latest grade per entity before ranking
+  RISK_REFRESH: '/api/risk/refresh', // POST -> ActionRun; recheck external signals against current orders
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)

@@ -126,6 +126,22 @@ def signer_names(assignments):
     return list(dict.fromkeys(a["person"] or a["required_role"] for a in assignments))
 
 
+def vacant_category_leads(documents, on, categories):
+    """Quote only seats that are explicitly vacant or have a future start in the effective chart."""
+    chart = _effective_chart(documents, on)
+    vacancies = {}
+    if chart:
+        lines = [line.strip() for line in chart.text.splitlines() if line.strip()]
+        for category in sorted(c for c in categories if c):
+            matches, vacant = _candidates(chart, "Category lead", on, category, "")
+            if vacant and not matches:
+                seat = next((lines[i-1] + " · " + line for i, line in enumerate(lines) if i and
+                    "category lead" in _fold(line) and _fold(category) in _fold(line)), None)
+                if seat:
+                    vacancies[category] = (chart.path, seat)
+    return vacancies
+
+
 def resolve_approvers(roles, category, plan, documents, buyer=""):
     return signer_names(approval_assignments(roles, category, plan.as_of.date(), documents, buyer))
 

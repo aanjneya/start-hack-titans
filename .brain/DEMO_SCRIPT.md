@@ -15,6 +15,8 @@
 
 **Evening replay.** At the 21:38 drop Hamburg projects 608,000 Standard (32,000 short, clear cases) and 66,100 Collector’s (5,900 short, art books). Treat the terminal pickup and book offer as conditional recoveries.
 
+**Why the buyer acts before a delivery is late.** Four of PackRight’s four recorded box orders reached Hamburg on time. Open the historical PO lines on the card, then show the supplier's dated notice raising lead time from 63 to 105 days. Switch the sample comparison from today to two weeks to show the date cross the first open PO. That comparison and opening the review fit the main demonstration. Keep the finance simulation as a second tab. Use **My updates** if asked how much an individual buyer hears about. Company policy still decides who signs.
+
 **Evidence the presenter can open.** In the magnet case, select **Read the supplier’s delivery notice** under **Why?**. The same card shows the historical grade chain from PackRight (A → CCC) through the magnet (AA → CCC) to Collector’s Edition (BBB → CCC). The ordered box itself moves from AA to B. **Compare sample timing** is available beside the primary action. Under the evening terminal review, the ERP records a discharge while the tracker still reports transit. Contacting the terminal is the next useful check.
 
 ## 3. Backup Plan

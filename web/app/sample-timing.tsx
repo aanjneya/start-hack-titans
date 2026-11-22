@@ -65,6 +65,7 @@ export default function SampleTiming({ decision, option, window }: { decision: n
           </li>)}
         </ol>
       </div>
+      {scenario.request_by_for_delivery && <p className="font-medium">Request by {displayDate(scenario.request_by_for_delivery)} for sample availability by the first PO date.</p>}
       <p className="mt-2 text-muted">Assumes the supplier’s {window.sample_days}-day offer uses calendar days.
         Fit, production, transit and Quality release times are still open.</p>
     </div>

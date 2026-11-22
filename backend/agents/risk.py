@@ -12,6 +12,7 @@ grouped post-launch second-source candidates list (T6.5).
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Optional
 
 from sqlmodel import select
@@ -34,7 +35,7 @@ def _truncate(text: str, limit: int = 160) -> str:
 @register
 class RiskRater(Agent):
     name = "risk"
-    subscriptions = {events.TRUTH_UPDATED: "on_truth_updated"}
+    subscriptions = {events.TRUTH_UPDATED: "on_truth_updated", events.RISK_REFRESH_REQUESTED: "on_truth_updated"}
 
     #: Pluggable external providers (overridable in tests)
     providers: tuple[SignalProvider, ...] = DEFAULT_PROVIDERS
@@ -47,6 +48,9 @@ class RiskRater(Agent):
 
         ctx = build_context()
         if not (ctx.suppliers or ctx.materials):
+            if event.name == events.RISK_REFRESH_REQUESTED:
+                self.log("risk_rated", "Waiting for customer supplier or material records.",
+                         data={"trigger": event.name, "external_signals": {}, "grade_changes": 0, "suppliers": 0})
             return
 
         with session() as s:
@@ -55,7 +59,7 @@ class RiskRater(Agent):
             )
 
         countries = {(sup.country or "").upper() for sup in ctx.suppliers.values() if sup.country}
-        signals, provider_counts = collect_external_signals(
+        signals, provider_counts, unavailable = collect_external_signals(
             countries=countries,
             shipments=ctx.shipments,
             documents=ctx.documents,
@@ -69,6 +73,15 @@ class RiskRater(Agent):
             (r.entity_type, r.entity_id): r
             for r in latest_by(all_rows(RiskScore), "entity_type", "entity_id")
         }
+        for name, failure in unavailable.items():
+            self.log("error", f"{name} unavailable: {failure['reason']}", data={
+                "event": event.name, "provider": name, "last_known_at": failure["last_known_at"]})
+        if prev_scores and unavailable and (event.name == events.RISK_REFRESH_REQUESTED
+                                            or any(f["last_known_at"] is None for f in unavailable.values())):
+            # An upgraded deployment can have grades from before provider snapshots were saved.
+            self.log("risk_refresh_incomplete", "Previous grades retained until the missing source returns.",
+                     data={"trigger": event.name, "unavailable": unavailable, "external_signals": provider_counts})
+            return
 
         # 3-tier bottom-up scoring
         supplier_risks = rate_suppliers(ctx, open_issues, signals)
@@ -135,7 +148,9 @@ class RiskRater(Agent):
             if c.grade >= 5
         ]
         for comp in sorted(high_risk_entities, key=lambda x: (-x.grade, -x.score_0_100, x.entity_id)):
-            top_ev = [e for r in comp.reasons for e in r.evidence][:5]
+            # Keep a citation for each driver before filling additional evidence from the strongest one.
+            top_ev = ([r.evidence[0] for r in comp.reasons if r.evidence]
+                      + [e for r in comp.reasons for e in r.evidence[1:]])[:5]
             if not top_ev:
                 top_ev = [Evidence(path="risk_engine", locator=comp.entity_id, quote=comp.reasons[0].text)]
             actions = comp.suggested_actions or [
@@ -146,12 +161,22 @@ class RiskRater(Agent):
                     "owner": "planner",
                 }
             ]
+            linked = next((item for item in comp.signal_inputs.get("regulatory_change", [])
+                           if item.get("material_matches")), None)
+            if linked:
+                citation = Evidence(**linked["evidence"])
+                if citation not in top_ev:
+                    top_ev.append(citation)
+                if not any(a.get("type") == "human_review" and "compliance" in a.get("label", "").lower() for a in actions):
+                    actions = [*actions, dict(type="human_review", label="Verify the publication against the matched supplier articles.",
+                                              target=comp.entity_id, owner="planner")]
             reason_lines = " | ".join(f"{r.text} (+{r.points:.0f}pts)" for r in comp.reasons[:3])
             embedded = comp.entity_type == "part" and comp.part_id in ctx.embedded
+            verify_exposure = embedded or (comp.entity_type == "supplier" and not comp.impact.get("copies_at_risk"))
             issue = self.raise_issue(
                 type="high_risk_rating",
-                kind=IssueKind.HUMAN_CHECK if embedded else IssueKind.COPIES_AT_RISK,
-                severity=Severity.LINE_STOP if comp.grade >= 6 and not embedded else Severity.HIGH,
+                kind=IssueKind.HUMAN_CHECK if verify_exposure else IssueKind.COPIES_AT_RISK,
+                severity=Severity.LINE_STOP if comp.grade >= 6 and not verify_exposure else Severity.HIGH,
                 key=f"{comp.entity_type}/{comp.entity_id}",
                 summary=_truncate(
                     f"Risk {comp.rating} ({comp.grade}/6) on {comp.entity_name}: {comp.reasons[0].text}"
@@ -181,6 +206,12 @@ class RiskRater(Agent):
                 for r in p.reasons if r.factor == "single_source"
                 for e in r.evidence
             ][:8]
+            instruction = next(((d, sentence.strip()) for d in ctx.documents if d.kind == "memo"
+                for sentence in re.split(r"(?<=[.!?])\s+|\n", d.text or "")
+                if re.search(r"\bsecond source for every part that has one supplier\b", sentence, re.I)), None)
+            if instruction:
+                doc, sentence = instruction
+                ss_ev.insert(0, Evidence(path=doc.path, locator="sourcing priorities", quote=sentence))
             issue = self.raise_issue(
                 type="second_source_candidates",
                 kind=IssueKind.COPIES_AT_RISK,
@@ -190,10 +221,8 @@ class RiskRater(Agent):
                     f"{len(single_source_parts)} single-source launch parts need 2nd sources: "
                     + ", ".join(p.entity_id for p in single_source_parts[:5])
                 ),
-                reason=(
-                    f"CPO launch memo requires qualifying second sources for all single-source components. "
-                    f"Ranked by risk: {'; '.join(part_labels)}."
-                ),
+                reason=((instruction[1] + " ") if instruction else "The sourcing records identify one supplier per component. ")
+                       + f"Ranked by risk: {'; '.join(part_labels)}.",
                 subject_type="part",
                 subject_id=single_source_parts[0].entity_id,
                 part_id=single_source_parts[0].entity_id,
@@ -227,6 +256,7 @@ class RiskRater(Agent):
                 "high_risk": len(high_risk_entities),
                 "grade_changes": len(grade_changes),
                 "external_signals": provider_counts,
+                "unavailable": unavailable, "trigger": event.name,
             },
         )
 

@@ -12,6 +12,7 @@ import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
 import DataDrawer from "./data-drawer";
 import History from "./decision-history";
 import SampleTiming from "./sample-timing";
+import BuyerUpdates from "./buyer-updates";
 import { SourceList, SourcePassage } from "./decision-source";
 import { CompanyRules, formatMoney, OrderCalculation } from "./approval-details";
 
@@ -107,6 +108,13 @@ export default function ControlRoom() {
   }, []);
   const [tab, setTab] = useState<"findings" | "emails" | "risk">("findings");
   const [activeMail, setActiveMail] = useState<number | null>(null);
+  const [mailVisit, setMailVisit] = useState(0);
+  const openMail = (id:number) => { setActiveMail(id); setTab("emails"); setMailVisit(n => n + 1); };
+  useEffect(() => {
+    if (tab === "emails" && activeMail != null && mailVisit) {
+      document.querySelector<HTMLButtonElement>(`#mail-${activeMail} button`)?.focus();
+    }
+  }, [tab, activeMail, mailVisit]);
   const [showData, setShowData] = useState(false);
   const closeData = useCallback(() => setShowData(false), []);
 
@@ -200,7 +208,10 @@ export default function ControlRoom() {
 
   const recovery = snap.queue.filter(entry => entry.on_time_recovery);
   const future = snap.queue.filter(entry => entry.option.horizon === "future" && !entry.option.followup_for);
-  const updated = future.find(entry => playedRun && entry.latest_grade_change?.run_id === playedRun);
+  const riskCheck = snap.health?.lastRiskCheck;
+  const marketRun = riskCheck?.trigger === "risk.refresh.requested" ? riskCheck.run_id : null;
+  const updated = future.find(entry => entry.latest_grade_change &&
+    [playedRun, marketRun].includes(entry.latest_grade_change.run_id));
   const other = snap.queue.filter(entry => !entry.on_time_recovery && entry.option.horizon !== "future");
   const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
     {entries.map(entry => <li id={`action-${entry.key}`} tabIndex={-1} key={entry.key}>
@@ -226,6 +237,16 @@ export default function ControlRoom() {
         busy={dropBusy}
         replayEnabled={!!snap.health?.replayEnabled}
         onDrop={nextDrop}
+        updates={snap.setup?.demo_buyer && <BuyerUpdates key={snap.setup.customer + "/" + snap.setup.demo_buyer}
+          setup={snap.setup} activity={snap.trace} queue={snap.queue} inbox={snap.inbox} decisions={snap.decisions} describeReply={replyOutcome} onMail={openMail}
+          onAction={key => {
+            const parent = snap.queue.find(e => e.key === key)?.option.followup_for;
+            if (!parent) return focusAction(key);
+            const section = document.getElementById("followup-" + parent);
+            const detail = section?.querySelector("details");
+            if (detail) detail.open = true;
+            section?.focus();
+          }} />}
       />
       {snap.health?.lastDrop?.mode === "simulation" && <p className="mb-3 border-l-4 border-warn bg-warn-soft px-4 py-2 text-sm font-semibold">
         {snap.health.lastDrop.label}
@@ -234,9 +255,15 @@ export default function ControlRoom() {
         Forecast needs review. {snap.health.lastDrop.failures.map(f => f.agent + " failed on " + f.event).join(", ")}.
         {" "}<a className="underline" href={API_URL + "/api/trace?run_id=" + snap.health.lastDrop.run_id}>Open run trace</a>
       </p>}
-      {notice && (
+      {riskCheck && (Object.keys(riskCheck.unavailable).length > 0 || !!riskCheck.failures?.length) && <p role="alert" className="mb-4 rounded-md bg-warn-soft p-3">
+        Risk check incomplete · {Object.keys(riskCheck.unavailable).length ? Object.keys(riskCheck.unavailable).join(", ") + " unavailable."
+          : riskCheck.failures?.map(f => f.agent + " failed on " + f.event).join(", ") + "."}
+        {riskCheck.grades_changed == null && " The previous supplier grades still apply."}{" "}
+        <a className="font-semibold underline" href={API_URL + "/api/trace?run_id=" + riskCheck.run_id}>View check</a>
+      </p>}
+      {(notice || updated) && (
         <p role="status" className="mb-4 rounded-md border border-rule bg-surface px-4 py-2 text-sm">
-          {updated?.latest_grade_change ? <>{updated.latest_grade_change.supplier} moved from {updated.latest_grade_change.previous} to {updated.latest_grade_change.current} in this drop.
+          {updated?.latest_grade_change ? <>{updated.latest_grade_change.supplier} moved from {updated.latest_grade_change.previous} to {updated.latest_grade_change.current} {marketRun === updated.latest_grade_change.run_id ? "after a signal refresh" : "in this drop"}.
             {" "}<button className="font-semibold text-act underline" onClick={() => focusAction(updated.key)}>See buyer decision ↓</button>
             </> : notice} {notice.includes("decision follow-up") && <a className="font-semibold text-act underline" href="#decision-follow-up">View follow-up</a>}
         </p>
@@ -296,7 +323,7 @@ export default function ControlRoom() {
           )}
         </section>
 
-        <CaseUpdates snap={snap} refresh={refresh} current={online === true && !dropBusy && !missing.length} openMail={id => { setActiveMail(id); setTab("emails"); }} />
+        <CaseUpdates snap={snap} refresh={refresh} current={online === true && !dropBusy && !missing.length} openMail={openMail} />
         <aside aria-labelledby="agents" className="grid items-start gap-6 lg:grid-cols-2">
           <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
           <LiveLog trace={snap.trace} />
@@ -326,8 +353,8 @@ export default function ControlRoom() {
           ))}
         </div>
         {tab === "findings" && <Findings issues={snap.issues} />}
-        {tab === "emails" && <Emails activeMail={activeMail} outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
-        {tab === "risk" && <Risk rows={snap.risk} />}
+        {tab === "emails" && <Emails activeMail={activeMail} mailVisit={mailVisit} outbox={snap.outbox} inbox={snap.inbox} mock={mock} onSent={refresh} />}
+        {tab === "risk" && <><SignalRefresh reading={riskCheck} online={online === true} mock={mock} refresh={refresh} /><Risk rows={snap.risk} /></>}
       </section>
       {showData && <DataDrawer onClose={closeData} />}
     </div>
@@ -437,6 +464,7 @@ function SampleInquiry({ entry, buyer, current, refresh }: {
 }
 
 function TopBar(props: {
+  updates?: React.ReactNode;
   setup: CustomerSetup | null;
   online: boolean | null;
   mock: boolean;
@@ -489,6 +517,7 @@ function TopBar(props: {
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-3">
+        {props.updates}
         <span
           title={props.mock ? "Historical or simulated inputs. Email delivery is simulated." : "Live data. Email delivery follows the Chaser configuration."}
           className={`rounded px-2 py-1 text-xs font-bold ${props.mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
@@ -620,7 +649,7 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
 
   return <article className={`rounded-lg border border-rule border-t-[3px] bg-surface ${option.horizon === "future" ? "border-t-warn" : "border-t-act"}`}>
     <div className="px-5 pt-4">
-      <p className="text-sm text-muted">{entry.edition} · {entry.part || "Packing capacity"}</p>
+      <p className="text-sm text-muted">{entry.edition}{entry.part ? " · " + entry.part : option.horizon !== "future" ? " · Packing capacity" : ""}</p>
       <h3 className="mt-1 text-lg font-bold leading-snug">{option.label}</h3>
       {option.exposure ? <ExposureSummary exposure={option.exposure} /> :
         <p className="mt-2 text-sm">{entry.next_step}</p>}
@@ -628,6 +657,9 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
         Shipment records disagree on {option.shipment_checks.map(c => c.field === "eta" ? "arrival date" : "location status").join(" and ")}.
       </p>}
       {action?.quote_inbox_id != null && <p className="mt-1 text-sm font-semibold text-act">Quote received · Awaiting authorization</p>}
+      {option.launch_priority?.all_demand_preordered && !!option.copies_gained && <p className="mt-3 text-sm font-medium text-act">
+        Customer priority · All {fmt(option.launch_priority.preordered)} {entry.edition} copies are preordered.
+      </p>}
       <dl className="my-4 flex flex-wrap gap-x-7 gap-y-3 text-sm tabular">
         {option.horizon !== "future" && <>
           <div><dt className="text-muted">Conditional gain</dt><dd className="font-semibold">
@@ -672,6 +704,12 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
         <ExposureEvidence exposure={option.exposure} />
       </> : <>
         <p className="mt-3">{option.risk_note}</p>
+        {option.launch_priority && <section className="mt-3">
+          <h4 className="font-bold">Why this edition comes first</h4>
+          <blockquote className="mt-1 border-l-2 border-act pl-3">{option.launch_priority.evidence.quote}
+            {option.launch_priority.rationale && <p className="mt-1">{option.launch_priority.rationale}</p>}</blockquote>
+          <p className="mt-1 text-xs text-muted">{option.launch_priority.evidence.path.split("/").pop()}</p>
+        </section>}
         {!!option.shipment_checks?.length && <section className="mt-3">
           <h4 className="font-bold">What the shipment records say</h4>
           {option.shipment_checks.map(check => <ul key={check.field} className="mt-1 divide-y divide-rule">
@@ -861,7 +899,8 @@ function Findings({ issues }: { issues: Issue[] }) {
         </thead>
         <tbody>
           {rows.map((i) => {
-            const sev = SEVERITY[i.severity] ?? SEVERITY[1];
+            const sev = i.kind === "human_check" && i.severity >= 4
+              ? {label:"Human review", cls:"bg-warn-soft text-warn"} : SEVERITY[i.severity] ?? SEVERITY[1];
             return (
               <tr key={i.id} className={`border-b border-rule last:border-b-0 ${i.status === "resolved" ? "opacity-50" : ""}`}>
                 <td className="px-4 py-2 align-top">
@@ -882,13 +921,13 @@ function Findings({ issues }: { issues: Issue[] }) {
   );
 }
 
-function Emails({ activeMail, outbox, inbox, mock, onSent }: { activeMail: number | null; outbox: OutboxMessage[]; inbox: InboxMessage[]; mock: boolean; onSent: () => void }) {
+function Emails({ activeMail, mailVisit, outbox, inbox, mock, onSent }: { activeMail: number | null; mailVisit: number; outbox: OutboxMessage[]; inbox: InboxMessage[]; mock: boolean; onSent: () => void }) {
   if (outbox.length === 0) return <p className="text-muted">No supplier emails yet. The Chaser writes one when a finding needs an answer.</p>;
   return (
     <ul className="space-y-3">
       {outbox.map((m) => (
         <li id={`mail-${m.id}`} key={m.id}>
-          <EmailView key={String(activeMail === m.id)} focus={activeMail === m.id} m={m} replies={inbox.filter((r) => r.outbox_id === m.id)} mock={mock} onSent={onSent} />
+          <EmailView key={activeMail === m.id ? mailVisit : 0} focus={activeMail === m.id} m={m} replies={inbox.filter((r) => r.outbox_id === m.id)} mock={mock} onSent={onSent} />
         </li>
       ))}
     </ul>
@@ -991,6 +1030,34 @@ function replyOutcome(r: InboxMessage): string {
   return fields.length
     ? `Ingest filled ${fields.join(" and ")} on ${String(res.rows)} order line(s).`
     : "Read by Ingest; nothing to fill.";
+}
+
+function SignalRefresh({reading, online, mock, refresh}: {
+  reading: HealthCheckResponse["lastRiskCheck"]; online: boolean; mock: boolean; refresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const check = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await postData<ActionRun>("/api/risk/refresh");
+      await refresh();
+      if (result.status === "partial") setError("Signal check incomplete. Open the check trace for details.");
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const failed = Object.keys(reading?.unavailable ?? {});
+  return <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule bg-surface p-4">
+    <div className="text-sm"><h3 className="font-bold">External signal check</h3>
+      <p>{reading ? <>{mock ? "Replay evidence" : "Live monitoring"} · Checked {clock(reading.at)} · {reading.grades_changed == null
+        ? "previous grades retained" : `${reading.grades_changed} grade changes`}</> : "Waiting for the first check."}
+        {reading && <> · <a className="text-act underline" href={API_URL + "/api/trace?run_id=" + reading.run_id}>Check trace</a></>}</p>
+      {failed.length > 0 && <p role="alert" className="text-warn">Unavailable feeds · {failed.join(", ")}</p>}
+      {error && <p role="status" className="text-warn">{error}</p>}</div>
+    <button className="rounded border border-rule px-3 py-2 text-sm font-semibold text-act disabled:opacity-50"
+      disabled={busy || !online} onClick={() => void check()}>{busy ? "Checking signals…" : mock ? "Recheck replay signals" : "Refresh live signals"}</button>
+  </div>;
 }
 
 function Risk({ rows }: { rows: RiskScore[] }) {

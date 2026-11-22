@@ -43,6 +43,14 @@ def _watch_loop(stop) -> None:
             trace.log("watcher", "error", f"timer: {type(exc).__name__}: {exc}")
 
 
+def _risk_loop(stop) -> None:
+    while not stop.wait(get_settings().risk_refresh_interval_min * 60):
+        try:
+            system.refresh_risk("risk_timer")
+        except Exception as exc:
+            trace.log("risk", "error", f"refresh timer: {type(exc).__name__}: {exc}")
+
+
 def _chaser():
     system.bus()
     return next(a for a in system._agents if a.name == "chaser")
@@ -70,6 +78,8 @@ async def lifespan(_: FastAPI):
     s = get_settings()
     if s.watch_interval_min > 0 and not s.mock_mode:
         threading.Thread(target=_watch_loop, args=(stop,), daemon=True, name="watcher").start()
+    if s.risk_refresh_interval_min > 0 and not s.mock_mode:
+        threading.Thread(target=_risk_loop, args=(stop,), daemon=True, name="risk-refresh").start()
     if s.chaser_poll_min > 0 and s.chaser_send and not s.mock_mode:
         threading.Thread(target=_chaser_poll_loop, args=(stop,), daemon=True, name="chaser-poll").start()
     yield
@@ -97,14 +107,22 @@ def health() -> dict:
     with session() as db:
         last = db.exec(select(DropRecord).order_by(DropRecord.id.desc())).first()
         activity = db.exec(select(AgentLog.id, AgentLog.ts).order_by(AgentLog.id.desc()).limit(1)).first()
+        reading = db.exec(select(AgentLog).where(AgentLog.agent == "risk",
+            AgentLog.action.in_(["risk_rated", "risk_refresh_incomplete", "signal_check"])).order_by(AgentLog.id.desc()).limit(1)).first()
     version = f"{activity.id}/{activity.ts.isoformat()}" if activity else "empty"
     if last:
         version += f"/{last.run_id}/{last.status}"
     return ok({
         "activity_version": version,
+        "lastRiskCheck": (dict(at=reading.ts, run_id=reading.run_id, trigger=reading.data.get("trigger"),
+            grades_changed=reading.data.get("grade_changes"), suppliers=reading.data.get("suppliers"),
+            sources=reading.data.get("external_signals", {}), unavailable=reading.data.get("unavailable", {}),
+            failures=reading.data.get("failures", []))
+            if reading else None),
         "replayEnabled": bool(s.replay_db_path and s.mock_mode),
         "lastDrop": (dict(status=last.status, mode=last.mode, label=last.label, run_id=last.run_id, failures=last.failures or []) if last else None),
-        "status": "degraded" if last and last.status == "partial" else "ok",
+        "status": "degraded" if (last and last.status == "partial") or (reading and
+                                 (reading.data.get("unavailable") or reading.data.get("failures"))) else "ok",
         "mockMode": s.mock_mode,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "dataRoot": str(s.data_root),
@@ -394,6 +412,11 @@ def risk(current: bool = False) -> dict:
                            RiskScore.grade.desc(), RiskScore.entity_type, RiskScore.entity_id)).all()
             return ok([r.model_dump(mode="json") for r in rows])
     return ok(_rows(RiskScore, order=RiskScore.grade.desc()))
+
+
+@app.post("/api/risk/refresh")
+def risk_refresh() -> dict:
+    return ok(system.refresh_risk())
 
 
 @app.get("/api/outbox")

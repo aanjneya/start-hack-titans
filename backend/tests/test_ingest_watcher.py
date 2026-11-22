@@ -137,6 +137,8 @@ def test_watcher_live_diff_with_fake_portal(monkeypatch, tmp_path):
             system.watch_once()
     first = system.watch_once()
     assert first["status"] == "completed" and first["added"] == 2 and (tmp_path / "mirror" / "soony/erp/packout_log.csv").exists()
+    from backend.core import trace
+    assert any(entry.agent == "watcher" and entry.action == "check" for entry in trace.recent(run_id=first["run_id"]))
     assert system.watch_once() == {"added": 0, "changed": 0, "removed": 0}
     portal["soony/erp/packout_log.csv"] += b"2026-11-03,DC-HAM,FG-X,L1,7\n"
     second = system.watch_once()

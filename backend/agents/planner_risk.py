@@ -57,6 +57,8 @@ def signal_source(item, documents, observation):
         origin = "Collection mode unknown"
     return dict(evidence=dict(item, source_kind=kind), origin=origin, provider=provider,
                 market=observation.get("market"),
+                last_known_at=observation.get("last_known_at"),
+                material_matches=observation.get("material_matches", []),
                 title=observation.get("title") or (doc.title if doc else ""), scope=observation.get("scope", ""),
                 observed_at=observation.get("observed_at"),
                 published=observation.get("published") or (doc.published_at.date().isoformat() if doc and doc.published_at else None))
@@ -111,6 +113,56 @@ def buyer_risk(nodes, documents):
         new = next((r["breakdown"] for r in first.reasons if "breakdown" in r), {})
         transition = dict(previous=previous.rating, current=first.rating,
                           drivers=[dict(factor=k, before=old[k], after=new[k]) for k in sorted(old.keys() & new.keys())])
+        before = market_readings(previous)
+        after = market_readings(first)
+        for signal in signals:
+            for source in signal["sources"]:
+                market = source.get("market")
+                key = market_key(source)
+                if key in before and key in after and market and market["yes_pct"] == after[key] != before[key]:
+                    source["market"] = dict(market, previous_yes_pct=before[key])
     return dict(supplier_rating=score.rating, signals=signals, other_drivers=other, last_grade_change=transition,
                 score_basis=next((r["score_basis"] for r in score.reasons if r.get("score_basis")), None),
                 rating_path=grades)
+
+
+def market_key(source):
+    market = source.get("market") or {}
+    # A live instrument and a replay example must never form a time series together.
+    identity = market.get("question_id")
+    if not identity and source.get("origin") == "Offline example":
+        identity = (source["evidence"]["path"], source["title"])
+    return (source.get("origin"), identity) if identity else None
+
+
+def market_readings(score):
+    readings = {}
+    for reason in score.reasons:
+        for obs in reason.get("signal_inputs", {}).get("external_politics", []):
+            if not obs.get("market") or obs.get("provider") != "polymarket":
+                continue
+            source = signal_source(obs["evidence"], {}, obs)
+            key = market_key(source)
+            if key:
+                readings[key] = obs["market"]["yes_pct"]
+    return readings
+
+
+def same_review_option(first, second):
+    """Refreshing the same instrument at the same price leaves its existing review actionable."""
+    if first == second:
+        return True
+    if not first or not second or not first.get("exposure") or not second.get("exposure"):
+        return False
+    def authorization_terms(option):
+        exposure = option["exposure"]
+        signals = []
+        for group in exposure.get("signals", []):
+            sources = []
+            for source in group["sources"]:
+                if source.get("provider") == "polymarket" and (source.get("market") or {}).get("question_id"):
+                    source = {k: v for k, v in source.items() if k != "observed_at"}
+                sources.append(source)
+            signals.append(dict(group, sources=sources))
+        return dict(option, exposure=dict(exposure, signals=signals))
+    return authorization_terms(first) == authorization_terms(second)

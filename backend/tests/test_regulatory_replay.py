@@ -1,5 +1,6 @@
 """Branch acceptance: isolated restart/retry and customer-specific procurement decisions."""
 from datetime import date
+from datetime import datetime, timezone
 import json
 import os
 import sqlite3
@@ -88,13 +89,20 @@ def test_real_magnets_open_one_future_review():
     entry, = [q for q in future(client) if q["option"]["button_label"] == "Start qualification review"]
     assert "63 to 105 days" in entry["next_step"] and "2026-12-01" in entry["next_step"]
     assert entry["part"] == "CMP-GAM-007" and entry["option"]["copies_gained"] is None
+    ledger = client.get("/api/trace", params={"run_id":res["run_id"], "limit":800}).json()["data"]
+    assert set(system.agent_names()) <= {step["agent"] for step in ledger}
+    assert any(step["agent"] == "watcher" and step["action"] == "replay_manifest" for step in ledger)
     change = entry["latest_grade_change"]
     assert (change["run_id"], change["previous"], change["current"]) == (res["run_id"], "A", "CCC")
     proof = client.get("/api/trace", params={"trace_id":change["trace_id"]}).json()["data"]
     assert proof[0]["agent"] == "risk" and proof[0]["data"]["entity_id"] == "SUP-0029"
     exposure = entry["option"]["exposure"]
     assert exposure["order_value"] == {"amount": 1870260, "currency": "CNY"}
+    history = exposure["delivery_history"]
+    assert (history["material"], history["site"], history["on_time"], history["count"]) == ("CMP-GAM-007", "DC-HAM", 4, 4)
+    assert history["last"] == "2026-11-11" and all(r["source"].endswith(".csv") for r in history["recent"])
     assert exposure["effective_after"] == "2026-12-01"
+    assert exposure["packing_closes_before_notice"] == "2026-11-22"
     gate = exposure["qualification_gate"]
     assert gate["assessment"] == "PPAP" and gate["effective"] == "2025-04-01"
     assert [a["person"] for a in gate["signers"]] == ["Daniel Okafor", "Sofia Marchetti"]
@@ -105,6 +113,7 @@ def test_real_magnets_open_one_future_review():
     assert "move out by 6 weeks" in passage["evidence"]["quote"]
     assert "Printed parts without magnets are not affected" in passage["excerpt"]
     window = exposure["sample_window"]
+    assert window["request_by_for_delivery"] == "2026-12-04"
     assert (window["as_of"], window["sample_by"], window["first_delivery"], window["days_between"]) == (
         "2026-11-21", "2026-12-01", "2026-12-14", 13)
     assert any("sampled within 10 days" in o["text"] for o in exposure["sample_offers"])
@@ -417,3 +426,175 @@ def test_market_warning_opens_a_targeted_check_without_promising_order_impact():
     assert [(n["tier"], n["id"]) for n in choice["exposure"]["rating_path"]] == [("supplier", "VN-X")]
     assert any(e["path"] == "open-orders" for e in entry["evidence"])
     assert not store.all_rows(m.Forecast) and not store.all_rows(m.OutboxMessage)
+
+
+def test_market_price_can_open_and_withdraw_a_buyer_check_without_a_portal_drop(monkeypatch):
+    from backend.agents import risk_signals
+    from backend.agents.risk import RiskRater
+
+    client = TestClient(app)
+    supplier = "CA-N"
+    store.add_all([
+        m.Supplier(supplier_id=supplier, name="Northshore Components", country="CA", status="at risk",
+                   qualification_valid_until=date(2020, 1, 1), source="vendor-master"),
+        m.PurchaseOrder(supplier_id=supplier, material_id="G2", po_number="KIT-9", po_line=2,
+                        promised_date=date(2027, 4, 1), status="awaiting_approval", buyer="Rei Ito", source="order-register"),
+        m.Document(kind="org_chart", path="chart", text="Effective 2025-01-01\nRei Ito\nProcurement Buyer"),
+        *[m.Shipment(shipment_id=f"ship-{i}", supplier_id=supplier, mode="sea", status="delayed",
+                     updated_at=datetime(2026, 11, 21, tzinfo=timezone.utc), source="shipping") for i in (1, 2)],
+        *[m.Issue(type="quality_check", raised_by="reconciler", supplier_id=supplier, severity=4,
+                 kind="human_check", fingerprint=f"qc-{i}") for i in (1, 2)],
+    ])
+    # Exercise the real binary-market parser and rating logic; only its HTTP payload is supplied by the test.
+    class Market(risk_signals.PolymarketProvider):
+        def fetch(self, **context):
+            return self._fetch_live(context["countries"], context["reference_now"])
+    monkeypatch.setattr(RiskRater, "providers", (Market(),))
+    odds = {"yes": 0.20, "updated":"2026-11-21T14:00:00Z"}
+    def market_response(url, params):
+        if odds["yes"] is None:
+            return None
+        return [dict(slug="canada-export", markets=[dict(id="canada-2027", question="Will Canada increase export tariffs?",
+            updatedAt=odds["updated"], outcomes=["No", "Yes"], outcomePrices=[1 - odds["yes"], odds["yes"]])])]
+    monkeypatch.setattr(risk_signals, "_cached_get_json", market_response)
+    def check():
+        return client.post("/api/risk/refresh").json()["data"]
+    assert check()["status"] == "completed" and not future(client)
+    assert client.get("/api/risk?current=true").json()["data"][0]["rating"] == "BBB"
+    odds["yes"] = .85
+    run = check()
+    entry, = future(client)
+    assert (entry["latest_grade_change"]["run_id"], entry["latest_grade_change"]["current"]) == (run["run_id"], "B")
+    choice = entry["option"]
+    assert (choice["button_label"], choice["approval_value_eur"], choice["assignments"][0]["person"]) == ("Check applicability", 0, "Rei Ito")
+    assert store.find_rows(m.Issue, type="high_risk_rating")[0].kind == "human_check"
+    exposure = choice["exposure"]
+    assert not exposure["orders"] and exposure["verification_orders"][0]["po"] == "KIT-9"
+    market = next(s for group in exposure["signals"] for s in group["sources"] if s["provider"] == "polymarket")["market"]
+    assert (market["previous_yes_pct"], market["yes_pct"]) == (20, 85)
+    odds["updated"] = "2026-11-21T14:10:00Z"
+    assert check()["status"] == "completed" and future(client)[0]["decision_id"] == entry["decision_id"]
+    restart()
+    odds["yes"] = None
+    failed = check()
+    assert failed["status"] == "partial" and failed["failures"][0]["event"] == events.RISK_REFRESH_REQUESTED
+    health = client.get("/api/health").json()["data"]["lastRiskCheck"]
+    assert health["unavailable"]["polymarket"]["last_known_at"] and health["grades_changed"] is None
+    assert future(client)[0]["version"] == entry["version"]
+    odds["yes"] = .20
+    assert check()["status"] == "completed" and not future(client)
+    history = client.get(f"/api/decisions/{entry['decision_id']}/history").json()["data"]["events"]
+    withdrawn, = [e for e in history if e["title"] == "Pending review withdrawn"]
+    assert "B to BBB" in withdrawn["detail"] and withdrawn["trace_id"]
+    stale = client.post(f"/api/decisions/{entry['decision_id']}/approve", json={"by": "Rei Ito", "version": entry["version"]})
+    assert stale.status_code == 409
+    assert not store.all_rows(m.Forecast) and not store.all_rows(m.OutboxMessage) and not store.all_rows(m.DropRecord)
+
+
+def test_future_exposure_counts_physical_po_lines_once_and_withholds_disputed_terms():
+    from backend.agents.planner_regulatory import open_orders, order_value
+
+    at = date(2026, 11, 21)
+    cutoff = date(2026, 12, 1)
+    def line(number, source, **overrides):
+        fields = dict(supplier_id="BE-S", material_id="A-5", po_number=number, po_line=2, status="open",
+                      promised_date=date(2027, 1, 3), quantity=20, unit_price=3, currency="CHF", source=source)
+        return m.PurchaseOrder(**(fields | overrides))
+    store.add_all([line("PK-1", "ERP"), line("PK-1", "register"),
+                   line("PK-2", "ERP"), line("PK-2", "ERP", status="closed", promised_date=None),
+                   line("PK-3", "ERP"), line("PK-3", "register", status="closed")])
+    def read():
+        return open_orders("BE-S", at, part="A-5", after=cutoff)
+    result = read()
+    assert [p.po_number for p in result.lines] == ["PK-1"] and order_value(result.lines) == {"amount":60, "currency":"CHF"}
+    assert any("PK-3/2" in n and "status" in n for n in result.notes)
+    store.add_all([line("PK-1", "register", quantity=24), line("PK-4", "register", po_line=None)])
+    disputed = read()
+    assert len(disputed.lines) == 1 and disputed.lines[0].quantity is None and order_value(disputed.lines) is None
+    assert {(e["path"], e["quote"]) for e in disputed.proof if e["locator"] == "PK-1/2"} == {
+        ("ERP", "quantity: 20.0"), ("register", "quantity: 24.0")}
+    assert any("PK-4/?" in n for n in disputed.notes)
+
+
+def test_restart_does_not_open_a_future_review_whose_finding_was_cleared():
+    issue, = store.add_all([m.Issue(raised_by="risk", fingerprint="cleared-market", type="high_risk_rating",
+                        kind="human_check", status="resolved", supplier_id="S", subject_type="supplier", subject_id="S")])
+    card, = store.add_all([m.DecisionCard(created_by="planner", title="Check supply exposure", issue_ids=[issue.id],
+        options=[dict(horizon="future", description="future supply review", product_id="", available=True,
+                      approvers=["Rei Ito"], actions=[dict(type="human_review", supplier_id="S", product_id="",
+                      part="", reference="applicability/S/S", copies_at_risk=None)])],
+        chosen_option=0, status="approved", decided_by="Rei Ito")])
+    restart()
+    system.bus().run_until_idle()
+    assert store.find_rows(m.DecisionCard, id=card.id)[0].status == "outdated"
+    assert not store.find_rows(m.Issue, type="recovery_review") and not store.all_rows(m.OutboxMessage)
+
+
+def test_public_sector_rule_reaches_only_the_supplier_articles_supported_by_the_customer(monkeypatch):
+    from backend.agents import risk_signals as feeds
+    from backend.agents.risk import RiskRater
+
+    client = TestClient(app)
+    title = "New export controls on advanced semiconductors"
+    def json_feed(url, params=None):
+        return {"results":[dict(title=title, type="Rule", html_url="https://www.federalregister.gov/documents/example")]}
+    monkeypatch.setattr(feeds, "_cached_get_json", json_feed)
+    monkeypatch.setattr(feeds, "_cached_get_text", lambda *a, **k: "<rss><channel/></rss>")
+    _, public = feeds.RegulationChangeProvider()._fetch_live({"BE", "JP"})
+    rule, = public
+    assert rule.countries == []  # The publication itself names an industry, with no country reference.
+    assert feeds.official_regulation("Rules for semiconductors from Portugal", {"BE"}) is None
+    assert feeds.official_regulation("Annual report on the federal workforce", {"BE"}) is None
+    class Recorded:
+        name = "fixtures"
+        def fetch(self, **kw):
+            return [rule, feeds.ExternalSignal("weather", "weather", "Forecast at port", 65, "Adverse weather",
+                                              countries=["BE"], ports=["BEANR"], source_url="test-weather")]
+    monkeypatch.setattr(RiskRater, "providers", (Recorded(),))
+    store.add_all([
+        m.Material(component_id="D-12", description="Memory die", category="Semiconductors", source="material-master"),
+        m.Material(component_id="T-9", description="Casting", category="Foundry", source="material-master"),
+        m.SupplierPartMap(supplier_id="BE-A", component_id="D-12", share=1, source="allocations"),
+        m.SupplierPartMap(supplier_id="BE-A", component_id="T-9", share=.5, source="allocations"),
+        m.SupplierPartMap(supplier_id="BE-B", component_id="T-9", share=.5, source="allocations"),
+        m.Document(path="buyers", kind="org_chart", text="2026-01-01\nLin Park\nBuyer"),
+        m.PurchaseOrder(supplier_id="BE-A", po_number="DIE-PO", po_line=1, material_id="D-12", status="open",
+                        promised_date=date(2027, 1, 10), buyer="Lin Park", source="purchasing"),
+    ])
+    for supplier in ("BE-A", "BE-B"):
+        store.add_all([m.Supplier(supplier_id=supplier, country="BE", name=supplier, status="blocked",
+                                 qualification_valid_until=date(2025, 1, 1), source="suppliers"),
+                      m.PurchaseOrder(supplier_id=supplier, po_number=supplier+"-CAST", po_line=1, material_id="T-9",
+                                      status="awaiting_approval", buyer="Lin Park", source="purchasing"),
+                      *[m.Shipment(supplier_id=supplier, shipment_id=supplier+str(n), origin="BEANR", mode="sea", status="delayed",
+                                   updated_at=datetime(2026, 11, 21, tzinfo=timezone.utc), source="transit") for n in (1,2)],
+                      *[m.Issue(raised_by="reconciler", type="quality", kind="human_check", supplier_id=supplier, severity=4,
+                                fingerprint=supplier+str(n)) for n in (1,2)]])
+    assert client.post("/api/risk/refresh").json()["data"]["failures"] == []
+    entry, = [q for q in future(client) if q["option"]["actions"][0]["supplier_id"] == "BE-A"]
+    opt = entry["option"]
+    assert opt["button_label"] == "Check applicability" and opt["approvers"] == ["Lin Park"]
+    exposure = opt["exposure"]
+    assert not exposure["orders"] and [o["po"] for o in exposure["verification_orders"]] == ["DIE-PO"]
+    official, = next(s["sources"] for s in exposure["signals"] if s["factor"] == "regulatory_change")
+    assert official["evidence"]["source_kind"] == "Official publication"
+    match, = official["material_matches"]
+    assert (match["term"], match["part"]) == ("Semiconductors", "D-12")
+    assert {e["path"] for e in match["evidence"]} == {"allocations", "material-master"}
+    assert not any(q["option"]["actions"][0]["supplier_id"] == "BE-B" for q in future(client))
+    assert not store.all_rows(m.Forecast) and not store.all_rows(m.OutboxMessage)
+
+
+def test_downstream_failure_after_risk_refresh_remains_visible_after_restart():
+    client = TestClient(app)
+    store.add_all([m.Supplier(supplier_id="FIX", name="Fixture")])
+    def interrupted(event):
+        raise RuntimeError("test interruption while updating the decision")
+    system.bus().subscribe(events.RISK_UPDATED, "test-decision-subscriber", interrupted)
+    attempt = client.post("/api/risk/refresh").json()["data"]
+    assert attempt["status"] == "partial"
+    restart()
+    health = client.get("/api/health").json()["data"]
+    assert health["status"] == "degraded" and health["lastRiskCheck"]["failures"] == attempt["failures"]
+    assert client.post("/api/risk/refresh").json()["data"]["status"] == "completed"
+    assert client.get("/api/health").json()["data"]["status"] == "ok"

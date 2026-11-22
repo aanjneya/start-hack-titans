@@ -55,6 +55,7 @@ class Settings:
     watch_interval_min: float
     portal_mirror: Path
     replay_db_path: Path | None = None
+    risk_refresh_interval_min: float = 0.0
     # Chaser mailbox (shared team mailbox; see .brain/tasks/4-chaser.md)
     mail_address: str = ""
     mail_password: str = ""
@@ -106,6 +107,7 @@ def get_settings() -> Settings:
         soony_api_token=get("SOONY_API_TOKEN"),
         customer_setup=get("CUSTOMER_SETUP", "soony"),
         watch_interval_min=float(get("WATCH_INTERVAL_MIN", "0") or 0),
+        risk_refresh_interval_min=float(get("RISK_REFRESH_INTERVAL_MIN", "0")),
         portal_mirror=Path(get("PORTAL_MIRROR", str(BACKEND_ROOT / "data" / "portal"))),
         mail_address=get("MAIL_ADDRESS"),
         mail_password=get("MAIL_PASSWORD"),

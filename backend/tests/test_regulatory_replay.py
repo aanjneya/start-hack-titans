@@ -506,6 +506,20 @@ def test_market_price_can_open_and_withdraw_a_buyer_check_without_a_portal_drop(
     assert not store.all_rows(m.Forecast) and not store.all_rows(m.OutboxMessage) and not store.all_rows(m.DropRecord)
 
 
+def test_delivery_record_counts_only_completed_lines_before_the_warning():
+    from backend.agents.planner_regulatory import delivery_history
+
+    def line(number, status, arrived, site="H1"):
+        return m.PurchaseOrder(po_number=number, po_line=1, plant=site, supplier_id="V", material_id="BOX",
+                               promised_date=date(2026, 5, 1), actual_delivery_date=arrived, status=status, source="ERP")
+    actual = date(2026, 5, 1)
+    store.add_all([line("finished", "delivered", actual), line("later", "closed", date(2026, 5, 3)),
+                   line("partial", "partially received", actual), line("unknown", "", actual),
+                   line("cancelled", "cancelled", actual), line("other-site", "received", actual, "H2")])
+    result = delivery_history("V", "BOX", "H1", date(2026, 5, 2))
+    assert result["count"] == result["on_time"] == 1 and result["recent"][0]["po"] == "finished"
+
+
 def test_future_exposure_counts_physical_po_lines_once_and_withholds_disputed_terms():
     from backend.agents.planner_regulatory import open_orders, order_value
 

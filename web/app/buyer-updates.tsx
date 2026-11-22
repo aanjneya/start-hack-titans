@@ -116,7 +116,7 @@ export default function BuyerUpdates(props:Props) {
       <h3 className="mt-3 border-t border-rule pt-3 font-bold">Recent updates</h3>
       {!visible.length ? <p className="mt-1 text-muted">No matching updates in recent activity.</p> :
         <ul className="mt-1 max-h-56 overflow-y-auto">{visible.slice(0, 8).map(item => <li key={item.id} className="border-b border-rule py-2 last:border-b-0">
-          <time className="block text-xs text-muted">{clock(item.at)}</time>
+          <time className="block text-xs text-muted">{clock(item.at, props.setup.timezone || "UTC")} {props.setup.timezone || "UTC"}</time>
           {item.key || item.mail ? <button className="text-left font-medium text-act underline" onClick={() => {
             setOpen(false); if (item.key) props.onAction(item.key); else if (item.mail) props.onMail(item.mail);
           }}>{item.text}</button> : <a className="text-act underline" href={API_URL + "/api/trace?trace_id=" + item.id}>{item.text}</a>}

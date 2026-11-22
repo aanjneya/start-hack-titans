@@ -28,6 +28,8 @@ Set `MOCK_MODE=false` + `ANTHROPIC_API_KEY` (or `ant auth login`) to use Claude 
 
 ## Launch Planner demo
 
+To present the real Soony warning, start `backend/.venv/bin/python -m backend.planner_demo --serve-soony --port 8000` from the repository root. Open the frontend connected to that API and click **Play next data drop**. The server starts from the recorded drop immediately before the supplier notice and keeps the rehearsal in a temporary database. For the €500 financial follow-up, start the same command with `--serve-pickup` instead.
+
 Run `backend/.venv/bin/python -m backend.planner_demo` from the repository root. It replays the Git data drops through the 17:23 sleeve scenario into a temporary SQLite database and prints both edition forecasts, the revision decision, the mock Chaser handoff, the accepted supplier reply, and its trace ID. For the latest data, run the full replay in an isolated database. The 21:38 drop includes the receipt for that shipment.
 
 The baseline uses the workbook timestamp, working shifts, eligible lots and confirmed line-ready inbound. An option’s copies gained measures its effect on finished copies by the deadline. The published print quote excludes freight. For an amendment to an existing PO, approval uses the whole priced PO plus the incremental charge.

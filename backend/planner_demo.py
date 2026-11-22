@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-# The 17:23 drop has the revision finding and an outstanding sleeve delivery.
+# The 17:23 drop introduces the magnet notice and still has the outstanding sleeve delivery.
 # The evening receipt legitimately changes the recommended action.
 SLEEVE_SCENARIO_COMMIT = "f832f462bf8fbca26f1cad93f124a62d3a43a853"
 
@@ -146,6 +146,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description=__doc__)
     serve = parser.add_mutually_exclusive_group()
+    serve.add_argument("--serve-soony", action="store_true", help="serve real Soony history one drop before the magnet warning")
     serve.add_argument("--serve-inquiry", action="store_true", help="serve the simulated recount before any buyer action")
     serve.add_argument("--serve-pickup", action="store_true", help="serve the simulated €500 quote for the buyer UI")
     serve.add_argument("--serve-market", action="store_true", help="serve a second customer's isolated 20% to 85% market move")
@@ -161,17 +162,24 @@ if __name__ == "__main__":
         from fastapi.testclient import TestClient
         from .app.main import app
         with TestClient(app) as client:
-            if args.serve_pickup or args.serve_inquiry:
-                for _ in range(sleeve_scenario_steps()):
-                    client.post("/api/replay/step").raise_for_status()
+            if args.serve_soony or args.serve_pickup or args.serve_inquiry:
+                steps = sleeve_scenario_steps()
+                if args.serve_soony:
+                    steps -= 1  # Leave the supplier notice for the presenter's first click.
+                for step in range(1, steps + 1):
+                    response = client.post("/api/replay/step")
+                    response.raise_for_status()
+                    prepared = response.json()["data"]
+                    if prepared.get("status") != "completed" or prepared.get("step") != step:
+                        raise RuntimeError(f"Historical preparation stopped at step {step}: {prepared}")
             if args.serve_inquiry:
                 prepare_recount(scratch)
             elif args.serve_pickup:
                 _, reply, fact = prepare_quote_request(client, scratch)
                 quote = {**fact, "mode": "pickup", "incremental_cost_eur": 500, "valid_until": fact["arrival"]}
                 client.post("/api/inbox", json={**reply, "body": "[MOCK] Pickup quote", "quote": quote}).raise_for_status()
-            else:
+            elif not args.serve_soony:
                 print(json.dumps(run(client, scratch), indent=2))
-        if args.serve_pickup or args.serve_inquiry:
+        if args.serve_soony or args.serve_pickup or args.serve_inquiry:
             import uvicorn
             uvicorn.run(app, host="127.0.0.1", port=args.port)

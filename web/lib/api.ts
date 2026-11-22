@@ -131,10 +131,10 @@ const num = new Intl.NumberFormat("en-US");
 export const fmt = (n: number | null | undefined) => (n == null ? "–" : num.format(Math.round(n)));
 export const eur = (n: number | null | undefined) => (n == null ? "–" : `€${num.format(Math.round(n))}`);
 
-export function clock(ts: string | null | undefined): string {
+export function clock(ts: string | null | undefined, timezone = "Europe/Berlin"): string {
   const d = parseTs(ts);
   return d
-    ? d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Europe/Berlin" })
+    ? d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: timezone })
     : "";
 }
 

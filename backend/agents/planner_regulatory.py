@@ -101,7 +101,8 @@ def delivery_history(supplier_id, part, site, as_of):
         if not po or line is None or not all(r.material_id == part and r.plant == site for r in rows):
             continue
         terms = {(r.promised_date, r.actual_delivery_date) for r in rows}
-        if len(terms) != 1 or any((r.status or "").lower() in {"cancelled", "canceled", "open", "awaiting_approval", "pending_approval"} for r in rows):
+        completed = {"delivered", "received", "fully_received", "closed", "complete", "completed"}
+        if len(terms) != 1 or any((r.status or "").strip().lower().replace(" ", "_") not in completed for r in rows):
             continue
         promise, arrived = terms.pop()
         if not promise or not arrived or arrived > as_of or any(r.order_date and min(promise, arrived) < r.order_date for r in rows):

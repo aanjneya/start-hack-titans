@@ -137,12 +137,12 @@ export default function ControlRoom() {
       return;
     }
     if (id !== request.current) return;
-    setOnline(true);
     // Force a full read after user actions and periodically for unlogged external changes.
     if (!force && health.activity_version && health.activity_version === lastSnapshot.current.version
       && Date.now() - lastSnapshot.current.fetched < 30_000) return;
     const { snap: next, missing: failed } = await loadSnapshot(health);
     if (id !== request.current) return;
+    setOnline(true);
     setMissing(failed);
     setSnap(previous => ({...next, ...Object.fromEntries(
       failed.map(name => [name, previous[name as keyof Snapshot]]))}));
@@ -214,6 +214,9 @@ export default function ControlRoom() {
   const latestDrop = !notice && snap.health?.lastDrop?.status === "completed" ? snap.health.lastDrop.run_id : null;
   const updated = future.find(entry => entry.latest_grade_change &&
     [playedRun, marketRun, latestDrop].includes(entry.latest_grade_change.run_id));
+  const newestQuote = snap.inbox.find(reply => reply.processed && reply.result.supplier_quote);
+  const quoted = newestQuote && snap.queue.find(entry => entry.option.available !== false &&
+    entry.option.actions.some(action => action.quote_inbox_id === newestQuote.id));
   const other = snap.queue.filter(entry => !entry.on_time_recovery && entry.option.horizon !== "future");
   const renderActions = (entries: BuyerQueueEntry[]) => <ol className="space-y-4">
     {entries.map(entry => <li id={`action-${entry.key}`} tabIndex={-1} key={entry.key}>
@@ -265,11 +268,15 @@ export default function ControlRoom() {
         {riskCheck.grades_changed == null && " The previous supplier grades still apply."}{" "}
         <a className="font-semibold underline" href={API_URL + "/api/trace?run_id=" + riskCheck.run_id}>View check</a>
       </p>}
-      {(notice || updated) && (
+      {(notice || updated || quoted) && (
         <p role="status" className="mb-4 rounded-md border border-rule bg-surface px-4 py-2 text-sm">
           {updated?.latest_grade_change ? <>{updated.latest_grade_change.supplier} moved from {updated.latest_grade_change.previous} to {updated.latest_grade_change.current} {marketRun === updated.latest_grade_change.run_id ? "after a signal refresh" : "in this drop"}.
             {" "}<button className="font-semibold text-act underline" onClick={() => focusAction(updated.key)}>See buyer decision ↓</button>
-            </> : notice} {notice.includes("decision follow-up") && <a className="font-semibold text-act underline" href="#decision-follow-up">View follow-up</a>}
+            </> : notice || (quoted && <>Supplier {quoted.option.description} quote received
+              {quoted.option.cost_eur != null && <> · <strong>{formatMoney().format(quoted.option.cost_eur)}</strong> fee</>}
+              {quoted.option.approval_basis && <> · <strong>{formatMoney().format(quoted.option.approval_basis.total_eur)}</strong> amended PO</>}.
+              {quoted.option.approvers?.length ? ` Assigned to ${quoted.option.approvers.join(" + ")}. ` : " "}
+              <button className="font-semibold text-act underline" onClick={() => focusAction(quoted.key)}>See approval route ↓</button></>)} {notice.includes("decision follow-up") && <a className="font-semibold text-act underline" href="#decision-follow-up">View follow-up</a>}
         </p>
       )}
       {online === false && (
@@ -282,7 +289,7 @@ export default function ControlRoom() {
       {missing.length > 0 && <p role="alert" className="mb-4 text-sm text-warn">
         Update unavailable for {missing.join(", ")}. Showing the last available data.
       </p>}
-      {supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} online={online === true} mock={mock} refresh={refresh} />}
+      {supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} timezone={snap.setup?.timezone} online={online === true} mock={mock} refresh={refresh} />}
       {!supplierView && (!missing.includes("forecast") || editions.length > 0) &&
         <Hero editions={editions} replayEnabled={!!snap.health?.replayEnabled} ready={online === true} />}
 
@@ -331,7 +338,7 @@ export default function ControlRoom() {
         <CaseUpdates snap={snap} refresh={refresh} current={online === true && !dropBusy && !missing.length} openMail={openMail} />
         <aside aria-labelledby="agents" className="grid items-start gap-6 lg:grid-cols-2">
           <AgentLanes trace={snap.trace} now={now} onOpenData={() => setShowData(true)} />
-          <LiveLog trace={snap.trace} />
+          <LiveLog trace={snap.trace} timezone={snap.setup?.timezone} />
         </aside>
       </div>
 
@@ -359,7 +366,7 @@ export default function ControlRoom() {
         </div>
         {tab === "findings" && <Findings issues={snap.issues} />}
         {tab === "emails" && <Emails activeMail={activeMail} mailVisit={mailVisit} snap={snap} mock={mock} onSent={refresh} />}
-        {tab === "risk" && <>{!supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} online={online === true} mock={mock} refresh={refresh} />}<Risk rows={snap.risk} /></>}
+        {tab === "risk" && <>{!supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} timezone={snap.setup?.timezone} online={online === true} mock={mock} refresh={refresh} />}<Risk rows={snap.risk} /></>}
       </section>
       {showData && <DataDrawer onClose={closeData} />}
     </div>
@@ -859,8 +866,15 @@ function AgentLanes({ trace, now, onOpenData }: { trace: BuyerActivity[]; now: n
   );
 }
 
-function LiveLog({ trace }: { trace: BuyerActivity[] }) {
-  const rows = trace.filter((e) => !e.action.startsWith("handle:") && e.action !== "unhandled").slice(0, 40);
+function LiveLog({ trace, timezone = "UTC" }: { trace: BuyerActivity[]; timezone?: string }) {
+  const seen = new Set<string>();
+  const rows = trace.filter(e => {
+    if (e.action.startsWith("handle:") || e.action === "unhandled" || e.action === "llm_call") return false;
+    const key = JSON.stringify([e.run_id, e.agent, e.action, e.detail]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 40);
   return (
     <section aria-labelledby="log" className="min-w-0">
       <h2 id="log" className="mb-3 text-xl font-bold">
@@ -870,7 +884,9 @@ function LiveLog({ trace }: { trace: BuyerActivity[] }) {
         {rows.length === 0 && <li className="px-4 py-6 text-muted">The agents have not done anything yet.</li>}
         {rows.map((e) => (
           <li key={e.id} className="flex gap-3 border-b border-rule px-4 py-2 last:border-b-0">
-            <span className="shrink-0 text-xs text-muted tabular">{clock(e.ts)}</span>
+            <a className="shrink-0 text-xs text-muted tabular underline decoration-dotted underline-offset-2"
+              href={API_URL + "/api/trace?run_id=" + e.run_id} title={"Open run trace · " + timezone}
+              aria-label={"Open run trace for " + e.agent + " at " + clock(e.ts, timezone)}>{clock(e.ts, timezone)}</a>
             <span className="min-w-0">
               <span className="font-semibold" style={{ color: agentColor(e.agent) }}>
                 {AGENTS.find((a) => a.id === e.agent)?.name ?? e.agent}
@@ -989,7 +1005,7 @@ function EmailView({ focus, m, replies, mock, onSent, timezone, samples }: { foc
           <p className="whitespace-pre-line">{m.body_en || m.body}</p>
           {replies.map((r) => (
             <div key={r.id} className="mt-4 border-l-2 border-ok pl-3">
-              <p className="text-xs text-muted">Reply from {r.supplier_id}, {clock(r.received_at)}</p>
+              <p className="text-xs text-muted">Reply from {r.supplier_id}, {clock(r.received_at, timezone || "UTC")} {timezone || "UTC"}</p>
               <p className="whitespace-pre-line">{r.body}</p>
               <p className="mt-1 text-xs text-muted">{replyOutcome(r, timezone)}</p>
             </div>
@@ -1058,7 +1074,7 @@ function MarketWatch({scores}: {scores: RiskScore[]}) {
   return <details className="basis-full border-t border-rule pt-2 text-sm" open={watches.size === 1 || undefined}>
     <summary className="cursor-pointer font-semibold text-act">Polymarket questions in supplier ratings ({watches.size})</summary>
     <ul className="mt-2 divide-y divide-rule">{[...watches].map(([key, {source, suppliers}]) => <li key={key} className="py-2">
-      <p><strong className="mr-2 tabular">{source.market!.yes_pct}% Yes</strong>
+      <p><strong className="mr-2 tabular">{source.market!.yes_pct}% Yes</strong>{" "}
         {source.live && /^https?:\/\//i.test(source.evidence.path)
           ? <a className="text-act underline" href={source.evidence.path} target="_blank" rel="noreferrer">{source.title} ↗</a> : source.title}</p>
       <p className="text-xs text-muted">{source.live ? "Public market at collection" : "Offline example"} · {source.market!.scope_basis || source.scope}
@@ -1068,8 +1084,8 @@ function MarketWatch({scores}: {scores: RiskScore[]}) {
   </details>;
 }
 
-function SignalRefresh({reading, scores, online, mock, refresh}: {
-  reading: HealthCheckResponse["lastRiskCheck"]; scores: RiskScore[]; online: boolean; mock: boolean; refresh: () => Promise<void>;
+function SignalRefresh({reading, scores, online, mock, refresh, timezone = "UTC"}: {
+  reading: HealthCheckResponse["lastRiskCheck"]; scores: RiskScore[]; online: boolean; mock: boolean; refresh: () => Promise<void>; timezone?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1086,8 +1102,8 @@ function SignalRefresh({reading, scores, online, mock, refresh}: {
   const failed = Object.keys(reading?.unavailable ?? {});
   return <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule bg-surface p-4">
     <div className="text-sm"><h3 className="font-bold">External signal check</h3>
-      <p>{reading ? <>{mock ? "Offline evidence" : "Live monitoring"} · Checked {clock(reading.at)} · {reading.grades_changed == null
-        ? "previous grades retained" : `${reading.grades_changed} grade changes`}</> : "Waiting for the first check."}
+      <p>{reading ? <>{mock ? "Offline evidence" : "Live monitoring"} · Checked {clock(reading.at, timezone)} {timezone} · {reading.grades_changed == null
+        ? "previous grades retained" : `${reading.grades_changed} grade ${reading.grades_changed === 1 ? "change" : "changes"}`}</> : "Waiting for the first check."}
         {reading && <> · <a className="text-act underline" href={API_URL + "/api/trace?run_id=" + reading.run_id}>Check trace</a></>}</p>
       {failed.length > 0 && <p role="alert" className="text-warn">Unavailable feeds · {failed.join(", ")}</p>}
       {error && <p role="status" className="text-warn">{error}</p>}</div>

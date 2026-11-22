@@ -81,6 +81,8 @@ class Impact(BaseModel):
     due_by: Optional[str] = None  # ISO datetime: decide/act before this
     cost_eur: Optional[float] = None  # cost of the problem if nothing is done
     note: str = ""
+    horizon: str = ""
+    owner: str = ""
 
 
 class SuggestedAction(BaseModel):
@@ -474,6 +476,14 @@ class Forecast(SQLModel, table=True):
     details: dict = _json(dict)
 
 
+class RiskFeedSnapshot(SQLModel, table=True):
+    """Last successful provider reading in this customer database, kept across restarts."""
+    __tablename__ = "risk_feed_snapshots"
+    key: str = Field(primary_key=True)
+    collected_at: datetime = Field(default_factory=utcnow)
+    signals: list = _json(list)
+
+
 class RiskScore(SQLModel, table=True):
     __tablename__ = "risk_scores"
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -594,6 +604,10 @@ class DropRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     label: str = ""  # e.g. "2026-11-21T16-08" or a git commit
     mode: str = "live"  # live|replay|manual
+    git_commit: str = ""
+    run_id: str = ""
+    status: str = "running"
+    failures: list = _json(list)
     checked_at: datetime = Field(default_factory=utcnow)
     added: list = _json(list)
     changed: list = _json(list)

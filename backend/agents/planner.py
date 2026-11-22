@@ -13,7 +13,10 @@ from .base import Agent, register
 from .planner_delivery import already_requested, review_key
 from .planner_forecast import simulate
 from .planner_inputs import load_plan
-from .planner_options import options_for
+from .planner_options import options_for, paid_window_open
+from .planner_regulatory import regulatory_option, relevant
+from .planner_sample import sample_inquiry
+from .planner_risk import same_review_option
 
 llm.register_mock("planner.wording", lambda prompt, **_: prompt.splitlines()[0])
 DISPATCH_CHECK = "planner.dispatch.checked"
@@ -23,35 +26,30 @@ DISPATCH_CHECK = "planner.dispatch.checked"
 class LaunchPlanner(Agent):
     name = "planner"
     subscriptions = {events.TRUTH_UPDATED: "on_truth_updated", events.ISSUE_RAISED: "on_issue",
-                     events.RISK_UPDATED: "on_risk", events.DECISION_APPROVED: "on_decision_approved",
+                     events.RISK_UPDATED: "on_risk", events.PLANNER_RECHECK: "on_risk", events.DECISION_APPROVED: "on_decision_approved",
                      events.DECISION_REJECTED: "on_decision_rejected", DISPATCH_CHECK: "on_dispatch_checked"}
 
     def __init__(self, bus):
         super().__init__(bus)
         self._refreshed = {}
         # Restore approvals committed immediately before a process interruption.
-        outdated_baseline = False
-        for card in all_rows(DecisionCard):
-            if card.created_by != self.name:
-                continue
-            if card.status == "proposed" and card.recommended == 0 and card.options:
-                baseline = card.options[0]
-                if baseline.get("description") == "baseline" and (baseline.get("remaining_shortfall") or 0) > 0:
-                    outdated_baseline = True
-            if card.status == "proposed" and card.options and "product_id" not in card.options[0]:
-                outdated_baseline = True
+        with session() as db:
+            active = db.exec(select(DecisionCard).where(DecisionCard.created_by == self.name,
+                             DecisionCard.status.in_(["approved", "proposed"]))).all()
+            reviews = db.exec(select(Issue.id).where(Issue.type == "recovery_review",
+                              Issue.raised_by == self.name, Issue.status != "resolved").limit(1)).first()
+        for card in active:
             if card.status == "approved":
                 self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": card.chosen_option})
-
-        # Existing installations may already have a stale recommendation without another data drop.
-        if outdated_baseline:
+        # Rebuild outdated proposals from the persisted evidence without replaying a drop.
+        if reviews or any(c.status == "proposed" and c.issue_ids for c in active):
             plan = load_plan()
-            if plan:
-                self._refresh(plan, simulate(plan))
+            self._refresh(plan, simulate(plan) if plan else {})
 
     def on_truth_updated(self, event: Event) -> None:
         plan = load_plan()
         if not plan:
+            self._refresh(None, {})
             self.log("awaiting_inputs", "Waiting for a dated edition snapshot, launch date and shift calendar.")
             return
         forecasts = simulate(plan)
@@ -108,7 +106,7 @@ class LaunchPlanner(Agent):
                                          evidence=proof + inbound.get("evidence", []) or plan.evidence)
                 active.add(issue.id)
         for issue in current:
-            if issue.raised_by == self.name and issue.type == "recovery_review" and issue.status != "resolved":
+            if issue.raised_by == self.name and issue.type == "recovery_review" and not issue.impact.get("horizon") and issue.status != "resolved":
                 current_forecast = forecasts.get(issue.product_id)
                 if current_forecast and current_forecast.shortfall == 0:
                     self.resolve_issue(issue.id, "Current evidence covers the edition's outstanding demand.")
@@ -117,36 +115,74 @@ class LaunchPlanner(Agent):
 
     def on_risk(self, event):
         plan = load_plan()
-        if plan:
-            self._refresh(plan, simulate(plan))
+        self._refresh(plan, simulate(plan) if plan else {})
 
     def _refresh(self, plan, forecasts):
         issues = list(all_rows(Issue))
         self._refreshed = {}
+        followups = set()
         for issue in issues:
-            if issue.kind == IssueKind.COPIES_AT_RISK and issue.status != "resolved":
+            if issue.type == "recovery_review" and self._sample_followup(issue, plan):
+                followups.add(issue.id)
+            if issue.status != "resolved" and (relevant(issue) or (plan and issue.kind == IssueKind.COPIES_AT_RISK)):
                 self._card(issue, plan, forecasts)
                 self._refreshed[issue.id] = (trace.current_run_id(), issue.updated_at)
         closed = {i.id for i in issues if i.status == "resolved"}
+        future_issues = {i.id for i in issues if relevant(i)} | followups
+        withdrawn = []
         with session() as s:
-            for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed")).all():
-                if closed.intersection(card.issue_ids):
+            for card in s.exec(select(DecisionCard).where(DecisionCard.status == "proposed",
+                                                         DecisionCard.created_by == self.name)).all():
+                obsolete_review = (any(o.get("horizon") == "future" for o in card.options)
+                                   and not future_issues.intersection(card.issue_ids))
+                if closed.intersection(card.issue_ids) or obsolete_review:
                     card.status = "outdated"
                     s.add(card)
+                    selected = card.options[card.recommended] if card.recommended is not None else {}
+                    exposure = selected.get("exposure")
+                    if exposure:
+                        supplier = selected["actions"][0].get("supplier_id")
+                        latest = s.exec(select(RiskScore).where(RiskScore.entity_type == "supplier",
+                            RiskScore.entity_id == supplier).order_by(RiskScore.id.desc()).limit(1)).first()
+                        detail = f"The supporting finding for {exposure['supplier']} closed or changed."
+                        prior = exposure.get("supplier_rating")
+                        if prior and latest and latest.rating != prior:
+                            detail = f"{exposure['supplier']} moved from {prior} to {latest.rating}."
+                        withdrawn.append((card.id, detail + " The pending supply review was withdrawn."))
             s.commit()
+        for card_id, detail in withdrawn:
+            self.log("review_withdrawn", detail, data={"decision_id": card_id})
 
     def on_issue(self, event):
-        if event.payload.get("kind") != IssueKind.COPIES_AT_RISK:
+        if event.payload.get("kind") not in (IssueKind.COPIES_AT_RISK, IssueKind.HUMAN_CHECK):
             return
         with session() as s:
             issue = s.get(Issue, event.payload["issue_id"])
         if issue and self._refreshed.get(issue.id) == (trace.current_run_id(), issue.updated_at):
             return
         plan = load_plan()
-        if issue and issue.status != "resolved" and plan:
-            self._card(issue, plan, simulate(plan))
+        if issue and issue.type == "recovery_review":
+            self._sample_followup(issue, plan)
+            return
+        if issue and issue.status != "resolved" and (relevant(issue) or (plan and issue.kind == IssueKind.COPIES_AT_RISK)):
+            self._card(issue, plan, simulate(plan) if plan else {})
+
+    def _sample_followup(self, issue, plan):
+        with session() as db:
+            option = sample_inquiry(db, issue, plan)
+        if not option:
+            return False
+        self._save_card(issue, "Sample inquiry · " + issue.fingerprint, [option], 0, None, option["risk_note"],
+                        option["evidence"], option["label"], option["label"])
+        return True
 
     def _card(self, issue, plan, forecasts):
+        if relevant(issue):
+            option = regulatory_option(issue, plan)
+            self._save_card(issue, "Future supply · " + issue.fingerprint, [option], 0, None,
+                            option["risk_note"], option["evidence"], option["label"], option["label"])
+            if issue.kind != IssueKind.COPIES_AT_RISK or not plan:
+                return
         product = issue.product_id or (issue.impact or {}).get("product_id")
         parts = {issue.part_id} if issue.part_id else {p.component_id for p in all_rows(SupplierPartMap)
                                                        if issue.supplier_id and p.supplier_id == issue.supplier_id}
@@ -167,51 +203,58 @@ class LaunchPlanner(Agent):
             title = f"{row.edition} · {issue.type.replace('_', ' ')} · {issue.part_id or issue.subject_id}"
             proof = issue.evidence + plan.evidence + [e for o in options for e in o["evidence"]]
             proof = list({(e["path"], e.get("locator", "")): e for e in proof}.values())
-            with session() as s:
-                previous = next((c for c in s.exec(select(DecisionCard).where(DecisionCard.created_by == self.name)
-                                .order_by(DecisionCard.id.desc())) if issue.id in c.issue_ids and c.title == title), None)
-                if previous and previous.status == "rejected" and previous.recommended is not None:
-                    old = previous.options[previous.recommended]
-                    if (previous.evidence == proof and previous.reasoning == reasoning and
-                            all(old.get(k) == selected.get(k) for k in ("actions", "cost_eur", "copies_gained"))):
-                        continue
-                if (previous and previous.status != "outdated" and previous.options == options
-                        and previous.reasoning == reasoning and previous.evidence == proof
-                        and previous.recommended == recommended and parse_datetime(previous.decide_by) == due):
-                    continue
-                headline = f"{row.edition}: {f.shortfall} copies short. {selected['label']}."
-                alternate = f"{selected['label']}. {row.edition} projects a shortfall of {f.shortfall} copies."
-                wording = [headline, alternate]
-                try:
-                    choice = llm.complete("\n".join(wording), system="Return the clearest of these two headlines verbatim.",
-                                          agent=self.name, task="planner.wording")
-                    summary = choice if choice in wording else headline
-                except llm.LLMError:
-                    summary = headline
-                card = DecisionCard(issue_ids=[issue.id], title=title, summary=summary,
-                                    problem=issue.summary, reasoning=reasoning, evidence=proof, options=options,
-                                    recommended=recommended, approver=" + ".join(selected["approvers"]),
-                                    approver_reason=f"Customer approval matrix on €{selected['approval_value_eur']} "
-                                                    f"for the selected action.",
-                                    needs_approval=selected["needs_approval"], decide_by=due, created_by=self.name)
-                # Wording logs through a separate connection. Claim only after that call returns.
-                s.execute(text("BEGIN IMMEDIATE"))
-                if previous:
-                    s.execute(update(DecisionCard).where(
-                        DecisionCard.id == previous.id, DecisionCard.status == "proposed").values(status="outdated"))
-                auto = (not card.needs_approval and selected["available"] and bool(selected["actions"])
-                        and not already_requested(s, selected, card))
-                if auto:
-                    card.status, card.chosen_option, card.decided_by, card.decided_at = "approved", recommended, "policy", utcnow()
-                s.add(card)
-                s.commit()
-                s.refresh(card)
-            self.log("decision_created", summary, proof, {"decision_id": card.id, "issue_id": issue.id})
-            self.emit(events.DECISION_CREATED, {"decision_id": card.id})
+            headline = f"{row.edition}: {f.shortfall} copies short. {selected['label']}."
+            alternate = f"{selected['label']}. {row.edition} projects a shortfall of {f.shortfall} copies."
+            self._save_card(issue, title, options, recommended, due, reasoning, proof, headline, alternate)
+
+    def _save_card(self, issue, title, options, recommended, due, reasoning, proof, headline, alternate):
+        selected = options[recommended]
+        with session() as s:
+            previous = next((c for c in s.exec(select(DecisionCard).where(DecisionCard.created_by == self.name)
+                            .order_by(DecisionCard.id.desc())) if issue.id in c.issue_ids and c.title == title), None)
+            if previous and previous.status == "rejected" and previous.recommended is not None:
+                old = previous.options[previous.recommended]
+                if (previous.evidence == proof and previous.reasoning == reasoning and
+                        all(old.get(k) == selected.get(k) for k in ("actions", "cost_eur", "copies_gained"))):
+                    return
+            if (previous and previous.status != "outdated" and len(previous.options) == len(options)
+                    and all(same_review_option(a, b) for a, b in zip(previous.options, options))
+                    and previous.reasoning == reasoning and previous.evidence == proof
+                    and previous.recommended == recommended and parse_datetime(previous.decide_by) == due):
+                return
+            wording = [headline, alternate]
+            try:
+                choice = llm.complete("\n".join(wording), system="Return the clearest of these two headlines verbatim.",
+                                      agent=self.name, task="planner.wording")
+                summary = choice if choice in wording else headline
+            except llm.LLMError:
+                summary = headline
+            card = DecisionCard(issue_ids=[issue.id], title=title, summary=summary,
+                                problem=issue.summary, reasoning=reasoning, evidence=proof, options=options,
+                                recommended=recommended, approver=" + ".join(selected["approvers"]),
+                                approver_reason=f"Customer approval matrix on {selected.get('currency', 'EUR')} {selected['approval_value_eur']} "
+                                                f"for the selected action.",
+                                needs_approval=selected["needs_approval"], decide_by=due, created_by=self.name)
+            # Wording logs through a separate connection. Claim only after that call returns.
+            s.execute(text("BEGIN IMMEDIATE"))
+            if previous:
+                s.execute(update(DecisionCard).where(
+                    DecisionCard.id == previous.id, DecisionCard.status == "proposed").values(status="outdated"))
+            auto = (not card.needs_approval and selected["available"] and bool(selected["actions"])
+                    and not already_requested(s, selected, card))
             if auto:
-                self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": recommended, "by": "policy"})
+                card.status, card.chosen_option, card.decided_by, card.decided_at = "approved", recommended, "policy", utcnow()
+            s.add(card)
+            s.commit()
+            s.refresh(card)
+        self.log("decision_created", summary, proof, {"decision_id": card.id, "issue_id": issue.id})
+        self.emit(events.DECISION_CREATED, {"decision_id": card.id})
+        if auto:
+            self.emit(events.DECISION_APPROVED, {"decision_id": card.id, "option": recommended, "by": "policy"})
 
     def on_decision_approved(self, event):
+        from .planner_queue import current_option
+
         with session() as s:
             card = s.get(DecisionCard, event.payload["decision_id"])
             if not card or card.created_by != self.name or card.status != "approved":
@@ -223,13 +266,31 @@ class LaunchPlanner(Agent):
                 s.commit()
                 return
             exists = s.exec(select(OutboxMessage).where(OutboxMessage.decision_id == card.id)).first()
+            expired = not exists and not paid_window_open(selected)
+            managed = bool(selected.get("product_id") or selected.get("horizon") == "future")
+            changed = not exists and not expired and managed and current_option(s, card, card.chosen_option) is None
+            if expired or changed:
+                card.status = "outdated"
+                s.add(card)
+                s.commit()
+        if expired:
+            self.log("authorization_expired", "The quoted service expired before dispatch. Request current terms.",
+                     data={"decision_id": card.id})
+            return
+        if changed:
+            self.log("authorization_changed", "The supporting evidence or assigned signer changed before dispatch.",
+                     data={"decision_id": card.id})
+            self.emit(events.PLANNER_RECHECK, {"decision_id": card.id})
+            return
         review = next((a for a in selected["actions"] if a["type"] == "human_review"), None)
         if review:
             self.raise_issue(type="recovery_review", key=review_key(review),
                              kind=IssueKind.HUMAN_CHECK, severity=4, summary=selected["label"][:160],
                              product_id=review["product_id"], part_id=review["part"],
                              reason=f"{card.approver}: {selected['risk_note']}",
-                             impact={"product_id": review["product_id"], "copies_at_risk": review["copies_at_risk"],
+                             supplier_id=review.get("supplier_id", ""),
+                             impact={**({"horizon": "future", "owner": card.approver, "note": selected.get("review_brief", "")} if selected.get("horizon") else {}),
+                                     "product_id": review["product_id"], "copies_at_risk": review["copies_at_risk"],
                                      "due_by": card.decide_by.isoformat() if card.decide_by else None},
                              evidence=[{"path": f"decisions/{card.id}", "locator": f"approved option {card.chosen_option}"},
                                        *selected["evidence"]])

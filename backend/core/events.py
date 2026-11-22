@@ -6,6 +6,7 @@ TRUTH_UPDATED = "truth.updated"  # Ingest (only writer) -> Reconciler, Risk, Pla
 #   Emit ONLY when something changed (Agent.emit_truth_updated does that check) -> no loops.
 ISSUE_RAISED = "issue.raised"  # Reconciler -> Chaser/Planner/human. payload: {issue_id, kind}
 RISK_UPDATED = "risk.updated"  # Risk -> Reconciler/Planner. payload: {entity_ids}
+RISK_REFRESH_REQUESTED = "risk.refresh.requested"  # refresh external sources against existing customer records
 DECISION_CREATED = "decision.created"  # Planner -> UI. payload: {decision_id}
 DECISION_APPROVED = "decision.approved"  # UI/API -> Planner (execute). payload: {decision_id, option, by}
 DECISION_REJECTED = "decision.rejected"  # UI/API -> Planner. payload: {decision_id, by}
@@ -15,6 +16,8 @@ REPLY_RECEIVED = "reply.received"  # Chaser stores the reply in `inbox` -> Inges
 FORECAST_UPDATED = "forecast.updated"  # Planner -> UI. payload: {forecast_ids}
 
 ALL = [
-    FILES_CHANGED, TRUTH_UPDATED, ISSUE_RAISED, RISK_UPDATED, DECISION_CREATED,
+    FILES_CHANGED, TRUTH_UPDATED, ISSUE_RAISED, RISK_UPDATED, RISK_REFRESH_REQUESTED, DECISION_CREATED,
     DECISION_APPROVED, DECISION_REJECTED, EMAIL_REQUESTED, REPLY_RECEIVED, FORECAST_UPDATED,
 ]
+
+PLANNER_RECHECK = "planner.selection.recheck"  # revalidate buyer options against the current truth store

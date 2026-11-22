@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from collections import Counter
+from decimal import Decimal
 import hashlib
 import json
 import re
 
-from sqlmodel import select
+from sqlmodel import func, select
 
-from ..core.models import DecisionCard, Issue
+from ..core import policy
+from ..core.models import AgentLog, DecisionCard, DropRecord, Issue, RiskScore
 from ..core.parsing import parse_datetime
+from .planner_options import paid_window_open
 
 
 def digest(value):
@@ -25,6 +28,12 @@ def physical_key(option, card=None):
     kind = option.get("description", "")
     part = action.get("part")
     reference = action.get("reference")
+    if option.get("followup_for") and action.get("purpose") == "verify_sample_terms":
+        return ("verify_sample_terms", option["followup_for"], action.get("supplier_id"), action.get("component"), part)
+    if option.get("horizon") == "future" and reference:
+        # Old reviews named only the ordered assembly. The evidence still identifies the embedded component.
+        scope = option.get("exposure") or {}
+        return (kind, reference.split("/")[0], action.get("supplier_id"), part, scope.get("component") or "")
     if action["type"] == "human_review" and kind != "port pickup":
         if kind == "supplier stock offer":
             supplier = action.get("supplier_id")
@@ -56,6 +65,14 @@ def physical_key(option, card=None):
             line.get("shipment_id") or reference, part, target if purpose.startswith("request_quote_") else None)
 
 
+def authorization_key(option, card=None):
+    """Alternative paid services for one shipment line represent one freight commitment."""
+    key = physical_key(option, card)
+    if key and option["actions"][0].get("quote_inbox_id"):
+        return ("accept_freight_service", *key[1:])
+    return key
+
+
 def selection_version(card, index, option):
     return digest([card.id, index, option])
 
@@ -63,18 +80,21 @@ def selection_version(card, index, option):
 def _instructions(option):
     action = option["actions"][0]
     kind = option["description"]
-    dock = [] if option.get("dock_released") else ["Released Hamburg dock slot"]
+    if option.get("horizon") == "future":
+        return option["risk_note"], option["requirements"]
+    site = policy.setup().site or "receiving site"
+    dock = [] if option.get("dock_released") else [f"Released {site} dock slot"]
     if kind == "port pickup":
-        return "Ask Logistics to arrange terminal pickup.", ["Terminal release", "Truck quote and arrival time", *dock]
+        return "Open a Logistics review to price pickup and confirm terminal and dock release.", ["Terminal release", "Truck quote and arrival time", *dock]
     if kind == "supplier stock offer":
-        return "Ask the buyer to verify the finished stock before placing a new PO.", [
-            "Offer validity and freight cost", "Timed Hamburg arrival", "Released dock slot"]
+        return "Verify freight, arrival and dock release before placing a new PO.", [
+            "Offer validity and freight cost", f"Timed arrival at {site}", "Released dock slot"]
     if kind == "quality concession review":
         return "Request a documented Quality concession for this lot.", ["Signed concession", "Recorded lot release"]
     if action["type"] == "human_review":
         return "Open an internal recovery review for the buyer.", ["A feasible recovery option and supporting evidence"]
     if action.get("quote_inbox_id"):
-        return "Ask the Chaser to accept the selected quote and request confirmation.", ["Supplier confirmation of line-ready delivery"]
+        return "Authorize the Chaser to accept this quote and request a confirmed delivery.", ["Supplier confirmation of line-ready delivery"]
     return action["ask"], ["Supplier response matched to the shipment and PO line", *dock]
 
 
@@ -84,16 +104,114 @@ def _rank(item):
     latest = parse_datetime(item["decide_by"])
     as_of = parse_datetime(option.get("as_of"))
     actionable_gain = gain > 0 and (not latest or not as_of or latest >= as_of)
-    return (not actionable_gain, option.get("priority", 999), latest.timestamp() if latest else float("inf"),
-            -gain, item["key"])
+    order_time = latest.timestamp() if latest else float("inf")
+    if option.get("horizon") == "future":
+        action = option["actions"][0]
+        qualified = (action.get("reference") or "").startswith("qualification/")
+        scheduled = (o["promised"] for o in (option.get("exposure") or {}).get("orders", []) if o.get("promised"))
+        return (True, 0 if qualified else 1, option.get("priority", 999), min(scheduled, default="9999-12-31"), -gain, item["key"])
+    nonpreferred = (item.get("freight_comparison") or {}).get("preferred") is False
+    return (not actionable_gain, 2, option.get("priority", 999), order_time, -gain, nonpreferred, item["key"])
+
+
+def compare_freight(entries):
+    """Compare executable priced services for the same physical line and edition."""
+    quotes = {}
+    for entry in entries:
+        option = entry["option"]
+        if (not option["actions"][0].get("quote_inbox_id") or option.get("cost_eur") is None
+                or not (option.get("copies_gained") or 0) > 0):
+            continue
+        scope = (entry["edition"], authorization_key(option))
+        quotes.setdefault(scope, []).append(entry)
+    for group in quotes.values():
+        options = [e["option"] for e in group]
+        def merit(option):
+            return (-option["copies_gained"], option["cost_eur"])
+        best = min(merit(o) for o in options)
+        for entry in group:
+            o = entry["option"]
+            others = sorted((a for a in options if a is not o), key=lambda a: (*merit(a), a["label"]))
+            comparison = dict(
+                fee_per_additional_copy=o["cost_eur"] / o["copies_gained"], preferred=merit(o) == best,
+                alternatives=[dict(label=a["label"], fee=a["cost_eur"], gain=a["copies_gained"])
+                              for a in others])
+            if others:
+                other = others[0]
+                comparison["difference"] = dict(alternative=other["label"],
+                    fee_eur=float(Decimal(str(o["cost_eur"])) - Decimal(str(other["cost_eur"]))),
+                    copies=o["copies_gained"] - other["copies_gained"])
+            entry["freight_comparison"] = comparison
+
+
+def link_shipment_signals(db, entries):
+    """Expose a supplier-level tracking reason only on the physical shipment it describes."""
+    actions = [(e, e["option"]["actions"][0]) for e in entries]
+    suppliers = {a["supplier_id"] for _, a in actions if a.get("shipment_id") and a.get("supplier_id")}
+    if not suppliers:
+        return
+    latest = select(func.max(RiskScore.id)).where(RiskScore.entity_type == "supplier",
+                     RiskScore.entity_id.in_(suppliers)).group_by(RiskScore.entity_id)
+    observations = {}
+    for risk in db.exec(select(RiskScore).where(RiskScore.id.in_(latest))):
+        for r in risk.reasons:
+            for signal in r.get("shipment_observations", []):
+                for shipment in signal.get("shipment_ids", []):
+                    key = risk.entity_id, shipment
+                    if key not in observations or signal["selected_for_rating"]:
+                        observations[key] = (risk.rating, signal)
+    for entry, action in actions:
+        stored = observations.get((action.get("supplier_id"), action.get("shipment_id")))
+        if stored:
+            rating, signal = stored
+            proof = signal["evidence"]
+            readings = [r["source"] for c in entry["option"].get("shipment_checks", []) for r in c["readings"]]
+            entry["tracking_signal"] = dict(supplier_rating=rating, title=signal["title"], text=signal["summary"],
+                                            observed_at=signal.get("observed_at"), evidence=proof,
+                                            same_shipment_source=proof["path"] in readings,
+                                            selected_for_rating=signal["selected_for_rating"])
+
+
+def link_latest_grade_change(db, entries):
+    """A drop can change many grades. Highlight only a transition tied to a current decision from that run."""
+    from .risk_scoring import GRADE_TO_RATING
+
+    drop = db.exec(select(DropRecord).order_by(DropRecord.id.desc()).limit(1)).first()
+    reading = db.exec(select(AgentLog).where(AgentLog.agent == "risk", AgentLog.action == "risk_rated")
+                      .order_by(AgentLog.id.desc()).limit(1)).first()
+    if (reading and reading.data.get("trigger") == "risk.refresh.requested"
+            and (not drop or reading.ts > drop.checked_at)):
+        run_id = reading.run_id
+    elif drop and drop.status == "completed":
+        run_id = drop.run_id
+    else:
+        return
+    logs = db.exec(select(AgentLog).where(AgentLog.run_id == run_id,
+                   AgentLog.action.in_(["decision_created", "grade_changed"])).order_by(AgentLog.id)).all()
+    new_cards = {r.data.get("decision_id") for r in logs if r.agent == "planner" and r.action == "decision_created"}
+    changed = {r.data["entity_id"]: r for r in logs if r.agent == "risk" and r.action == "grade_changed"
+               and r.data.get("entity_type") == "supplier" and r.data.get("entity_id")}
+    for entry in entries:
+        option = entry["option"]
+        exposure = option.get("exposure")
+        if not exposure or not any(s["decision_id"] in new_cards for s in entry["sources"] if not s["related_review"]):
+            continue
+        log = changed.get(option["actions"][0].get("supplier_id"))
+        if log:
+            previous = GRADE_TO_RATING.get(log.data.get("old_grade"))
+            current = GRADE_TO_RATING.get(log.data.get("new_grade"))
+            if previous and current == exposure.get("supplier_rating") and current != previous:
+                entry["latest_grade_change"] = dict(run_id=run_id, trace_id=log.id, previous=previous,
+                                                    current=current, supplier=exposure["supplier"])
 
 
 def buyer_queue(db):
-    cards = db.exec(select(DecisionCard).where(DecisionCard.created_by == "planner")
+    cards = db.exec(select(DecisionCard).where(DecisionCard.created_by == "planner",
+                    DecisionCard.status.in_(["proposed", "approved", "executed"]))
                     .order_by(DecisionCard.id.desc())).all()
     authorized = [(c, c.options[c.chosen_option]) for c in cards
                   if c.status in ("approved", "executed") and c.chosen_option is not None]
-    claimed = {physical_key(option, card) for card, option in authorized}
+    claimed = {authorization_key(option, card) for card, option in authorized}
     specific_decisions = {f"decisions/{card.id}" for card, opt in authorized
                           if any(a.get("type") == "human_review" and a.get("reference")
                                  for a in opt.get("actions", []))}
@@ -107,7 +225,8 @@ def buyer_queue(db):
             continue
         for index, option in enumerate(card.options):
             physical = physical_key(option, card)
-            if not physical or physical in claimed or option.get("available") is False:
+            if (not physical or authorization_key(option, card) in claimed
+                    or option.get("available") is False or not paid_window_open(option)):
                 continue
             key = digest([physical, sorted(option.get("approvers", [])), sorted(option.get("approval_roles", []))])
             step, requirements = _instructions(option)
@@ -128,7 +247,7 @@ def buyer_queue(db):
     entries = sorted(groups.values(), key=_rank)
     specific = {}
     for item in entries:
-        if item["option"]["description"] != "human review":
+        if item["option"]["description"] != "human review" and item["option"].get("horizon") != "future":
             specific.setdefault((item["edition"], item["part"]), item)
     for item in entries:
         target = specific.get((item["edition"], item["part"]))
@@ -150,6 +269,9 @@ def buyer_queue(db):
         entry["shared_shipment"] = scope[1] if counts[scope] > 1 and entry["option"].get("copies_gained") else None
         entry["on_time_recovery"] = not _rank(entry)[0]
         entry["evidence"] = list({digest(e): e for e in entry["evidence"]}.values())
+    compare_freight(groups.values())
+    link_shipment_signals(db, groups.values())
+    link_latest_grade_change(db, groups.values())
     return sorted(groups.values(), key=_rank)
 
 
@@ -164,6 +286,13 @@ def current_option(db, card, index):
     if not issue or issue.status == "resolved":
         return None
     plan = load_plan()
+    if old.get("followup_for"):
+        from .planner_sample import sample_inquiry
+        return old if sample_inquiry(db, issue, plan) == old else None
+    if old.get("horizon") == "future":
+        from .planner_regulatory import regulatory_option
+        from .planner_risk import same_review_option
+        return old if same_review_option(old, regulatory_option(issue, plan)) else None
     row = next((r for r in plan.editions if r.product_id == old.get("product_id")), None) if plan else None
     if row:
         options, _, _ = options_for(issue, plan, simulate(plan)[row.product_id], row)

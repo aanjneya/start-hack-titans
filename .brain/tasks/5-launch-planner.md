@@ -28,6 +28,8 @@ The CPO memo: "One page per day on what can stop a line. Not forty dashboards." 
 - [x] **T5.8** After approval: trigger the action (email via Chaser, record the change), recalculate the forecast, and later mark the issue solved or reopen it.
 - [x] **T5.9** Live data: recalculate the forecast and cards after each drop (e.g. a new `launch_status` file), and mark cards outdated if their numbers changed.
 
+- [x] **T5.11** Rank distinct recovery actions on the buyer screen. Link every contributing finding, group by physical action and approval route, and check the selected version before dispatch.
+
 ## When it's done
 - Verified hero case on `jivi`: the real rev B Finding compares existing supply with a €1,215 fresh print that arrives too late. Approving the request creates a Chaser handoff. Only confirmed line-ready supply enters the projection. In the mirrored data the Standard bottleneck is game cards, so the simulated sleeve reply adds zero finished copies. The priced recovery regression changes the stock count and verifies a positive gain after confirmation.
 - Changing a number in the data changes the forecast (nothing hardcoded).
@@ -43,3 +45,9 @@ Run the isolated historical sleeve replay with `backend/.venv/bin/python -m back
 The evening evidence describes a different baseline. Hamburg projects 608,000 Standard (32,000 short, clear cases) and 66,100 Collector’s (5,900 short, art books). The recorded transcription of WZ-261116-473 is tied to the source file’s SHA-256. The 80,000 booked books include a handwritten correction to 8,000. Lot 5000413071 contributes 16,000 GH6 sleeves after excluding the mislabeled pallet. The remaining game-card shipment is due 24 November. The port pickup and the €16,800 finished-book offer show conditional finished-copy gains. Each still requires site or commercial evidence before the baseline changes.
 
 The buyer control room lists recent approved decisions, the Chaser’s dispatch, the matched reply and the edition forecast at first confirmation. Watcher checked the live 332-file portal manifest twice with no changes. Live Risk Rater checks exercised weather, news, markets and regulation sources alongside shipment telemetry.
+
+### Buyer queue walkthrough
+
+On the evening replay, 19 proposed decisions feed 12 queue entries. The first entry asks the buyer to verify the €16,800 offer for 8,000 finished books. Freight, arrival and dock release determine whether up to 2,500 additional Collector’s copies can be packed. The terminal pickup for SHP-2026-04276 could recover up to 25,200 Standard copies. Its price is unknown. Confirming that same shipment is a separate next step with overlapping gain. Open **Why?** for the source decisions, findings and evidence.
+
+The historical €500 pickup raises the PO approval value to €53,150 and routes to Sofia Marchetti. The isolated mailbox regression verifies one Chaser request after approval and 5,200 additional Standard copies after the matched reply. Replaying the reply adds zero. The full backend suite passed 75 tests, repository verification passed, and the browser walkthrough covered both snapshots.

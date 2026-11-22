@@ -92,3 +92,7 @@
 - **Context**: The team wants to see the clean data Agent 1+2 (Watcher + Ingest) built, in SAP terms.
 - **Decision**: Added (additive only) `GET /api/truth` (tables + row counts) and `GET /api/truth/{table}?q=` (rows with their source file) in `backend/app/main.py`, mirrored in `API_CONTRACT.ts` (`TRUTH`, `TRUTH_ROWS`, `TruthTableInfo`). The SAP field names (EKPO-EBELN, MSEG-MBLNR, MARD-LABST …) live only in the UI, the DB keeps our field names.
 - **Trade-offs**: Read-only, max 5,000 rows per table; no paging yet.
+
+### Ranked buyer queue and approval version (jivi)
+
+The control room reads `GET /api/buyer-queue`. Entries retain their source option indexes, decisions, findings and evidence. `GET /api/decisions/{id}` and `GET /api/issues/{id}` open those records directly. Action identity uses the shipment and order line, supplier offer, or Quality lot. The queue keeps separate approval routes visible. Approval accepts the selected option index and version, rechecks the evidence and signer, and serializes competing authorizations for the same physical action. A stale selection returns HTTP 409 and the control room refreshes.

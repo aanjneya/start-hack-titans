@@ -9,7 +9,7 @@ export function workspaceLocation(path: string, view: string | null, agent: stri
     case "findings": return { section: "Findings", title: "Findings" };
     case "emails": return { section: "Supplier email", title: "Supplier email" };
     case "risk": return { section: "Risk ratings", title: "External risk signals" };
-    case "activity": return { section: "Overview", title: "Activity" };
+    case "activity": return { section: "Activity", title: "Activity" };
     default: return { section: "Overview", title: "Overview" };
   }
 }

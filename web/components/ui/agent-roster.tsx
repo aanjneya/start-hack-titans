@@ -125,7 +125,7 @@ function AgentRoster({
     <section
       data-slot="agent-roster"
       aria-labelledby={`${uid}-t`}
-      className={cn("grid w-full min-w-0 gap-4", className)}
+      className={cn("grid w-full min-w-0 grid-cols-1 gap-4", className)}
       {...props}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -173,7 +173,7 @@ function AgentRoster({
         })}
       </p>
 
-      <ul className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]">
+      <ul className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(15rem,100%),1fr))]">
         {shown.map((a) => {
           const s = STATUS[a.status];
           const Icon = s.icon;

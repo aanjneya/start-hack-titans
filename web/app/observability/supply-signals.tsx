@@ -39,8 +39,8 @@ function sourceKind(source: Source): string {
   return source.evidence.source_kind || "Source type unknown";
 }
 
-function marketsFor(score: RiskScore): MarketSource[] {
-  return (score.reasons[0]?.signal_inputs?.external_politics ?? []).filter((s): s is MarketSource =>
+function marketsFor(sources: Source[]): MarketSource[] {
+  return sources.filter((s): s is MarketSource =>
     s.provider === "polymarket" && !!s.market && Number.isFinite(s.market.yes_pct)
     && s.market.yes_pct >= 0 && s.market.yes_pct <= 100);
 }
@@ -59,35 +59,23 @@ function MarketPrice({ source, unavailable }: { source: MarketSource; unavailabl
   const external = source.live && /^https?:\/\//i.test(source.evidence.path);
   const date = dateLabel(source.observed_at) || dateLabel(source.published);
 
-  return <div className="signal-market bg-act-soft/70 px-4 py-4 sm:px-5">
-    <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
-      <span className="tracking-wide text-act">Polymarket</span>
-      <span className="rounded border border-rule bg-surface px-2 py-1 text-muted">{sourceKind(source)}</span>
-    </div>
-    <h3 className="mt-3 text-lg font-semibold leading-snug text-ink">
-      {external ? <a href={source.evidence.path} className="underline decoration-rule underline-offset-4 hover:decoration-current" rel="noreferrer" target="_blank">{source.title} ↗</a> : source.title}
-    </h3>
-    <figure className="mt-3" aria-label={`Recorded market price, Yes ${yes} percent, No ${no} percent`}>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <strong className="signal-odds figure text-4xl leading-none text-ink">{yes}%</strong>
-        <span className="text-sm font-semibold text-ink">Yes</span>
-        {delta == null && <span className="text-xs text-muted">Earlier price unavailable</span>}
-        {delta === 0 && <span className="text-xs text-muted">Unchanged from the previous recorded rating</span>}
-        {delta != null && delta !== 0 && <span className="text-xs text-muted">{delta > 0 ? "+" : ""}{delta} points from {previous}% Yes at the previous recorded rating</span>}
-      </div>
-      <div className="mt-3 flex h-2 overflow-hidden rounded-sm bg-rule" aria-hidden>
-        <span className="h-full bg-act" style={{width: yes + "%"}} />
-      </div>
-      <figcaption className="mt-1 flex justify-between text-xs text-muted"><span>Yes {yes}%</span><span>No {no}%</span></figcaption>
-    </figure>
-    <p className="mt-3 text-sm text-ink">{side === "No" ? `This question asks about recovery. The rating uses the No price of ${odds}% to measure disruption.` :
-      "A Yes outcome signals greater disruption."}</p>
-    <p className="mt-1 text-xs text-muted">{source.scope || "Scope unknown"} · {dayOrUnknown(date)}
-      {source.market.closes_at && ` · Closes ${dateLabel(source.market.closes_at) || "date unknown"}`}</p>
-    {source.market.scope_basis && <p className="mt-1 text-xs text-muted">{source.market.scope_basis}.</p>}
-    {(unavailable || source.last_known_at) && <p className="mt-2 text-xs font-semibold text-warn">
+  return <li className="signal-market border-b border-rule bg-act-soft/50 px-4 py-3 last:border-b-0 sm:px-5">
+    <p className="text-xs font-semibold text-act">Polymarket · {sourceKind(source)}</p>
+    <p className="mt-1 text-sm leading-snug text-ink">
+      {external ? <a href={source.evidence.path} className="font-medium underline decoration-rule underline-offset-2" rel="noreferrer" target="_blank">{source.title} ↗</a> : source.title}
+      {" "}<strong className="whitespace-nowrap">{yes}% Yes</strong>
+    </p>
+    <p className="mt-1 text-xs text-muted">
+      {side === "No" && <>The disruption outcome is No ({odds}%). </>}
+      {delta === 0 && "Unchanged since the previous rating. "}
+      {delta != null && delta !== 0 && `Previously ${previous}% Yes. `}
+      {source.scope && <>{source.scope} · </>}{dayOrUnknown(date)}
+      {source.market.closes_at && ` · Closes ${dateLabel(source.market.closes_at) || "date unknown"}`}
+    </p>
+    {source.market.scope_basis && <p className="mt-1 text-xs text-muted">{source.market.scope_basis}</p>}
+    {(unavailable || source.last_known_at) && <p className="mt-1 text-xs text-warn">
       Market feed unavailable at the latest check.{source.last_known_at && ` Last successful reading · ${dateLabel(source.last_known_at)}.`}</p>}
-  </div>;
+  </li>;
 }
 
 function dayOrUnknown(date: string | null) {
@@ -97,29 +85,22 @@ function dayOrUnknown(date: string | null) {
 function SourceEvidence({ source }: { source: Source }) {
   const ext = source.live && /^https?:\/\//i.test(source.evidence.path);
   const date = dateLabel(source.published) || dateLabel(source.observed_at);
-  return <div className="min-w-0 border-l border-rule pl-3 text-sm">
-    <p className="font-medium">
-      {ext ? <a href={source.evidence.path} target="_blank" rel="noreferrer" className="text-act underline">{source.title || source.summary} ↗</a> : source.title || source.summary}
-    </p>
-    <p className="mt-0.5 text-xs text-muted">{sourceKind(source)} · {source.scope || "Scope unknown"} · {dayOrUnknown(date)}</p>
-    {source.evidence.quote && <p className="mt-1 text-xs text-muted">{source.evidence.quote}</p>}
-    {!ext && source.evidence.path && <p className="mt-1 break-all text-xs text-muted">{source.evidence.path}</p>}
-    {source.last_known_at && <p className="mt-1 text-xs text-warn">Last successful reading · {dateLabel(source.last_known_at)}</p>}
-  </div>;
+  const title = source.title || source.summary || source.evidence.path || "Untitled source";
+  return <li className="min-w-0 break-words text-sm">
+    <span className="mr-1.5 text-xs font-semibold text-muted">{sourceKind(source)}</span>
+    {ext ? <a href={source.evidence.path} target="_blank" rel="noreferrer" className="text-act underline underline-offset-2">{title} ↗</a> : title}
+    {date && <span className="ml-1 text-xs text-muted">· {date}</span>}
+    {source.last_known_at && <span className="ml-1 text-xs text-warn">· Last successful reading {dateLabel(source.last_known_at)}</span>}
+  </li>;
 }
 
 function SupplierSignals({ row, action, check, change }: {
   row: RiskScore; action?: BuyerQueueEntry; check: Signals; change?: AgentLogEntry;
 }) {
-  const [chosenMarket, setChosenMarket] = useState("");
-  const markets = marketsFor(row);
-  const market = markets.find(item => marketKey(item) === chosenMarket) ?? markets[0];
-  const inputs = row.reasons[0]?.signal_inputs ?? {};
-  const groups = Object.entries(inputs).map(([factor, sources]) => ({
-    factor, sources: sources.filter(s => s.provider !== "polymarket" || !s.market),
-  })).filter(g => g.sources.length);
-  const leadEvidence = groups.flatMap(g => g.sources).find(s => sourceKind(s) === "Official publication")
-    ?? groups.find(g => g.factor === "trade_news")?.sources[0] ?? groups[0]?.sources[0];
+  const inputs = row.reasons.find(reason => reason.signal_inputs)?.signal_inputs ?? {};
+  const markets = marketsFor(inputs.external_politics ?? []);
+  const priced = new Set<Source>(markets);
+  const otherSources = Object.values(inputs).flat().filter(source => !priced.has(source));
   const oldGrade = riskBands[Number(change?.data?.old_grade) - 1]?.rating;
   const transition = action?.option.exposure?.last_grade_change;
   const drivers = transition?.current === row.rating && transition.previous === oldGrade
@@ -127,28 +108,13 @@ function SupplierSignals({ row, action, check, change }: {
   const marketPoints = transition?.drivers.find(d => d.factor === "external_politics");
   const basis = (row.reasons[0] as {score_basis?: {internal: number; external: number; external_raw: number; external_cap: number; total: number}} | undefined)?.score_basis;
   return <>
-    {market ? <div>
-      <MarketPrice source={market} unavailable={check?.unavailable?.polymarket?.reason} />
-      {markets.length > 1 && <label className="flex items-center gap-3 border-t border-rule bg-act-soft/70 px-4 py-2 text-xs sm:px-5">
-        <span className="shrink-0 font-semibold text-act">Market question</span>
-        <select value={marketKey(market)} onChange={e => setChosenMarket(e.target.value)}
-          className="min-w-0 flex-1 truncate rounded border border-rule bg-surface px-2 py-1.5">
-          {markets.map((s, i) => <option key={marketKey(s)} value={marketKey(s)}>{i + 1}. {s.title}</option>)}
-        </select>
-      </label>}
-    </div> : <p className="bg-dock/60 px-4 py-3 text-sm text-muted">This supplier’s rating has no recorded Polymarket price.</p>}
-
+    {markets.length > 0 ? <ul aria-label="Recorded market questions">
+      {markets.map(s => <MarketPrice key={marketKey(s)} source={s} unavailable={check?.unavailable?.polymarket?.reason} />)}
+    </ul> : <p className="bg-dock/60 px-4 py-3 text-sm text-muted">This supplier’s rating has no recorded Polymarket price.</p>}
     <div className="space-y-3 border-t border-rule px-4 py-3 sm:px-5">
-      {groups.length > 0 ? <details>
-        <summary className="cursor-pointer text-sm text-ink">
-          <span className="font-semibold">Other evidence · {groups.length} {groups.length === 1 ? "source group" : "source groups"}</span>
-          {leadEvidence && <span className="mt-1 block"><span className="font-semibold text-act">{sourceKind(leadEvidence)}</span> · {leadEvidence.title || leadEvidence.summary}</span>}
-        </summary>
-        <div className="mt-3 space-y-4">{groups.map(({factor, sources}) => <div key={factor}>
-          <p className="mb-1.5 text-xs font-semibold text-muted">{factorLabels[factor] || factor.replaceAll("_", " ")}</p>
-          <div className="space-y-2">{sources.map((s, i) => <SourceEvidence key={i} source={s} />)}</div>
-        </div>)}</div>
-      </details> : <p className="text-xs text-muted">No other outside sources were retained in this rating.</p>}
+      {otherSources.length > 0 && <ul aria-label="Other recorded sources" className="space-y-2">
+        {otherSources.map((source, index) => <SourceEvidence key={index} source={source} />)}
+      </ul>}
       {oldGrade && change && <div className="text-xs text-muted">
         <p><span className="font-semibold text-ink">Supplier grade {oldGrade} → {row.rating}</span> · Recorded {dateLabel(change.ts)}</p>
         {!!drivers.length && <p className="mt-1">Largest changes · {drivers.map(d => `${factorLabels[d.factor] || d.factor.replaceAll("_", " ")} (${d.after > d.before ? "+" : ""}${Number((d.after - d.before).toFixed(1))} points)`).join(" and ")}.
@@ -167,7 +133,7 @@ function SupplierAction({ supplier, action, waiting, queueAvailable, retry }: {
   const firstOrder = exposure?.orders[0];
   const signers = action?.option.assignments?.map(a => a.person || a.required_role) ?? [];
   return <section id="risk-action" aria-labelledby="risk-action-heading"
-    className="signal-buyer-action min-w-0 scroll-mt-24 rounded-xl border border-rule bg-surface p-4 sm:p-5 lg:col-start-1 lg:row-start-2">
+    className="signal-buyer-action min-w-0 scroll-mt-24 rounded-xl border border-rule bg-surface p-4 sm:p-5 self-start">
     <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
       <h2 id="risk-action-heading" className="text-xl font-bold tracking-tight">Buyer action</h2>
       {supplier && <p className="text-sm font-semibold text-muted">{supplier}</p>}
@@ -191,7 +157,6 @@ function SupplierAction({ supplier, action, waiting, queueAvailable, retry }: {
 export function SupplySignals({ scores, names, preferredSupplier, check, trace, version }: {
   scores: RiskScore[]; names: Record<string, string>; preferredSupplier: string; check: Signals; trace: AgentLogEntry[]; version?: string;
 }) {
-  const [choice, setChoice] = useState(preferredSupplier);
   const [attempt, setAttempt] = useState(0);
   const [queue, setQueue] = useState<{ version?: string; entries: BuyerQueueEntry[] | null } | null>(null);
   useEffect(() => {
@@ -204,7 +169,8 @@ export function SupplySignals({ scores, names, preferredSupplier, check, trace, 
 
   const suppliers = scores.filter(s => s.entity_type === "supplier")
     .sort((a,b) => (recordedScore(b) ?? -1) - (recordedScore(a) ?? -1) || a.entity_id.localeCompare(b.entity_id));
-  const row = suppliers.find(s => s.entity_id === choice) ?? suppliers.find(s => Object.keys(s.reasons[0]?.signal_inputs ?? {}).length) ?? suppliers[0];
+  const row = preferredSupplier ? suppliers.find(s => s.entity_id === preferredSupplier) : suppliers[0];
+  const supplierName = row && (names[row.entity_id] || row.entity_id);
   const currentQueue = queue?.version === version ? queue?.entries : null;
   const entries = currentQueue?.filter(e => e.option.available !== false && e.option.exposure
     && e.option.actions.some(a => a.supplier_id === row?.entity_id)) ?? [];
@@ -212,24 +178,18 @@ export function SupplySignals({ scores, names, preferredSupplier, check, trace, 
   // Prefer the first ranked review backed by an identified order.
   const action = entries.find(e => e.option.exposure?.orders.length) ?? entries[0];
   return <>
-    <section id="risk-signals" aria-labelledby="supply-signals-heading" className="min-w-0 scroll-mt-24 self-start overflow-hidden rounded-xl border border-rule bg-surface lg:col-start-2 lg:row-span-2 lg:row-start-1">
+    <section id="risk-signals" aria-labelledby="supply-signals-heading" className="min-w-0 scroll-mt-24 self-start overflow-hidden rounded-xl border border-rule bg-surface">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-4 py-3 sm:px-5">
         <h2 id="supply-signals-heading" className="text-xl font-bold tracking-tight">Supply signals</h2>
         <Link href="/?view=risk" className="text-xs font-semibold text-act underline">Review signal sources</Link>
       </header>
       {row ? <>
-        <div className="flex items-center gap-3 px-4 py-3 sm:px-5">
-          <label className="shrink-0 text-xs font-semibold text-muted" htmlFor="signal-supplier">Supplier</label>
-          <select id="signal-supplier" value={row.entity_id} onChange={e => setChoice(e.target.value)}
-            className="min-w-0 flex-1 truncate rounded-md border border-rule bg-surface px-2 py-1 text-sm font-semibold">
-            {suppliers.map(s => <option key={s.entity_id} value={s.entity_id}>{names[s.entity_id] || s.entity_id} · {s.rating}</option>)}
-          </select>
-        </div>
+        <p className="px-4 py-2 text-sm sm:px-5"><strong>{supplierName}</strong> <span className="text-muted">· {row.rating}</span></p>
         <SupplierSignals key={row.entity_id} row={row} action={action} check={check}
           change={change?.data?.new_grade === row.grade ? change : undefined} />
       </> : <p className="px-4 py-5 text-sm text-muted">Supply signals appear when a supplier rating has been recorded.</p>}
     </section>
-    <SupplierAction supplier={row && (names[row.entity_id] || row.entity_id)} action={action}
+    <SupplierAction supplier={supplierName} action={action}
       retry={() => { setQueue(null); setAttempt(n => n + 1); }}
       waiting={!queue || queue.version !== version} queueAvailable={currentQueue != null} />
   </>;

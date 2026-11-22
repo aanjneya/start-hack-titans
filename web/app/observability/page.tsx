@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { WorkspaceMetadataMarker } from "../workspace-metadata-marker";
 import ObservabilityDashboard from "./observability-dashboard";
 import { workspaceMetadata } from "../workspace-location";
 
@@ -8,8 +9,11 @@ export function generateMetadata({ searchParams }: PageProps<"/observability">) 
 
 export default function ObservabilityPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-sm text-muted">Loading Agent Team…</div>}>
-      <ObservabilityDashboard />
-    </Suspense>
+    <>
+      <Suspense fallback={<div className="p-8 text-sm text-muted">Loading Agent Team…</div>}>
+        <ObservabilityDashboard />
+      </Suspense>
+      <WorkspaceMetadataMarker />
+    </>
   );
 }

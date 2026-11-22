@@ -3,7 +3,7 @@
 // Control room: what can stop the line, one tile per part or supplier. Plain words and one number per tile;
 // "See details" opens the three best actions as 3D cards, each routed to its approver by amount.
 import {
-  ArrowLeft, ArrowRight, Boxes, Check, ChevronDown, ClipboardCheck, Loader2, Mail, PackageSearch, ShieldCheck, Sparkles, Truck,
+  ArrowLeft, ArrowRight, Boxes, Check, ChevronDown, ChevronRight, ClipboardCheck, Loader2, Mail, PackageSearch, ShieldCheck, Sparkles, Truck,
   Users, X, type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -58,6 +58,7 @@ export interface RiskGroup {
   /** Editions whose current forecast identifies this part as the binding constraint. */
   constrained: Forecast[];
   copiesAtRisk: number | null;
+  futureSupply: { orderLines: number; leadDays: number | null } | null;
   editions: { edition: string; shortfall: number | null }[];
   rating: string | null;
   /** The finding that best explains the risk (its one-line summary is the executive summary). */
@@ -377,6 +378,23 @@ function rankActions(
     .map((r) => r.action);
 }
 
+function futureSupplyImpact(actions: RiskAction[]): RiskGroup["futureSupply"] {
+  const exposures = actions.flatMap(action => {
+    const option = action.optionIndex == null ? undefined : action.card?.options[action.optionIndex];
+    return option?.horizon === "future" && option.exposure ? [option.exposure] : [];
+  });
+  if (!exposures.length) return null;
+  const lines = new Set<string>();
+  const leadTimes = new Set<number>();
+  for (const exposure of exposures) {
+    for (const order of exposure.orders ?? []) {
+      if (order.po && order.line != null) lines.add(JSON.stringify([order.po, order.line]));
+    }
+    if (exposure.lead_days != null) leadTimes.add(exposure.lead_days);
+  }
+  return { orderLines: lines.size, leadDays: leadTimes.size === 1 ? [...leadTimes][0] : null };
+}
+
 export function buildRiskGroups(input: {
   decisions: DecisionCard[];
   issues: Issue[];
@@ -440,10 +458,11 @@ export function buildRiskGroups(input: {
     );
     const scope = actionScope(key, kind, issues);
     // The buyer queue (backend ranking) wins where it has actions for this tile; otherwise rank the cards' options here.
-    const tileActions = () => {
-      const queued = queue ? queueActions(queue, { key, kind, cards }, scope, cardById, matrix) : [];
-      return queued.length ? queued : rankActions(cards, findings, matrix, scope);
-    };
+    const queued = queue ? queueActions(queue, { key, kind, cards }, scope, cardById, matrix) : [];
+    const actions = queued.length ? queued : rankActions(cards, findings, matrix, scope);
+    const constrained = forecast.filter(f => f.limiting_part === key && (f.shortfall ?? 0) > 0);
+    const hasCurrentImpact = constrained.length > 0 || copies.length > 0 || actions.some(a => (a.copiesGained ?? 0) > 0);
+    const futureSupply = hasCurrentImpact ? null : futureSupplyImpact(actions);
     return {
       key,
       kind,
@@ -452,14 +471,15 @@ export function buildRiskGroups(input: {
       company,
       severity: top?.severity ?? 4,
       hoursLeft,
-      constrained: forecast.filter(f => f.limiting_part === key && (f.shortfall ?? 0) > 0),
+      constrained,
       copiesAtRisk: copies.length ? Math.max(...copies) : null,
+      futureSupply,
       editions,
       rating: latestRisk.get(key)?.rating ?? null,
       lead: top,
       cards,
       findings,
-      actions: tileActions(),
+      actions,
     };
   });
 
@@ -473,6 +493,12 @@ function headline(g: RiskGroup): { value: string; caption: string; stop: boolean
   const binding = g.constrained[0];
   if (binding?.shortfall != null) return { value: fmt(binding.shortfall), caption: `${binding.edition} copies short`, stop: true };
   if (g.copiesAtRisk != null) return { value: fmt(g.copiesAtRisk), caption: "copies at risk", stop: true };
+  if (g.futureSupply) {
+    const { orderLines, leadDays } = g.futureSupply;
+    if (orderLines) return { value: fmt(orderLines), caption: `future order ${orderLines === 1 ? "line" : "lines"} to review`, stop: false };
+    if (leadDays != null) return { value: `${fmt(leadDays)} days`, caption: "lead time for future deliveries", stop: false };
+    return { value: "Future supply", caption: "exposure to verify", stop: false };
+  }
   if (g.hoursLeft != null) return { value: `${fmt(Math.max(0, g.hoursLeft))} h`, caption: "of stock at the packing rate", stop: false };
   return null;
 }
@@ -572,7 +598,7 @@ export function RiskBoard({
           <button type="button" aria-expanded={showAll} aria-controls="risk-list"
             className="shrink-0 rounded px-1 py-1 text-sm font-semibold text-act hover:underline"
             onClick={() => setShowAll(!showAll)}>
-            {showAll ? "Show fewer risks" : `Show all ${groups.length} risks`}
+            {showAll ? "Show fewer risks" : `View all ${groups.length} risks`}
           </button>
         )}
       </div>
@@ -580,16 +606,13 @@ export function RiskBoard({
       {groups.length === 0 ? (
         <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">{emptyText}</p>
       ) : (
-        <ul id="risk-list" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <ol id="risk-list" className="divide-y divide-rule overflow-hidden rounded-lg border border-rule bg-surface">
           {(showAll ? groups : groups.slice(0, 3)).map((g) => (
-            <li key={g.key} className="flex">
-              <RiskTile
-                group={g}
-                onOpen={() => setSnapshot(g)}
-              />
+            <li key={g.key}>
+              <RiskRow group={g} onOpen={() => setSnapshot(g)} />
             </li>
           ))}
-        </ul>
+        </ol>
       )}
 
       {selectedAction && renderAction && (
@@ -621,12 +644,12 @@ export function RiskBoard({
   );
 }
 
-const SEVERITY: Record<number, { label: string; dot: string; bar: string }> = {
-  5: { label: "Urgent", dot: "bg-signal-red", bar: "bg-signal-red" },
-  4: { label: "High", dot: "bg-signal-red/70", bar: "bg-signal-red/70" },
-  3: { label: "Today", dot: "bg-signal-amber", bar: "bg-signal-amber" },
-  2: { label: "Watch", dot: "bg-signal-green", bar: "bg-signal-green" },
-  1: { label: "Info", dot: "bg-rule", bar: "bg-rule" },
+const SEVERITY: Record<number, { label: string; dot: string }> = {
+  5: { label: "Urgent", dot: "bg-signal-red" },
+  4: { label: "High", dot: "bg-signal-red/70" },
+  3: { label: "Today", dot: "bg-signal-amber" },
+  2: { label: "Watch", dot: "bg-signal-green" },
+  1: { label: "Info", dot: "bg-rule" },
 };
 const sev = (s: number) => SEVERITY[Math.min(5, Math.max(1, Math.round(s)))];
 
@@ -641,35 +664,30 @@ export function SeverityLabel({ severity, className }: { severity: number; class
   );
 }
 
-function RiskTile({ group, onOpen }: { group: RiskGroup; onOpen: () => void }) {
-  const s = sev(group.severity);
+function RiskRow({ group, onOpen }: { group: RiskGroup; onOpen: () => void }) {
   const num = headline(group);
   const cta = group.actions.length > 1 ? "Compare actions" : group.actions.length === 1 ? "Review action" : "Review findings";
+  const subject = [group.thing, group.company].filter(Boolean).join(" · ") || group.key;
   return (
-    <article
-      className="group relative flex w-full flex-col overflow-hidden rounded-xl border border-rule bg-surface p-4 focus-within:ring-2 focus-within:ring-act hover:border-act"
-    >
-      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-1", s.bar)} />
-      <SeverityLabel severity={group.severity} />
-      <h3 className="mt-2 text-base font-semibold leading-snug text-ink">{group.title}</h3>
-      <p className="mt-1 break-words text-sm leading-snug text-muted">
-        {[group.thing, group.company].filter(Boolean).join(" · ") || group.key}
+    <article className="group relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3.5 py-3 hover:bg-dock/60 focus-within:bg-act-soft focus-within:ring-2 focus-within:ring-inset focus-within:ring-act sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)_auto] sm:px-5">
+      <div className="col-start-1 row-start-1 min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+          <h3 className="break-words text-[15px] font-semibold leading-snug text-ink">
+            <button type="button" aria-haspopup="dialog" aria-label={`${cta} for ${group.title} · ${subject}`}
+              onClick={e => { e.currentTarget.focus({ preventScroll: true }); onOpen(); }}
+              className="text-left outline-none after:absolute after:inset-0 after:z-10 group-hover:underline">
+              {group.title}
+            </button>
+          </h3>
+          <SeverityLabel severity={group.severity} />
+        </div>
+        <p className="mt-0.5 break-words text-xs leading-snug text-muted">{subject}</p>
+      </div>
+      <p className="col-start-1 row-start-2 break-words text-sm leading-snug sm:col-start-2 sm:row-start-1">
+        {num ? <><strong className={cn("tabular", num.stop && "text-stop")}>{num.value}</strong>{" "}{num.caption}</> :
+          group.rating ? <><strong>{group.rating}</strong> risk rating</> : "Impact under review"}
       </p>
-      {num && (
-        <p className="mt-3 text-sm">
-          <strong className={cn("tabular", num.stop && "text-stop")}>{num.value}</strong>{" "}{num.caption}
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={e => { e.currentTarget.focus({ preventScroll: true }); onOpen(); }}
-        aria-haspopup="dialog"
-        aria-label={`${cta} for ${group.title} · ${[group.thing, group.company].filter(Boolean).join(", ") || group.key}`}
-        className="mt-auto inline-flex items-center gap-1.5 self-start pt-4 text-[13.5px] font-semibold text-act outline-none after:absolute after:inset-0 after:rounded-xl after:content-[''] group-hover:underline"
-      >
-        {cta}
-        <ArrowRight aria-hidden className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none" />
-      </button>
+      <ChevronRight aria-hidden className="col-start-2 row-span-2 row-start-1 size-4 text-act sm:col-start-3 sm:row-span-1" />
     </article>
   );
 }
@@ -796,7 +814,7 @@ function RiskDialog({
   const lead = group.lead ?? group.findings[0];
   const evidence = group.findings.flatMap((f) => f.evidence ?? []);
   const num = headline(group);
-  const short = group.editions.filter((e) => (e.shortfall ?? 0) > 0);
+  const short = group.futureSupply ? [] : group.editions.filter((e) => (e.shortfall ?? 0) > 0);
 
   const queued = live && renderAction ? live.actions.filter(a => a.key.startsWith("queue:")) : [];
   const shown = new Set(top.map(a => a.key));

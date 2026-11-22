@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BuyerActivity, BuyerQueueEntry, CustomerSetup, DecisionCard, InboxMessage } from "../../API_CONTRACT";
 import { API_URL, clock } from "@/lib/api";
 
@@ -12,7 +12,7 @@ const levels = [
 type Level = typeof levels[number]["id"];
 type Update = {id:number; at:string; text:string; key?:string; mail?:number; tier:Level};
 type Props = {setup:CustomerSetup; activity:BuyerActivity[]; queue:BuyerQueueEntry[]; inbox:InboxMessage[]; decisions:DecisionCard[];
-  onAction:(key:string)=>void; onMail:(id:number)=>void; describeReply:(m:InboxMessage)=>string};
+  approvalLimits:ReactNode; onAction:(key:string)=>void; onMail:(id:number)=>void; describeReply:(m:InboxMessage)=>string};
 
 const activityLabels: Record<string,string> = {
   check:"Watcher checked the supplier portal", replay_manifest:"Watcher passed the historical file changes to Ingest",
@@ -23,7 +23,7 @@ const activityLabels: Record<string,string> = {
   draft_email:"Chaser prepared a supplier email for delivery",
 };
 
-function updates({activity, queue, inbox, decisions, setup, describeReply}:Omit<Props,"onAction"|"onMail">): Update[] {
+function updates({activity, queue, inbox, decisions, setup, describeReply}:Omit<Props,"onAction"|"onMail"|"approvalLimits">): Update[] {
   const recommended = new Map(decisions.map(c => [c.id, c.recommended]));
   const byCard = new Map<number, BuyerQueueEntry>();
   for (const entry of queue) for (const source of entry.sources) {
@@ -78,6 +78,7 @@ export default function BuyerUpdates(props:Props) {
   const storeKey = JSON.stringify(["buyer-updates", API_URL, props.setup.customer, props.setup.site, props.setup.demo_buyer]);
   const [pref, setPref] = useState(() => stored(storeKey));
   const [open, setOpen] = useState(false);
+  const [alignRight, setAlignRight] = useState(true);
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -97,13 +98,19 @@ export default function BuyerUpdates(props:Props) {
     try { localStorage.setItem(storeKey, JSON.stringify(pref)); } catch { /* Preferences still apply in this tab. */ }
   }, [pref, storeKey]);
   const unread = pref.seen == null ? 0 : visible.filter(item => item.id > pref.seen!).length;
-  return <div className="relative" ref={panel}>
+  return <div className="relative" ref={panel} onBlur={e => {
+    if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+  }}>
     <button className="rounded-md border border-rule bg-surface px-3 py-2 text-sm font-semibold hover:border-act"
-      aria-expanded={open} aria-controls="buyer-update-list" onClick={() => setOpen(!open)}>My updates
+      aria-expanded={open} aria-controls={open ? "buyer-update-list" : undefined} onClick={e => {
+        setAlignRight(e.currentTarget.getBoundingClientRect().right >= 384);
+        setOpen(!open);
+      }}>Buyer controls
       <span aria-live="polite">{unread > 0 && ` · ${unread} new`}</span></button>
-    {open && <section id="buyer-update-list" aria-label="My updates"
-      className="absolute top-full z-20 mt-2 w-[min(23rem,calc(100vw-2rem))] rounded-lg border border-rule bg-surface p-4 text-sm shadow-lg max-sm:fixed max-sm:inset-x-4 max-sm:top-auto sm:right-0"
+    {open && <section id="buyer-update-list" aria-label="Buyer controls"
+      className={`absolute top-full z-20 mt-2 max-h-[65dvh] w-[min(23rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-rule bg-surface p-4 text-sm shadow-lg max-sm:fixed max-sm:inset-x-4 max-sm:top-auto ${alignRight ? "sm:right-0" : "sm:left-0"}`}
       onKeyDown={e => { if (e.key === "Escape") { setOpen(false); document.querySelector<HTMLButtonElement>('[aria-controls="buyer-update-list"]')?.focus(); } }}>
+      <div className="mb-3 border-b border-rule pb-3">{props.approvalLimits}</div>
       <fieldset><legend className="font-bold">Keep me updated about</legend>
         <p className="mb-2 text-xs text-muted">On this device · {props.setup.demo_buyer}</p>
         {levels.map(level => <label key={level.id} className="flex cursor-pointer items-start gap-2 py-1">
@@ -117,9 +124,9 @@ export default function BuyerUpdates(props:Props) {
           <time className="block text-xs text-muted">{clock(item.at, props.setup.timezone || "UTC")} {props.setup.timezone || "UTC"}</time>
           {item.key || item.mail ? <button className="text-left font-medium text-act underline" onClick={() => {
             setOpen(false); if (item.key) props.onAction(item.key); else if (item.mail) props.onMail(item.mail);
-          }}>{item.text}</button> : <a className="text-act underline" href={API_URL + "/api/trace?trace_id=" + item.id}>{item.text}</a>}
+          }}>{item.text}</button> : <a className="text-act underline" target="_blank" rel="noreferrer" href={API_URL + "/api/trace?trace_id=" + item.id}>{item.text} · Trace (JSON)</a>}
         </li>)}</ul>}
-      <button className="mt-2 font-semibold text-act" onClick={() => setOpen(false)}>Close updates</button>
+      <button className="mt-2 font-semibold text-act" onClick={() => setOpen(false)}>Close buyer controls</button>
     </section>}
   </div>;
 }

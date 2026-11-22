@@ -277,7 +277,7 @@ export default function RiskPlaybook({
             {playbook.second_source_scouts.map((sc) => {
               const expanded = openScout === sc.part_id;
               return (
-                <div key={sc.part_id} className="rounded-lg border border-rule bg-dock/30 p-3.5">
+                <div key={sc.part_id} className="min-w-0 break-words rounded-lg border border-rule bg-dock/30 p-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -292,7 +292,7 @@ export default function RiskPlaybook({
                         {sc.safe_corridors.map((c) => `${c.country} (${c.rating})`).join(", ")}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <span className={`rounded px-2 py-0.5 text-xs font-bold ${gradeBadgeClass(sc.current_grade)}`}>
                         {sc.current_rating}
                       </span>

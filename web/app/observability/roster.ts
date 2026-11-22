@@ -36,10 +36,9 @@ export function buildRosterAgents(
   online: boolean | null,
 ): RosterAgent[] {
   const stats = statsByAgent(snap.trace);
-  const workers = AGENT_NAV.filter((a) => a.id !== "overview");
+  const workers = AGENT_NAV.filter((a) => a.id !== "overview" && a.id !== "human");
   const maxReal = Math.max(1, ...workers.map((w) => stats.get(w.id)?.real ?? 0));
   const registered = new Set(snap.health?.agents ?? []);
-  const proposed = snap.decisions.filter((d) => d.status === "proposed").length;
   const awaitingReply = snap.outbox.filter((m) => m.status === "sent").length;
 
   // In replay mode drops are logged by the coordinator, not the Watcher: count them as the Watcher's work.
@@ -75,13 +74,10 @@ export function buildRosterAgents(
     } else if (recent) {
       status = "working";
       task = lastText;
-    } else if (a.id === "human" && proposed > 0) {
-      status = "waiting";
-      task = `${plural(proposed, "decision card")} waiting for approval.`;
     } else if (a.id === "chaser" && awaitingReply > 0) {
       status = "waiting";
       task = `Waiting on ${plural(awaitingReply, "supplier reply", "supplier replies")}. ${lastText}`.trim();
-    } else if (!st.real && !lastTs && registered.size > 0 && !registered.has(a.id) && a.id !== "human") {
+    } else if (!st.real && !lastTs && registered.size > 0 && !registered.has(a.id)) {
       status = "offline";
       task = "Not registered in this backend.";
     } else {

@@ -1,8 +1,6 @@
 # web: line control screen (basic)
 
-One page that shows what the agents do: the forecast per edition (copies missing at close), the decision
-cards to approve, the six agents working, a live log, and tabs for findings, supplier emails and risk.
-It only talks to the FastAPI backend (`API_CONTRACT.ts` types, polled every 3 s).
+**Overview** shows the three leading risks, the packing forecast and a supplier to watch. Open a risk to compare actions, or use **View all risks** to see the rest. **Risk ratings** shows products, parts and suppliers together with their sources. **More** opens the full forecast, findings, supplier email, Agent Team and activity. The frontend reads the FastAPI backend using the types in `API_CONTRACT.ts`.
 
 ## Run it (two terminals, from the repo root)
 
@@ -22,6 +20,7 @@ Open http://localhost:3000 and press **Play next data drop**: each click sends t
 - In mock mode nothing leaves the laptop: emails show as **Simulated**, the AI answers are canned.
 - "Send test reply" under an email feeds a supplier answer into the loop (inbox → Ingest → Reconciler/Planner).
 - `./scripts/verify.sh` lints and builds this folder, so run `npm --prefix web install` once after pulling.
+- With Node 22.6+ run `node --experimental-strip-types --test web/tests/rating-reasons.test.mjs` from the repository root to check the attribution of a rating to its sources.
 
 ## Buyer approval demo
 
@@ -39,9 +38,9 @@ backend/.venv/bin/python -m backend.core.replay --upto 2
 backend/.venv/bin/uvicorn backend.app.main:app --port 8000
 ```
 
-In a second terminal run `npm --prefix web run dev`. Open the buyer screen and play the next historical drop. In **Future supply**, expand **Why?** to see the change in supplier grade, external sources, dated order lines, and the supplier’s sample offer. **Start qualification review** opens the assigned internal record in Decision follow-up.
+In a second terminal run `npm --prefix web run dev`. Open the buyer screen and play the next historical drop. Open the export-risk row and its qualification action, then expand **Why?** to see the change in supplier grade, external sources, dated order lines, and the supplier’s sample offer. **Start qualification review** opens the assigned internal record. Find it again under **More → Activity → Decision follow-up**.
 
-For the separate financial scenario use `backend/.venv/bin/python -m backend.planner_demo --serve-inquiry` as the backend. **More packing options** contains the Standard supplier request. Open its thread in Decision follow-up. For the fixture, enter:
+For the separate financial scenario use `backend/.venv/bin/python -m backend.planner_demo --serve-inquiry` as the backend. Open the Standard sleeve risk and select the supplier request. After approval, find its thread under **More → Activity → Decision follow-up**. For the fixture, enter:
 
 ```text
 Pickup quote. PO 4500318775/2, SHP-2026-04313, 20,000 units, rev C, arrival 2026-11-21T15:00+01:00, incremental cost EUR 500, valid until 2026-11-21T15:00+01:00.
@@ -52,4 +51,4 @@ Pickup quote. PO 4500318775/2, SHP-2026-04313, 20,000 units, rev C, arrival 2026
 
 On a future-supply card, expand the Polymarket line for the market question and its source mode. **Compare sample timing** compares the supplier offer with the earliest matching PO delivery. Under **Why?**, open the supplier's original passage and the supplier, component and product grades. **Decision history** follows the finding, signer, review or supplier conversation. In the pickup simulation it includes the original inquiry and the forecast supported by the matched reply. **How the amended PO adds up** shows the lines behind the signing limit.
 
-After opening a qualification review, expand **Open assigned review** in **Decision follow-up**. The separate **Send sample inquiry** action authorizes one Chaser message asking for specifications and terms. Its supplier thread accepts a clearly labeled test reply on the demo backend. Ingest links the reply to the review for evaluation.
+After opening a qualification review, expand **Open assigned review** under **More → Activity → Decision follow-up**. The separate **Send sample inquiry** action authorizes one Chaser message asking for specifications and terms. Its supplier thread accepts a clearly labeled test reply on the demo backend. Ingest links the reply to the review for evaluation.

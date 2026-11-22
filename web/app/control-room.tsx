@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ago, API_URL, ApiHttpError, clock, eur, fmt, getData, parseTs, postData,
   type DecisionCard, type Forecast, type HealthCheckResponse, type InboxMessage,
@@ -10,7 +10,7 @@ import {
 } from "@/lib/api";
 import type { ActionRun, BuyerActivity, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
-import { emailDeliveries, OperationsSummary, PackingOutlook, RecoveryOutlook, SupplierRiskWatch } from "./supply-overview";
+import { emailDeliveries, PackingOutlook, SupplierRiskWatch } from "./supply-overview";
 import DataDrawer from "./data-drawer";
 import { actionLine, entryDetail, humanizeAction } from "./observability/agent-meta";
 import { RiskBoard, SeverityLabel } from "./risk-board";
@@ -155,13 +155,17 @@ function BuyerWorkspace() {
   const closeAction = () => router.replace("/", {scroll:false});
 
   useEffect(() => {
-    const resolveLegacyMail = () => {
+    const resolveLegacyLinks = () => {
+      if (window.location.hash === "#decision-follow-up" && !window.location.search) {
+        router.replace("/?view=activity#decision-follow-up");
+        return;
+      }
       const id = recordId(/^#mail-([0-9]+)$/.exec(window.location.hash)?.[1] ?? null);
       if (id) router.replace(mailHref(id));
     };
-    resolveLegacyMail();
-    window.addEventListener("hashchange", resolveLegacyMail);
-    return () => window.removeEventListener("hashchange", resolveLegacyMail);
+    resolveLegacyLinks();
+    window.addEventListener("hashchange", resolveLegacyLinks);
+    return () => window.removeEventListener("hashchange", resolveLegacyLinks);
   }, [router]);
 
   // On first load, Tab starts at the skip link. Within the workspace it follows the selected record.
@@ -296,6 +300,13 @@ function BuyerWorkspace() {
   const selectedAction = actionKey && queueReady && queue.some(entry => entry.key === actionKey) ? actionKey : null;
   const selectedMailExists = activeMail != null && snap.outbox.some(mail => mail.id === activeMail);
 
+  const sentCount = [...deliveries.values()].filter(status => status === "sent").length;
+  const simulatedCount = [...deliveries.values()].filter(status => status === "simulated").length;
+  const failedCount = snap.outbox.filter(mail => mail.status === "failed").length;
+  const mailCountsReady = online === true && !missing.includes("outbox") && !missing.includes("trace");
+  const caseUpdates = <CaseUpdates selected={followupId} snap={snap} deliveries={deliveries} refresh={refresh}
+    current={online === true && !dropBusy && !missing.length} onAction={openAction} />;
+
   return (
     <div className="mx-auto min-h-screen max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
@@ -310,13 +321,13 @@ function BuyerWorkspace() {
         busy={dropBusy}
         replayEnabled={!!snap.health?.replayEnabled}
         onDrop={nextDrop}
-        updates={snap.setup?.demo_buyer && <BuyerUpdates key={snap.setup.customer + "/" + snap.setup.demo_buyer}
+        updates={snap.setup && (snap.setup.demo_buyer ? <BuyerUpdates key={snap.setup.customer + "/" + snap.setup.demo_buyer}
           setup={snap.setup} activity={snap.trace} queue={queue} inbox={snap.inbox} decisions={snap.decisions} describeReply={describeReply} onMail={openMail}
           onAction={key => {
             const parent = queue.find(e => e.key === key)?.option.followup_for;
             if (parent) router.push(followupHref(parent));
             else openAction(key);
-          }} />}
+          }} approvalLimits={<ApprovalLimits setup={snap.setup} />} /> : <ApprovalLimits setup={snap.setup} />)}
       />
       <main>
       {snap.health?.lastDrop?.mode === "simulation" && <p className="mb-3 border-l-4 border-warn bg-warn-soft px-4 py-2 text-sm font-semibold">
@@ -332,15 +343,13 @@ function BuyerWorkspace() {
         {riskCheck.grades_changed == null && " The previous supplier grades still apply."}{" "}
         <a className="font-semibold underline" target="_blank" rel="noreferrer" href={API_URL + "/api/trace?run_id=" + riskCheck.run_id}>Check trace (JSON)</a>
       </p>}
-      {(notice || (view === "overview" && (updated || quoted))) && (
+      {(notice || (view === "overview" && quoted)) && (
         <p role="status" className="mb-4 rounded-md border border-rule bg-surface px-4 py-2 text-sm">
-          {updated?.latest_grade_change ? <>{updated.latest_grade_change.supplier} moved from {updated.latest_grade_change.previous} to {updated.latest_grade_change.current} {marketRun === updated.latest_grade_change.run_id ? "after a signal refresh" : "in this drop"}.
-            {" "}<button className="font-semibold text-act underline" onClick={() => openAction(updated.key)}>See the action</button>
-            </> : notice || (quoted && <>Supplier {quoted.option.description} quote received
+          {notice || (quoted && <>Supplier {quoted.option.description} quote received
               {quoted.option.cost_eur != null && <> · <strong>{formatMoney().format(quoted.option.cost_eur)}</strong> fee</>}
               {quoted.option.approval_basis && <> · <strong>{formatMoney().format(quoted.option.approval_basis.total_eur)}</strong> amended PO</>}.
               {quoted.option.approvers?.length ? ` Assigned to ${quoted.option.approvers.join(" + ")}. ` : " "}
-              <button className="font-semibold text-act underline" onClick={() => openAction(quoted.key)}>See approval route</button></>)} {notice.includes("decision follow-up") && <Link className="font-semibold text-act underline" href={followupId ? followupHref(followupId) : "/#decision-follow-up"}>View follow-up</Link>}
+              <button className="font-semibold text-act underline" onClick={() => openAction(quoted.key)}>See approval route</button></>)} {notice.includes("decision follow-up") && <Link className="font-semibold text-act underline" href={followupId ? followupHref(followupId) : "/?view=activity#decision-follow-up"}>View follow-up</Link>}
         </p>
       )}
       {online === false && (
@@ -359,8 +368,9 @@ function BuyerWorkspace() {
       {followupId && online && !missing.includes("decisions") && !followupReady && <p role="status" className="my-4 text-sm text-muted">
         {snap.decisions.some(d => d.id === followupId && d.status === "proposed") ? "Waiting for a recorded decision." : "This decision follow-up is unavailable."}
       </p>}
-      {view === "overview" && <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px] xl:gap-8">
-        <div className="min-w-0 space-y-5">
+      {view === "overview" && followupReady && <div className="mt-5">{caseUpdates}</div>}
+      {view === "overview" && <div className="mt-5 grid grid-cols-[minmax(0,1fr)] gap-x-7 gap-y-5 lg:grid-cols-[minmax(0,1fr)_minmax(240px,285px)] xl:gap-x-9">
+        <div className="min-w-0">
           <RiskBoard key={actionKey ?? "overview"}
             current={current}
             decisions={snap.decisions}
@@ -389,41 +399,28 @@ function BuyerWorkspace() {
             )}
           />
 
-          <SupplierRiskWatch scores={snap.risk} queue={snap.queue} waiting={online !== true || missing.includes("risk")} />
-          <div className="grid gap-3 md:grid-cols-2">
-            <PackingOutlook editions={editions} waiting={online !== true || missing.includes("forecast")} replayEnabled={!!snap.health?.replayEnabled} />
-            <RecoveryOutlook queue={snap.queue} waiting={online !== true || missing.includes("queue")} />
-            <OperationsSummary issues={snap.issues} inbox={snap.inbox} outbox={snap.outbox} deliveries={deliveries}
-              issuesReady={online === true && !missing.includes("issues")} mailReady={online === true && !missing.includes("outbox")}
-              repliesReady={online === true && !missing.includes("inbox")} />
-          </div>
         </div>
-
-        <aside aria-labelledby="agents" className="space-y-8">
-          <AgentLanes
-            registered={snap.health?.agents}
-            online={online}
-            traceReady={!missing.includes("trace")}
-            trace={snap.trace}
-            now={now}
-            busy={dropBusy}
-            since={dropStartedAt}
-            onOpenData={() => setShowData(true)}
-          />
-          <CaseUpdates selected={followupId} snap={snap} deliveries={deliveries} refresh={refresh} current={online === true && !dropBusy && !missing.length}
-            onAction={openAction} />
+        <aside className="min-w-0 self-start lg:border-l lg:border-rule lg:pl-5" aria-label="Packing outlook">
+          <PackingOutlook editions={editions} waiting={online !== true || missing.includes("forecast")} replayEnabled={!!snap.health?.replayEnabled} />
         </aside>
+        <SupplierRiskWatch scores={snap.risk} queue={snap.queue} updated={updated} waiting={online !== true || missing.includes("risk")} />
       </div>}
-      {view === "overview" && <section className="mt-6" aria-labelledby="recent-activity">
-        <div className="mb-3 flex items-baseline justify-between gap-3">
-          <h2 id="recent-activity" className="text-xl font-semibold">Recent activity</h2>
-          <Link href="/?view=activity" className="text-sm font-semibold text-act hover:underline">See all activity</Link>
-        </div>
-        {online === true && !missing.includes("trace") ? <LiveLog trace={snap.trace} limit={3} /> : <p className="text-sm text-muted">Waiting for agent activity.</p>}
-      </section>}
+      {view === "overview" && <div className="mt-5 flex flex-wrap items-baseline gap-x-6 gap-y-3 border-t border-rule pt-3 text-sm">
+        <Link className="text-muted hover:text-act hover:underline" href="/?view=findings">
+          {online === true && !missing.includes("issues") && <strong className="text-ink">{fmt(snap.issues.filter(i => i.status !== "resolved").length)} </strong>}Open findings
+        </Link>
+        <Link className="text-muted hover:text-act hover:underline" href="/?view=emails">
+          {mailCountsReady ? <><strong className="text-ink">{fmt(sentCount)}</strong> emails sent
+            {simulatedCount > 0 && ` · ${fmt(simulatedCount)} simulated`}{failedCount > 0 && <span className="font-semibold text-stop"> · {fmt(failedCount)} failed</span>}</> : "Supplier email"}
+        </Link>
+        <button className="text-muted hover:text-act hover:underline" onClick={() => setShowData(true)}>Source records</button>
+        <AgentLanes registered={snap.health?.agents} online={online} traceReady={!missing.includes("trace")} trace={snap.trace}
+          now={now} busy={dropBusy} since={dropStartedAt} />
+      </div>}
       {view !== "overview" && <section className="mt-5 space-y-4" aria-labelledby="buyer-page-heading">
-        {view === "activity" && (snap.trace.length || (online && !missing.includes("trace")) ?
-          <LiveLog trace={snap.trace} /> : <p className="text-muted">Waiting for agent activity.</p>)}
+        {view === "activity" && <>{caseUpdates}
+          {snap.trace.length || (online && !missing.includes("trace")) ? <LiveLog trace={snap.trace} /> : <p className="text-muted">Waiting for agent activity.</p>}
+        </>}
         {view === "findings" && (findingParam != null ?
           <FindingDetail key={findingParam} id={activeFinding} issue={snap.issues.find(issue => issue.id === activeFinding)} queue={current ? queue : []} cards={snap.decisions} />
           : snap.issues.length || (online && !missing.includes("issues")) ? <Findings issues={snap.issues} /> : <p className="text-muted">Waiting for findings.</p>)}
@@ -469,10 +466,10 @@ function CaseUpdates({ snap, deliveries, selected, refresh, current, onAction }:
   return (
     <section id="decision-follow-up" aria-labelledby="decided">
       <h2 id="decided" className="mb-3 text-xl font-bold">
-        Decided
+        Decision follow-up
       </h2>
       <ul className="divide-y divide-rule rounded-lg border border-rule bg-surface">
-        {(all ? decided : decided.filter((item, index) => index < 4 || item.id === selected)).map((d) => {
+        {(selected ? decided.filter(item => item.id === selected) : all ? decided : decided.slice(0, 4)).map((d) => {
           const option = d.options[d.chosen_option!];
           const sent = snap.outbox.find((o) => o.decision_id === d.id);
           const reply = sent && snap.inbox.filter((i) => i.outbox_id === sent.id).sort((a, b) => b.id - a.id)[0];
@@ -540,7 +537,8 @@ function CaseUpdates({ snap, deliveries, selected, refresh, current, onAction }:
           );
         })}
       </ul>
-      {decided.length > 4 && <button className="mt-2 text-sm font-semibold text-act hover:underline" onClick={() => setAll(!all)}>
+      {selected && <Link href="/?view=activity#decision-follow-up" className="mt-2 inline-block text-sm font-semibold text-act hover:underline">See all decision follow-ups →</Link>}
+      {!selected && decided.length > 4 && <button className="mt-2 text-sm font-semibold text-act hover:underline" onClick={() => setAll(!all)}>
         {all ? "Show fewer" : `Show all ${decided.length}`}</button>}
     </section>
   );
@@ -580,75 +578,24 @@ function SampleInquiry({ entry, buyer, current, refresh }: {
 }
 
 /** The human-in-the-loop switch as it is set in the customer setup, and who approves which amount (Soony's matrix). */
-function ApprovalsChip({ autonomy, matrix, buyer }: {
-  autonomy: CustomerSetup["autonomy"];
-  matrix: CustomerSetup["approval_matrix"];
-  buyer?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  // The header wraps on narrow screens, so the chip can sit on the left or the right: open the panel towards the room.
-  const [alignRight, setAlignRight] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const panelId = useId();
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent | KeyboardEvent) => {
-      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", close);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", close);
-    };
-  }, [open]);
-  const control = autonomy.mode === "control";
-  const limit = approvalCurrency.format(autonomy.auto_execute_below_eur);
-  return (
-    <div
-      ref={ref}
-      className="relative"
-      // Tabbing away closes it too (a click on the panel's own text has no related target and keeps it open).
-      onBlur={(e) => {
-        if (e.relatedTarget && !ref.current?.contains(e.relatedTarget)) setOpen(false);
-      }}
-    >
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        onClick={() => {
-          setAlignRight((ref.current?.getBoundingClientRect().right ?? 0) >= 304);
-          setOpen((o) => !o);
-        }}
-        className="rounded bg-act-soft px-2 py-1 text-xs font-bold text-act outline-none hover:bg-act/15 focus-visible:ring-[3px] focus-visible:ring-ring/40"
-      >
-        {control ? "Approvals on" : `Auto < ${limit}`}
-      </button>
-      {open && (
-        <div
-          id={panelId}
-          className={`absolute top-full z-30 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-rule bg-surface p-4 text-sm shadow-lg animate-in fade-in slide-in-from-top-1 duration-150 ${alignRight ? "right-0" : "left-0"}`}>
-          <p className="font-semibold text-ink">
-            {control ? "Every action waits for its approver" : `Agents act on their own below ${limit}`}
-          </p>
-          {matrix.length > 0 && (
-            <dl className="mt-3 space-y-1.5">
-              {matrix.map((r, i) => (
-                <div key={i} className="flex items-baseline justify-between gap-4">
-                  <dt className="text-muted tabular">
-                    {r.below_eur == null ? `≥ ${approvalCurrency.format(matrix[i - 1]?.below_eur ?? 0)}` : `< ${approvalCurrency.format(r.below_eur)}`}
-                  </dt>
-                  <dd className="text-right font-medium text-ink">{r.approvers.join(" + ")}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-          {buyer && <p className="mt-3 border-t border-rule pt-2.5 text-xs text-muted">You approve as {buyer}</p>}
-        </div>
-      )}
-    </div>
-  );
+function ApprovalLimits({ setup }: { setup: CustomerSetup }) {
+  const { autonomy, approval_matrix: matrix } = setup;
+  return <details className="text-sm">
+    <summary className="cursor-pointer font-semibold text-act">Approval limits</summary>
+    <p className="mt-2">{autonomy.mode === "control" ? "Every action waits for its approver."
+      : `Eligible actions below ${approvalCurrency.format(autonomy.auto_execute_below_eur)} can run automatically.`}</p>
+    <dl className="mt-2 space-y-1">
+      {matrix.map((rule, i) => {
+        const from = matrix[i - 1]?.below_eur ?? 0;
+        return <div key={i} className="flex items-baseline justify-between gap-3">
+          <dt className="text-muted tabular">{rule.below_eur == null ? `${approvalCurrency.format(from)} and above`
+            : from ? `${approvalCurrency.format(from)} to < ${approvalCurrency.format(rule.below_eur)}`
+              : `Below ${approvalCurrency.format(rule.below_eur)}`}</dt>
+          <dd className="text-right font-medium">{rule.approvers.join(" + ")}</dd>
+        </div>;
+      })}
+    </dl>
+  </details>;
 }
 
 function TopBar(props: {
@@ -675,7 +622,6 @@ function TopBar(props: {
   const snapshot = parseTs(props.snapshotTime)?.toLocaleString("en-GB", {
     weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: props.setup?.timezone || "UTC",
   });
-  const status = props.online ? "Backend online" : props.online === false ? "Backend offline" : "Connecting";
   return (
     <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-rule py-5">
       <div>
@@ -683,6 +629,7 @@ function TopBar(props: {
         <h1 id="buyer-page-heading" tabIndex={-1} className="scroll-mt-14 text-[30px] font-bold leading-tight tracking-tight outline-none">{props.title}</h1>
         <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
           {props.setup?.demo_buyer && <span>Demo view · {props.setup.demo_buyer} · Procurement buyer</span>}
+          {props.setup && <span>{props.replayEnabled ? "Historical replay" : props.mock ? "Simulated data" : "Live data"}</span>}
           {props.title === buyerViews.overview && closes && <span title={props.replayEnabled && snapshot ? `From the snapshot of ${snapshot}` : undefined}>
             Packing closes {closes}{left != null && left > 0 && ` · ${Math.floor(left / 3_600_000)}h ${String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")}m left`}
           </span>}
@@ -690,23 +637,6 @@ function TopBar(props: {
       </div>
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         {props.updates}
-        {props.setup && (
-          <ApprovalsChip autonomy={props.setup.autonomy} matrix={props.setup.approval_matrix} buyer={props.setup.demo_buyer} />
-        )}
-        {props.online != null && props.setup && <span
-          title={props.mock ? "Historical or simulated inputs. Email delivery is simulated." : "Live data. Email delivery follows the Chaser configuration."}
-          className={`rounded px-2 py-1 text-xs font-bold ${props.mock ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"}`}
-        >
-          {props.replayEnabled ? "Replay" : props.mock ? "Mock" : "Live"}
-        </span>}
-        <span
-          role="img"
-          aria-label={status}
-          title={status}
-          className={`inline-block h-2.5 w-2.5 rounded-sm ${
-            props.online ? "bg-ok" : props.online === false ? "bg-stop" : "bg-rule"
-          }`}
-        />
         {props.replayEnabled && <button
           onClick={props.onDrop}
           disabled={props.busy || !props.online}
@@ -1076,7 +1006,6 @@ function AgentLanes({
   now,
   busy,
   since,
-  onOpenData,
 }: {
   registered?: string[]; online: boolean | null; traceReady: boolean;
   trace: BuyerActivity[];
@@ -1085,7 +1014,6 @@ function AgentLanes({
   busy: boolean;
   /** When it started (ms), to tell which agents already picked it up. */
   since: number | null;
-  onOpenData: () => void;
 }) {
   const stats = useMemo(() => {
     const out = new Map<string, { last?: BuyerActivity; count: number }>();
@@ -1100,29 +1028,18 @@ function AgentLanes({
     }
     return out;
   }, [trace]);
+  const agents = AGENTS.filter(a => a.id !== "human");
+  const unavailable = online === true && registered ? agents.filter(a => !registered.includes(a.id)).length : 0;
+  const errors = online === true && traceReady ? agents.filter(a => stats.get(a.id)?.last?.action === "error").length : 0;
   return (
-    <section aria-labelledby="agents">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h2 id="agents" className="flex items-baseline gap-2 text-xl font-bold">
-          <span>Agent Team</span>
-          {busy && <span className="text-sm font-semibold text-act">working on the drop</span>}
-        </h2>
-        <button
-          onClick={onOpenData}
-          className="text-sm font-semibold text-act hover:underline"
-          title="Open the source records used by the agents"
-        >
-          Source records
-        </button>
-      </div>
-      <div className="relative overflow-hidden rounded-lg border border-rule bg-surface">
-        {busy && (
-          <div aria-hidden className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-act-soft">
-            <span className="agent-glint" />
-          </div>
-        )}
-      <ul className="divide-y divide-rule">
-        {AGENTS.map((a) => {
+    <details className="min-w-0 text-sm">
+      <summary className="cursor-pointer font-medium text-muted hover:text-act">
+        Agent activity{busy ? " · working" : null}
+        {errors > 0 && <span className="font-semibold text-stop"> · {errors} {errors === 1 ? "error" : "errors"}</span>}
+        {unavailable > 0 && <span className="font-semibold text-warn"> · {unavailable} unavailable</span>}
+      </summary>
+      <ul className="mt-2 divide-y divide-rule rounded-lg border border-rule bg-surface">
+        {agents.map((a) => {
           const s = stats.get(a.id);
           const unavailable = a.id !== "human" && registered != null && !registered.includes(a.id);
           const state = online !== true ? (online === false ? "Backend offline" : "Connecting")
@@ -1155,18 +1072,17 @@ function AgentLanes({
                     ) : s?.last ? (
                       sentenceCase(actionLine(s.last))
                     ) : (
-                      a.id === "human" ? "Decision history" : "Ready · no recent activity"
+                      "No recent activity"
                     ))}
                   </span>
                 </span>
-                <span className="shrink-0 text-xs text-muted tabular">{!state && s ? ago(s.last?.ts, now) : ""}</span>
+                <span className="shrink-0 text-xs text-muted tabular">{!state && ts && now ? ago(s?.last?.ts, now) : ""}</span>
               </Link>
             </li>
           );
         })}
       </ul>
-      </div>
-    </section>
+    </details>
   );
 }
 

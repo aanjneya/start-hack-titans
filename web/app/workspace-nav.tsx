@@ -3,16 +3,20 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
-import { Activity, Boxes, ClipboardList, LayoutDashboard, Mail, Menu, PackageCheck, Users } from "lucide-react";
+import { Activity, Boxes, ChevronDown, ClipboardList, Mail, PackageCheck, Users } from "lucide-react";
 import { workspaceLocation } from "./workspace-location";
 
-const destinations = [
-  { label: "Overview", href: "/", icon: LayoutDashboard },
-  { label: "Risk ratings", href: "/observability?agent=risk", icon: Activity },
+const primary = [
+  { label: "Overview", href: "/" },
+  { label: "Risk ratings", href: "/observability?agent=risk" },
+] as const;
+
+const more = [
   { label: "Packing forecast", href: "/observability?agent=planner", icon: PackageCheck },
   { label: "Findings", href: "/?view=findings", icon: ClipboardList },
   { label: "Supplier email", href: "/?view=emails", icon: Mail },
   { label: "Agent Team", href: "/observability", icon: Users },
+  { label: "Activity", href: "/?view=activity", icon: Activity },
 ] as const;
 
 export function NavigationBar({ location }: { location?: ReturnType<typeof workspaceLocation> }) {
@@ -41,18 +45,10 @@ export function NavigationBar({ location }: { location?: ReturnType<typeof works
     };
   }, []);
 
-  const links = (compact: boolean) => destinations.map(({ href, label, icon: Icon }) => {
-    const active = location?.section === label;
-    return (
-      <Link key={href} href={href}
-        aria-current={active ? (label === location.title ? "page" : "location") : undefined}
-        className={compact ? "workspace-menu-item" : "workspace-nav-item"}
-        onClick={compact ? () => { if (disclosure.current) disclosure.current.open = false; } : undefined}>
-        {compact && <Icon size={17} aria-hidden="true" />}
-        {label}
-      </Link>
-    );
-  });
+  function current(label: string) {
+    if (location?.section === label) return location.title === label ? "page" : "location";
+  }
+  const moreActive = more.some(item => item.label === location?.section);
 
   return (
     <header className="workspace-bar">
@@ -60,15 +56,24 @@ export function NavigationBar({ location }: { location?: ReturnType<typeof works
       <div className="workspace-bar-inner">
         <Link href="/" className="workspace-brand" aria-label="Line control home">
           <Boxes size={23} strokeWidth={1.65} aria-hidden="true" />
-          Line control
+          <span>Line control</span>
         </Link>
-        <nav aria-label="Main navigation" className="workspace-wide-nav">{links(false)}</nav>
-        <details ref={disclosure} className="workspace-compact-nav">
-          <summary ref={toggle} className="workspace-menu-toggle">
-            <Menu size={18} aria-hidden="true" /> Menu
-          </summary>
-          <nav aria-label="Main navigation" className="workspace-menu-panel">{links(true)}</nav>
-        </details>
+        <nav aria-label="Main navigation" className="workspace-main-nav">
+          {primary.map(({ href, label }) => <Link key={href} href={href} aria-current={current(label)} className="workspace-nav-item">{label}</Link>)}
+          <details ref={disclosure} className="workspace-more">
+            <summary ref={toggle} className="workspace-nav-item workspace-menu-toggle" data-current={moreActive || undefined}>
+              More <ChevronDown size={15} aria-hidden="true" />
+            </summary>
+            <ul className="workspace-menu-panel">
+              {more.map(({ href, label, icon: Icon }) => <li key={href}>
+                <Link href={href} aria-current={current(label)} className="workspace-menu-item"
+                  onClick={() => { if (disclosure.current) disclosure.current.open = false; }}>
+                  <Icon size={17} aria-hidden="true" />{label}
+                </Link>
+              </li>)}
+            </ul>
+          </details>
+        </nav>
       </div>
     </header>
   );

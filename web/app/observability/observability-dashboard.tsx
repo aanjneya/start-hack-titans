@@ -109,33 +109,31 @@ export default function ObservabilityDashboard() {
     if (!riskView || !hasRatings) return;
     // A shared link may load before the data-backed section exists.
     const id = window.location.hash.slice(1);
-    if (RISK_TOPICS.some(([topic]) => topic === id)) {
+    if (id === "risk-rating-detail" || RISK_TOPICS.some(([topic]) => topic === id)) {
       document.getElementById(id)?.scrollIntoView({ block: "start" });
     }
   }, [riskView, hasRatings, riskEntity]);
 
   return (
-    <div className={`mx-auto min-h-[calc(100dvh-var(--workspace-nav-height,0px))] text-ink md:flex ${riskView ? "max-w-[1376px]" : "max-w-[1720px]"}`}>
-      {!riskView && <aside className="sticky hidden w-[205px] shrink-0 self-start overflow-y-auto border-r border-rule bg-surface p-3 md:block lg:w-[225px]"
-        style={{ top: "var(--workspace-nav-height, 0px)", maxHeight: "calc(100dvh - var(--workspace-nav-height, 0px))" }}>
+    <div className={`mx-auto flex min-h-[calc(100dvh-var(--workspace-nav-height,0px))] text-ink ${riskView ? "max-w-[1560px]" : "max-w-[1720px]"}`}>
+      <aside className="sticky top-[var(--workspace-nav-height)] max-h-[calc(100dvh-var(--workspace-nav-height))] w-[62px] shrink-0 self-start overflow-y-auto overscroll-contain border-r border-rule bg-surface px-0.5 py-2 min-[390px]:w-[66px] md:w-40 md:p-2 lg:w-48 lg:p-3">
         <ReportNavigation active={selectedId} errors={agentErrors} />
-      </aside>}
+      </aside>
 
-      <main className={`min-w-0 flex-1 px-4 pb-16 sm:px-6 lg:px-8 ${riskView ? "risk-workspace" : ""}`}>
-        {!riskView && <details key={selectedId} className="group mt-3 rounded-lg border border-rule bg-surface md:hidden">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm font-semibold">
-            <span>Browse team reports</span>
-            <span aria-hidden className="text-act group-open:rotate-90">›</span>
-          </summary>
-          <div className="border-t border-rule p-2"><ReportNavigation active={selectedId} errors={agentErrors} /></div>
-        </details>}
-        <header className="flex flex-wrap items-end justify-between gap-3 border-b border-rule py-5">
+      <main className={`min-w-0 flex-1 wrap-anywhere px-2.5 pb-16 min-[390px]:px-3 sm:px-5 lg:px-7 ${riskView ? "risk-workspace" : ""}`}>
+        <header className={riskView
+          ? "flex flex-wrap items-center gap-x-4 gap-y-0 border-b border-rule py-2"
+          : "flex flex-wrap items-end justify-between gap-3 border-b border-rule py-5"}>
           <div className="min-w-0">
-            {selectedId !== "overview" && <p className="mb-1 text-xs font-semibold text-act">{activeMeta.name}</p>}
+            {!riskView && selectedId !== "overview" && <p className="mb-1 text-xs font-semibold text-act">{activeMeta.name}</p>}
             <h1 className="text-3xl font-bold leading-tight tracking-tight">{activeMeta.report}</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted">{activeMeta.role}</p>
+            {!riskView && <p className="mt-1 max-w-2xl text-sm text-muted">{activeMeta.role}</p>}
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs">
+          {riskView && <nav aria-label="Risk report sections"
+            className="risk-topic-nav order-last w-full border-b-0! lg:order-none lg:ml-auto lg:w-auto">
+            {RISK_TOPICS.map(([id, title]) => <a key={id} href={`#${id}`}>{title}</a>)}
+          </nav>}
+          <div className={`flex flex-wrap items-center gap-3 text-xs ${riskView ? "ml-auto lg:ml-2" : ""}`}>
             {selectedId === "chaser" && <Link className="font-semibold text-act underline underline-offset-2" href="/?view=emails">Open supplier email</Link>}
             {selectedId === "reconciler" && <Link className="font-semibold text-act underline underline-offset-2" href="/?view=findings">Open findings</Link>}
             {snap.health && <span className="text-muted">{snap.health.replayEnabled ? "Replay data" : mock ? "Offline mode" : "Live data"}</span>}
@@ -150,11 +148,8 @@ export default function ObservabilityDashboard() {
             </button>}
           </div>
         </header>
-        {riskView && <nav aria-label="Risk report sections" className="risk-topic-nav">
-          {RISK_TOPICS.map(([id, title]) => <a key={id} href={`#${id}`}>{title}</a>)}
-        </nav>}
 
-        <div className="mt-5 space-y-6">
+        <div className={`space-y-6 ${riskView ? "mt-4" : "mt-5"}`}>
           {notice && (
             <p role="status" className="rounded-lg border border-rule bg-surface px-4 py-2.5 text-sm">
               {notice}
@@ -202,28 +197,34 @@ export default function ObservabilityDashboard() {
 }
 
 
+const agentLinks = [agentMeta("risk"), ...AGENT_NAV.filter(agent => !["overview", "human", "risk"].includes(agent.id))];
+
 function ReportNavigation({ active, errors }: { active: AgentId; errors: Map<string, number> }) {
-  function link(agent: AgentMeta) {
+  function link(agent: AgentMeta, label: string, shortLabel = label) {
     const count = errors.get(agent.id) ?? 0;
-    return <Link key={agent.id} href={reportHref(agent.id)} aria-current={agent.id === active ? "page" : undefined}
-      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-act ${agent.id === active ? "bg-act-soft text-ink" : "text-muted hover:bg-dock hover:text-ink"}`}>
-      <span aria-hidden className="shrink-0">{agent.icon}</span>
-      <span className="min-w-0">
-        <span className="block font-semibold">{agent.id === "overview" ? "Team activity" : agent.shortName}</span>
-        {agent.id !== "overview" && <span className="block text-xs text-muted">{agent.report}</span>}
-      </span>
-      {count > 0 && <span className="ml-auto rounded bg-stop-soft px-1.5 text-xs font-semibold text-stop" title={`${count} errors`}>
-        {count}<span className="sr-only"> errors</span>
+    return <Link href={reportHref(agent.id)} aria-current={agent.id === active ? "page" : undefined}
+      aria-label={`${label}${agent.id === "human" || agent.id === "overview" ? "" : " · " + agent.report}${count ? ` · ${count} recorded errors` : ""}`}
+      className={`relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md px-0.5 py-1.5 text-center text-[10.5px] font-medium leading-tight focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-act md:flex-row md:justify-start md:gap-2.5 md:px-2.5 md:py-2 md:text-left md:text-sm ${agent.id === active ? "bg-act-soft font-semibold text-act" : "text-muted hover:bg-dock hover:text-ink"}`}>
+      <span aria-hidden className="shrink-0 [&>svg]:size-[17px]">{agent.icon}</span>
+      <span className="md:hidden">{shortLabel}</span>
+      <span className="hidden min-w-0 md:block">{label}</span>
+      {count > 0 && <span aria-hidden title={`${count} recorded errors`}
+        className="absolute right-0 top-0.5 rounded-sm bg-stop-soft px-0.5 text-[10px] font-semibold text-stop md:static md:ml-auto">
+        {count > 99 ? "99+" : count}
       </span>}
     </Link>;
   }
 
-  return <nav aria-label="Team reports" className="space-y-3">
-    {link(agentMeta("overview"))}
-    <div className="border-t border-rule pt-3">
-      <p className="mb-1 px-3 text-xs font-semibold text-muted">Agent reports</p>
-      {AGENT_NAV.filter(a => a.id !== "overview" && a.id !== "human").map(link)}
+  return <nav aria-label="Agent Team reports">
+    <div className="mb-1 border-b border-rule pb-1.5 md:mb-2 md:pb-2">
+      {link(agentMeta("overview"), "Agent Team", "Team")}
     </div>
-    <div className="border-t border-rule pt-3">{link(agentMeta("human"))}</div>
+    <ul aria-label="Agents" className="space-y-0.5">
+      {agentLinks.map(agent => <li key={agent.id}>{link(agent,
+        agent.id === "risk" ? "Risk Rater" : agent.shortName)}</li>)}
+    </ul>
+    <div className="mt-1 border-t border-rule pt-1.5 md:mt-2 md:pt-2">
+      {link(agentMeta("human"), "Approval history", "Approvals")}
+    </div>
   </nav>;
 }

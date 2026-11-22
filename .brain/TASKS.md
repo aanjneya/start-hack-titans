@@ -6,6 +6,8 @@
 
 ## Now (Active Sprint)
 
+- [x] @jivi Simplified the buyer overview and the shared header on `jivi`. Risk ratings show products, parts and suppliers together, with sources beside the reasons and the six agents in the left sidebar.
+
 - [x] @jivi Risk ratings on `jivi` link a supplier’s market readings to its grade drivers, purchasing evidence and buyer action. The branch includes scoped supplier checks and a desktop and phone walkthrough of the five-drop replay.
 
 - [x] @jivi Procurement navigation on `jivi`. Overview, Risk ratings, Packing forecast, Findings, Supplier email and Agent Team share one menu. Findings and supplier threads have direct links. Tested desktop and phone navigation against the replay, including the route from a risk to its evidence and decision.

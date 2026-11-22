@@ -87,3 +87,5 @@ The release check now propagates a failing frontend lint step. An injected lint 
 - [x] **T5.33 (jivi branch)** Buyers can open the forecast, risk ratings, findings and supplier email directly. A risk links to the selected option’s evidence, approval route and original findings. The browser walkthrough covered direct links, refresh, Back, keyboard navigation and phone-sized findings with the five-drop replay.
 
 - [x] **T5.34 (jivi branch)** A supplier’s risk report opens its available buyer decision. The five-drop replay distinguishes a steady example market from PackRight’s deteriorating operating evidence. With only the market changed in a separate customer simulation, the buyer sees the new grade and a single assigned applicability review.
+
+- [x] **T5.35 (jivi branch)** The overview leads with three actionable risks, the deadline forecast and one supplier watch. Buyers can see all product, part and supplier ratings together, inspect their cited drivers and open a supplier’s linked decision. The six agents remain reachable in the left rail.

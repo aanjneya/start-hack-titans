@@ -1,4 +1,4 @@
-import type { ExtendedRiskReason, RiskScore } from "@/lib/api";
+import type { Evidence, ExtendedRiskReason, RiskScore } from "@/lib/api";
 
 export type RiskNames = Record<RiskScore["entity_type"], Record<string, string>>;
 
@@ -55,7 +55,7 @@ const factorSummaries: Record<string, string> = {
   baseline: "The rating found no material disruption.",
 };
 
-/** Give the buyer one sentence. Keep the original statement and citations in the disclosure. */
+/** Translate the recorded reason into one sentence for the buyer. */
 export function reasonHeadline(reason: ExtendedRiskReason, names: RiskNames): string {
   let text = reason.text;
   let part = "";
@@ -90,7 +90,16 @@ export function reasonHeadline(reason: ExtendedRiskReason, names: RiskNames): st
     if (orders) return `${orders} purchase ${orders === "1" ? "order needs" : "orders need"} internal approval.`;
     return text.includes("seat") ? "A category lead position is vacant." : "The purchasing team has unresolved high-priority issues.";
   }
-  if (reason.factor === "external_politics" && text.includes("Polymarket")) return "A prediction market flags a possible disruption in the supplier’s region.";
+  if (reason.factor === "external_politics" && text.includes("Polymarket")) return "Market prices flag possible disruption to this supplier’s trade routes.";
+  if (reason.factor === "quality_hold_failed_aql") {
+    const lot = text.match(/lot (\S+) \(([\d,]+) pcs\) failed/i);
+    if (lot) return `Lot ${lot[1]} failed inspection, affecting ${lot[2]} units.`;
+  }
+  if (reason.factor === "ecn_revision_block") {
+    const rev = text.match(/rev (\S+) blocked.*?: ([\d,]+) stock/i);
+    if (rev) return `An engineering change blocks ${rev[2]} units of revision ${rev[1]} in stock.`;
+  }
+  if (reason.factor === "telemetry" && /^The last update /.test(text)) return text;
   if (reason.factor === "trade_news") return text.replace(/^Trade\/export news \([^)]+\):\s*/, "");
   if (reason.factor === "lead_time_spike") {
     const days = text.match(/to (\d+)d at/)?.[1];
@@ -101,4 +110,76 @@ export function reasonHeadline(reason: ExtendedRiskReason, names: RiskNames): st
   }
   if (reason.factor === "bottleneck_part") return about("Supply of this component raises the product’s risk.");
   return factorSummaries[reason.factor ?? ""] ?? "A supply issue contributed to the rating.";
+}
+
+type Observation = NonNullable<RiskScore["reasons"][number]["signal_inputs"]>[string][number];
+export type RatingCitation = {
+  label: string; mode: string; detail: string; path: string; href?: string; findingId?: number;
+};
+
+function localSourceName(path: string, names: RiskNames) {
+  const [file] = path.split("#");
+  const basename = file.split("/").pop() || file;
+  const supplier = file.match(/(?:^|\/)(SUP-\d+)_([^/]+)/);
+  const owner = supplier ? names.supplier[supplier[1]] || supplier[2].replaceAll("_", " ") : "";
+  const stem = basename.replace(/\.[^.]+$/, "").replaceAll("_", " ").trim();
+  if (owner && /^(profile|components)( delta)?$/i.test(stem)) return `${owner} · ${stem === "profile" ? "supplier profile" : "component register"}`;
+  return stem ? stem[0].toUpperCase() + stem.slice(1) : "Customer record";
+}
+
+const publishers: Record<string, string> = {
+  "polymarket.com": "Polymarket", "open-meteo.com": "Open-Meteo", "news.google.com": "Google News",
+  "federalregister.gov": "US Federal Register", "eur-lex.europa.eu": "EUR-Lex", "wto.org": "World Trade Organization",
+  "mofcom.gov.cn": "China’s Ministry of Commerce",
+};
+
+function citation(evidence: Evidence, names: RiskNames, reason: string, observation?: Observation): RatingCitation {
+  const path = evidence.path || "";
+  const finding = path.match(/^issue:\/\/(\d+)$/);
+  if (finding) return { label: `Finding #${finding[1]}`, mode: "", detail: "", path, findingId: Number(finding[1]) };
+  let domain = "";
+  try {
+    const url = new URL(path);
+    if (["https:", "http:"].includes(url.protocol)) domain = url.hostname.toLowerCase();
+  } catch { /* Customer files use dataset-relative paths. */ }
+  const replay = observation?.live === false || evidence.source_kind === "Offline example" || /\boffline\b/i.test(evidence.quote || "");
+  const provider = observation?.provider || evidence.locator?.split(":")[0];
+  const site = Object.keys(publishers).find(host => domain === host || domain.endsWith("." + host));
+  const label = domain ? (site ? publishers[site] : domain) : localSourceName(path, names);
+  const mode = replay ? "Offline example" : observation?.last_known_at ? `Last known reading · ${observation.last_known_at.slice(0, 10)}`
+    : provider === "portal_news" ? "Customer news record" : provider === "telemetry" ? "Shipment record"
+    : observation?.live && domain ? "Public feed at collection" : "";
+  const result = { label, mode, detail: "", path, href: domain && !replay ? path : undefined };
+  if (provider === "polymarket" || site === "polymarket.com") {
+    const recorded = observation?.market?.yes_pct;
+    const legacy = evidence.quote?.match(/\bYes\s*=\s*(\d+(?:\.\d+)?)\s*%/i)?.[1];
+    const yes = recorded ?? (legacy ? Number(legacy) : undefined);
+    const valid = typeof yes === "number" && Number.isFinite(yes) && yes >= 0 && yes <= 100;
+    const price = valid ? `Yes ${yes}%` + (observation?.market?.disruption_outcome === "No"
+      ? ` · disruption side No ${Number((100 - yes).toFixed(2))}%` : "") : "Price unavailable";
+    const question = observation?.title || reason.match(/Polymarket odds [\d.]+%:\s*([^?]+\?)/i)?.[1];
+    const event = site === "polymarket.com" && path.match(/\/event\/([\w-]+)/i)?.[1]?.replaceAll("-", " ");
+    const context = question || (event ? `Event · ${event}` : "Market question unavailable");
+    return { ...result, label: "Polymarket", detail: `${context} · ${price}` };
+  }
+  const notice = evidence.locator === "notice" ? evidence.quote?.split("\n").find(line => /notice|licen[cs]|suspension/i.test(line)) : "";
+  const locator = notice || (evidence.locator && !evidence.locator.includes(":") ? evidence.locator : "");
+  const detail = observation?.title || locator || (domain ? "" : evidence.quote?.split("\n")[0]?.slice(0, 140)) || "";
+  return { ...result, detail };
+}
+
+export function reasonsForRating(row: RiskScore, names: RiskNames) {
+  const inputs = row.reasons.find(r => r.signal_inputs)?.signal_inputs ?? {};
+  return (row.reasons as ExtendedRiskReason[]).filter(r => r.text).map(reason => {
+    const headline = reasonHeadline(reason, names);
+    // The Rater retains precisely the observations used for each factor, including both inputs to market risk.
+    // Product and component rows instead carry the evidence inherited from the contributing component or supplier.
+    const observations = inputs[reason.factor || ""] ?? [];
+    const citations = observations.length ? observations.map(o => citation(o.evidence, names, reason.text, o))
+      : (reason.evidence ?? []).filter(e => e.path).map(e => citation(e, names, reason.text));
+    const preferred = /export licens/i.test(headline) ? citations.find(s => /licen[cs]|notice/i.test(s.path)) : null;
+    const sources = [...new Map((preferred ? [preferred, ...citations] : citations).map(s =>
+      [JSON.stringify([s.path, s.detail, s.mode]), s])).values()];
+    return { headline, sources };
+  });
 }

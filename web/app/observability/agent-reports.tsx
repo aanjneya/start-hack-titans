@@ -6,8 +6,8 @@ import { findingHref, mailHref } from "../buyer-links";
 import { useEffect, useMemo, useState } from "react";
 import { AgentRoster } from "@/components/ui/agent-roster";
 import {
-  ago, clock, eur, fmt, getData,
-  type AgentLogEntry, type Conflict, type Evidence, type ExtendedRiskReason,
+  ago, clock, eur, fmt, getData, parseTs,
+  type AgentLogEntry, type Conflict, type Evidence,
   type ObservabilitySnapshot, type RiskScore,
 } from "@/lib/api";
 import {
@@ -15,7 +15,8 @@ import {
 } from "./agent-meta";
 import RiskPlaybook from "../risk-playbook";
 import { SupplySignals } from "./supply-signals";
-import { recordedScore, reasonHeadline, riskBands, type RiskNames } from "./risk-explanations";
+import { RatingReasons, RatingReasonSummary } from "./rating-reasons";
+import { recordedScore, riskBands, type RiskNames } from "./risk-explanations";
 import { ForecastPanel } from "./forecast-chart";
 import { buildRosterAgents, plural } from "./roster";
 
@@ -160,7 +161,7 @@ export function OverviewReport({
     return map;
   }, [snap.trace]);
 
-  const workers = AGENT_NAV.filter((a) => a.id !== "overview");
+  const workers = AGENT_NAV.filter((a) => a.id !== "overview" && a.id !== "human");
   const roster = useMemo(() => buildRosterAgents(snap, now, online), [snap, now, online]);
 
   return (
@@ -219,7 +220,7 @@ export function WatcherReport({ snap }: { snap: ObservabilitySnapshot }) {
                   )}
                 </div>
               </summary>
-              <div className="mt-3 grid gap-3 border-t border-rule pt-3 text-xs md:grid-cols-2">
+              <div className="mt-3 grid grid-cols-1 gap-3 border-t border-rule pt-3 text-xs md:grid-cols-2">
                 {d.added.length > 0 && (
                   <div>
                     <p className="mb-1 font-semibold text-ok">Added files ({d.added.length})</p>
@@ -576,73 +577,26 @@ export function PlannerReport({ snap, now }: { snap: ObservabilitySnapshot; now:
 // ---------------------------------------------------------------------------
 // 7. Risk Rater Report
 // ---------------------------------------------------------------------------
-function RatingDetails({ row, names, selected }: { row: RiskScore; names: RiskNames; selected: boolean }) {
-  const reasons: ExtendedRiskReason[] = row.reasons ?? [];
-  const score = recordedScore(row);
-  const breakdown = Object.entries(reasons[0]?.breakdown ?? {}).filter(([, value]) => value > 0);
-  const severity = riskBands.find(band => band.rating === row.rating)?.label;
-  const tone = row.grade >= 6 ? "text-stop bg-stop-soft" : row.grade >= 4 ? "text-warn bg-warn-soft" : "text-ok bg-ok-soft";
-  return (
-    <details open={selected || undefined} className="group/rating overflow-hidden rounded-xl border border-rule bg-surface">
-      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 marker:hidden focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-act">
-        <span className={`rounded-md px-2 py-1 text-sm font-bold tabular ${tone}`}>{row.rating}</span>
-        <span className="min-w-0 flex-1">
-          <span className="block font-semibold text-ink">{names[row.entity_type][row.entity_id] || row.entity_id}</span>
-          <span className="block text-xs capitalize text-muted">{row.entity_type}{severity && ` · ${severity} risk`}</span>
-        </span>
-        <span className="shrink-0 text-right text-sm font-semibold tabular text-ink">
-          {score == null ? "Score unavailable" : <>{score}<span className="font-normal text-muted">/100</span></>}
-        </span>
-        <span aria-hidden className="shrink-0 text-act group-open/rating:rotate-90">›</span>
-      </summary>
-      <div className="border-t border-rule px-4 py-3 text-sm">
-        <p className="font-semibold">What drives this rating?</p>
-        {row.entity_type === "supplier" && row.reasons[0]?.signal_inputs && <Link
-          href={`/observability?agent=risk&tier=supplier&entity=${encodeURIComponent(row.entity_id)}#risk-signals`}
-          className="mt-1 inline-block text-xs font-semibold text-act underline">See this supplier’s signal sources</Link>}
-        {reasons.length === 0 && <p className="mt-2 text-muted">No reasons were recorded for this rating.</p>}
-        {reasons.map((reason, idx) => (
-          <details key={idx} className="mt-1">
-            <summary className="cursor-pointer py-1.5 text-ink marker:text-muted">{reasonHeadline(reason, names)}</summary>
-            <div className="mb-2 ml-3 border-l-2 border-rule pl-3 text-xs text-muted">
-              <p>{reason.text}</p>
-              {reason.points != null && reason.points > 0 && <p className="mt-1">
-                {reason.factor === "bottleneck_part" ? `Component risk score · ${reason.points}/100` : `Recorded factor points · ${reason.points}`}
-              </p>}
-              {reason.evidence?.length ? <EvidenceList evidence={reason.evidence} /> : <p className="mt-1">No source attached to this reason.</p>}
-            </div>
-          </details>
-        ))}
-        {breakdown.length > 0 && <details className="mt-2 border-t border-rule pt-2 text-xs text-muted">
-          <summary className="cursor-pointer font-medium">Score calculation</summary>
-          <p className="my-2">{row.entity_type === "product" ? "The highest-risk component sets the starting score. Additional risky components and tight packing time can raise it." :
-            row.entity_type === "part" ? "The score combines supplier exposure, dependence on one source, stock coverage and known disruptions." :
-            "Internal purchasing and shipping records contribute up to 55 points. External signals together contribute up to 45 points."}</p>
-          <dl className="grid max-w-sm grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular">
-            {breakdown.map(([label, points]) => <div key={label} className="contents">
-              <dt className="capitalize">{label.replaceAll("_", " ")}</dt><dd className="text-right">{points}</dd>
-            </div>)}
-          </dl>
-          <p className="mt-2">Record · {row.entity_id}</p>
-        </details>}
-      </div>
-    </details>
-  );
+const ratingTiers = [
+  { tier: "product", label: "Products", anchor: "risk-products", position: "xl:col-start-1 xl:row-start-1" },
+  { tier: "part", label: "Parts", anchor: "risk-parts", position: "xl:col-start-2 xl:row-span-2 xl:row-start-1" },
+  { tier: "supplier", label: "Suppliers", anchor: "risk-suppliers", position: "xl:col-start-3 xl:row-span-2 xl:row-start-1" },
+] as const;
+
+function Grade({ row }: { row: RiskScore }) {
+  const tone = row.grade >= 6 ? "bg-stop-soft text-stop" : row.grade >= 4 ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok";
+  return <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-bold tabular ${tone}`}>{row.rating || "Ungraded"}</span>;
+}
+
+function ratingLink(row: RiskScore, target: string) {
+  const query = new URLSearchParams({ agent: "risk", tier: row.entity_type, entity: row.entity_id });
+  return `/observability?${query}#${target}`;
 }
 
 export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
   const params = useSearchParams();
-  const tier = params.get("tier");
-  const initialTier = tier === "product" || tier === "part" || tier === "supplier" ? tier : null;
-  const entity = initialTier ? params.get("entity") ?? "" : "";
-  return <RiskOverview key={JSON.stringify([initialTier, entity])} snap={snap} initialTier={initialTier} entity={entity} />;
-}
-
-function RiskOverview({ snap, initialTier, entity }: {
-  snap: ObservabilitySnapshot; initialTier: RiskScore["entity_type"] | null; entity: string;
-}) {
-  const [filter, setFilter] = useState<RiskScore["entity_type"] | "all" | null>(initialTier);
-  const [showAll, setShowAll] = useState(false);
+  const requestedTier = params.get("tier");
+  const requestedId = params.get("entity");
   const [names, setNames] = useState<RiskNames>({ product: {}, part: {}, supplier: {} });
   const loadedDrop = snap.health?.lastDrop?.run_id;
   const hasRatings = snap.risk.length > 0;
@@ -664,48 +618,95 @@ function RiskOverview({ snap, initialTier, entity }: {
     return () => { active = false; };
   }, [hasRatings, loadedDrop]);
 
-  const activeFilter = filter ?? (snap.risk.some(row => row.entity_type === "product") ? "product" : "all");
-  const visible = snap.risk.filter(row => activeFilter === "all" || row.entity_type === activeFilter)
-    .sort((a, b) => b.grade - a.grade || (recordedScore(b) ?? -1) - (recordedScore(a) ?? -1) || a.entity_id.localeCompare(b.entity_id));
-  const linkedIndex = visible.findIndex(row => row.entity_type === initialTier && row.entity_id === entity);
-  const firstRows = linkedIndex >= 6 ? [visible[linkedIndex], ...visible.filter((_, index) => index !== linkedIndex).slice(0, 5)] : visible.slice(0, 6);
-  const displayed = showAll ? visible : firstRows;
+  const groups = ratingTiers.map(group => ({
+    ...group,
+    rows: snap.risk.filter(row => row.entity_type === group.tier).sort((a, b) =>
+      b.grade - a.grade || (recordedScore(b) ?? -1) - (recordedScore(a) ?? -1) || a.entity_id.localeCompare(b.entity_id)),
+  }));
+  const selected = requestedId
+    ? snap.risk.find(row => row.entity_type === requestedTier && row.entity_id === requestedId)
+    : groups.find(group => group.rows.length)?.rows[0];
+  const selectedScore = selected && recordedScore(selected);
+  const computedAt = parseTs(selected?.computed_at);
+  const selectedBand = riskBands.find(b => b.rating === selected?.rating);
+  const selectedGroup = groups.find(g => g.tier === selected?.entity_type);
+  const sourceLink = selected?.entity_type === "supplier" && selected.reasons[0]?.signal_inputs;
 
   return (
     <div className="space-y-6">
-      <div className="grid min-w-0 items-start gap-x-5 gap-y-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:grid-rows-[min-content_1fr]">
-      <section id="risk-ratings" aria-label="Rated products, parts and suppliers" className="lg:col-start-1 lg:row-start-1 min-w-0 scroll-mt-24 self-start space-y-3 rounded-xl border border-rule bg-surface p-4 sm:p-5">
-        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-          <h2 className="text-xl font-bold tracking-tight">Current ratings</h2>
-          <div role="group" aria-label="Filter ratings" className="inline-flex flex-wrap gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
-            {(["product", "part", "supplier", "all"] as const).map(type => (
-              <button key={type} type="button" aria-pressed={activeFilter === type} onClick={() => {setFilter(type); setShowAll(false);}}
-                className={`rounded-md px-3 py-1.5 capitalize ${activeFilter === type ? "bg-ink text-white" : "text-muted hover:text-ink"}`}>
-                {type === "all" ? "All" : `${type}s`}
-              </button>
-            ))}
+      <section id="risk-ratings" aria-labelledby="risk-directory-heading" className="min-w-0 scroll-mt-24">
+        <header className="mb-3 flex flex-wrap items-end justify-between gap-x-5 gap-y-2">
+          <div>
+            <h2 id="risk-directory-heading" className="text-xl font-bold tracking-tight">Current ratings</h2>
+            <p className="mt-1 text-sm text-muted">Higher scores mean greater exposure to disruption, on a scale of 0 to 100.</p>
+          </div>
+          <div aria-label="Risk grade legend" className="text-xs text-muted">
+            <p className="mb-1 font-semibold">Minimum score for each grade</p>
+            <dl className="flex flex-wrap gap-x-3 gap-y-1 tabular">{riskBands.map(({ rating, minimum, label }) =>
+              <div key={rating} className="inline-flex gap-1">
+                <dt className="font-semibold text-ink">{rating}<span className="sr-only"> · {label}</span></dt><dd>{minimum}</dd>
+              </div>)}</dl>
           </div>
         </header>
-        <p className="text-sm text-muted">Scores run from 0 to 100. Higher scores mean greater exposure to disruption.</p>
-        {visible.length === 0 ? <EmptyState text="No ratings available for this view." /> : <div className="space-y-2">
-          {displayed.map(row => <RatingDetails key={`${row.entity_type}/${row.entity_id}`} row={row} names={names}
-            selected={row.entity_type === initialTier && row.entity_id === entity} />)}
-        </div>}
-        {visible.length > 6 && <button type="button" onClick={() => setShowAll(expanded => !expanded)} aria-expanded={showAll}
-          className="text-sm font-semibold text-act underline">{showAll ? "Show fewer ratings" : `Show all ${visible.length} ratings`}</button>}
-        <aside aria-label="Risk score legend" className="rounded-lg bg-dock/60 px-4 py-3 text-xs text-muted">
-          <p className="font-semibold text-ink">Minimum score for each grade</p>
-          <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 xl:grid-cols-6">
-            {riskBands.map(({ rating, minimum, label }) => <div key={rating}>
-              <dt className="font-semibold text-ink">{rating} <span className="font-normal text-muted">· {label}</span></dt>
-              <dd>{minimum} points</dd>
-            </div>)}
-          </dl>
-        </aside>
+        <nav aria-label="Jump to a rating list" className="mb-3 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold text-act lg:hidden">
+          {groups.map(group => <a key={group.tier} href={`#${group.anchor}`} className="underline underline-offset-2">{group.label} ({group.rows.length})</a>)}
+        </nav>
+        <div className="grid items-start gap-4 lg:grid-cols-3 xl:grid-rows-[min-content_1fr]">
+          {groups.map(({ tier, label, anchor, position, rows }) => <section key={tier} id={anchor} aria-labelledby={anchor + "-heading"}
+            className={`@container min-w-0 scroll-mt-24 overflow-hidden rounded-xl border border-rule bg-surface ${position}`}>
+            <header className="flex items-baseline justify-between gap-2 border-b border-rule bg-dock/50 px-3 py-2.5 sm:px-4">
+              <h3 id={anchor + "-heading"} className="text-base font-bold">{label}</h3>
+              <span className="text-xs font-semibold tabular text-muted">{rows.length} rated</span>
+            </header>
+            {rows.length === 0 ? <p className="px-4 py-4 text-sm text-muted">No {label.toLowerCase()} have a current rating.</p> :
+              <ul className="divide-y divide-rule">{rows.map(row => {
+                const score = recordedScore(row);
+                const active = selected === row;
+                return <li key={row.entity_id}>
+                  <Link href={ratingLink(row, "risk-rating-detail")} prefetch={false} aria-current={active ? "true" : undefined}
+                    className={`block border-l-[3px] px-3 py-2.5 hover:bg-dock/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-act ${active ? "border-l-act bg-act-soft/60" : "border-l-transparent"}`}>
+                    <div className="flex flex-col gap-1 @xs:flex-row @xs:items-start @xs:justify-between @xs:gap-2">
+                      <span className="min-w-0 text-sm font-semibold leading-snug wrap-anywhere text-ink">{names[tier][row.entity_id] || row.entity_id}</span>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <Grade row={row} />
+                        <span className="text-xs tabular text-muted">{score == null ? "No score" : `${score}/100`}</span>
+                      </span>
+                    </div>
+                    <RatingReasonSummary row={row} names={names} />
+                  </Link>
+                </li>;
+              })}</ul>}
+          </section>)}
+          <section id="risk-rating-detail" aria-labelledby="risk-detail-heading" tabIndex={-1}
+            className="min-w-0 scroll-mt-24 rounded-xl border border-rule bg-surface p-4 wrap-anywhere lg:col-span-3 xl:col-span-1 xl:col-start-1 xl:row-start-2">
+            {selected ? <>
+              <header className="flex flex-wrap items-start justify-between gap-3 border-b border-rule pb-3">
+                <div>
+                  <p className="text-xs font-semibold capitalize text-muted">{selected.entity_type} · {selected.entity_id}</p>
+                  <h2 id="risk-detail-heading" className="mt-1 text-xl font-bold">{names[selected.entity_type][selected.entity_id] || selected.entity_id}</h2>
+                  <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted"><Grade row={selected} />
+                    {selectedBand && <span>{selectedBand.label} risk</span>}
+                    <span>{selectedScore == null ? "Score unavailable" : `${selectedScore}/100`}</span>
+                    {computedAt && Number.isFinite(computedAt.getTime()) && <time className="text-xs" dateTime={computedAt.toISOString()}>
+                      Updated {computedAt.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC
+                    </time>}
+                  </p>
+                </div>
+                {selectedGroup && <a href={`#${selectedGroup.anchor}`} className="text-xs font-semibold text-act underline underline-offset-2">Back to {selectedGroup.label.toLowerCase()}</a>}
+              </header>
+              <RatingReasons row={selected} names={names} />
+              {sourceLink && <a href="#risk-signals" className="mt-3 inline-flex text-sm font-semibold text-act underline underline-offset-2">View this supplier’s market and trade signals</a>}
+            </> : <>
+              <h2 id="risk-detail-heading" className="text-lg font-bold">Rating details</h2>
+              <p className="mt-1 text-sm text-muted">{requestedId ? `No current rating matches ${requestedId}. Choose an entry above to see its evidence.`
+                : "Details appear after the Risk Rater publishes a rating."}</p>
+            </>}
+          </section>
+        </div>
       </section>
-
-      <SupplySignals scores={snap.risk} names={names.supplier} preferredSupplier={initialTier === "supplier" ? entity : ""}
-        check={snap.health?.lastRiskCheck} trace={snap.trace} version={snap.health?.activity_version} />
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <SupplySignals scores={snap.risk} names={names.supplier} preferredSupplier={selected?.entity_type === "supplier" ? selected.entity_id : ""}
+          check={snap.health?.lastRiskCheck} trace={snap.trace} version={snap.health?.activity_version} />
       </div>
       <RiskPlaybook activityVersion={snap.health?.activity_version} />
     </div>

@@ -11,6 +11,7 @@ from ..core.parsing import parse_datetime
 from ..core.store import all_rows
 from .planner_forecast import simulate
 from .planner_inputs import evidence
+from .planner_people import approval_assignments, resolve_approvers, signer_names
 
 
 def approval_clock(snapshot):
@@ -45,51 +46,6 @@ def approval_roles(value, documents, *, air=False, monthly_spend=None, freight_e
         role = "Category lead" if within_limit else "CPO"
         roles = list(dict.fromkeys([*roles, role]))
     return roles
-
-
-def resolve_approvers(roles, category, plan, documents, buyer=""):
-    policy_docs = [d for d in documents if d.kind == "policy"]
-    charts = []
-    for doc in documents:
-        if doc.kind == "org_chart":
-            stamp = re.search(r"\d{4}-\d{2}-\d{2}", doc.text)
-            if stamp and date.fromisoformat(stamp[0]) <= plan.as_of.date():
-                charts.append((stamp[0], doc))
-    chart = max(charts, key=lambda x: x[0])[1] if charts else None
-    names = []
-    for role in roles:
-        name = role
-        role_name = {"cpo": "chief procurement officer", "cfo": "chief financial officer"}.get(role.lower(), role.lower())
-        if chart:
-            lines = [x.strip() for x in chart.text.splitlines()]
-            for i, line in enumerate(lines[1:], 1):
-                if role_name not in line.casefold():
-                    continue
-                if (role.lower() in {"buyer", "category lead"} and category.casefold() not in line.casefold()
-                        and not (role.lower() == "buyer" and lines[i-1] == buyer)):
-                    continue
-                if role_name == "chief financial officer":
-                    hit = re.search(r"(?:,\s*|and )([\wÀ-ž.-]+ [\wÀ-ž.-]+) \(Chief Financial Officer\)", line)
-                    if hit:
-                        name = hit[1]
-                    break
-                person = lines[i-1]
-                begins = re.search(r"\(from (\d{4}-\d\d-\d\d)\)", person)
-                if begins and date.fromisoformat(begins[1]) > plan.as_of.date():
-                    continue
-                if "(" not in line or role.lower() == "buyer":
-                    name = person.split(" (from")[0]
-                    break
-        if chart and role.casefold() == "category lead" and name == role:
-            # An unfilled seat cannot sign. Route a documented PP-07 exception to the Head.
-            exception = any(re.search(r"Exceptions .*?approved by the Head of Procurement", d.text, re.I | re.S)
-                            for d in policy_docs)
-            if exception:
-                found = re.search(r"([^\n]+)\nHead of Procurement\b", chart.text, re.I)
-                if found:
-                    name = found[1].strip()
-        names.append(name)
-    return list(dict.fromkeys(names))
 
 
 def approvers(value, category, plan, documents, *, buyer="", **conditions):
@@ -159,19 +115,18 @@ def options_for(issue, plan, forecast, row):
                 from ..core.parsing import parse_number
                 monthly = parse_number(amounts[0])
         roles = required_roles or approval_roles(value, docs, air=air, monthly_spend=monthly, freight_eur=cost)
-        signers = resolve_approvers(roles, category, plan, docs, buyer)
+        assignments = approval_assignments(roles, category, plan.as_of.date(), docs, buyer)
+        signers = signer_names(assignments)
         policy_proof = [evidence(d.path, "page 1, approval routing") for d in docs if d.kind == "policy"]
-        charts = [d for d in docs if d.kind == "org_chart" and any(person in d.text for person in signers)]
-        if charts:
-            chart = max(charts, key=lambda d: d.text.splitlines()[0])
-            policy_proof.append(evidence(chart.path, "page 1, effective role"))
+        for path in dict.fromkeys(a["org_source"] for a in assignments if a["org_source"]):
+            policy_proof.append(evidence(path, "effective approval assignment"))
 
         latest = min(useful_until(plan, row, gained), due)
         choices.append(dict(product_id=pid, edition=row.edition, priority=priority, part=part,
                             as_of=plan.as_of.isoformat(), latest_useful=latest.isoformat(), label=label, description=kind, cost_eur=cost, copies_gained=gained,
                             remaining_shortfall=None if gained is None or forecast.shortfall is None else max(0, forecast.shortfall - gained),
                             actions=list(actions), risk_note=note, evidence=[*proof, *policy_proof],
-                            approvers=signers, approval_roles=roles, approval_value_eur=value,
+                            approvers=signers, approval_roles=roles, assignments=assignments, approval_value_eur=value,
                             needs_approval=(value is None or policy.needs_approval(value)
                                             or (air and air_freight_limit(docs) is not None)), available=available))
     add("Keep the current plan", "baseline", 0, 0, "Retain released stock and confirmed line-ready deliveries.", value=0)

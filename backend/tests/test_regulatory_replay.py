@@ -90,6 +90,10 @@ def test_real_magnets_open_one_future_review():
     exposure = entry["option"]["exposure"]
     assert exposure["order_value"] == {"amount": 1870260, "currency": "CNY"}
     assert exposure["effective_after"] == "2026-12-01"
+    gate = exposure["qualification_gate"]
+    assert gate["assessment"] == "PPAP" and gate["effective"] == "2025-04-01"
+    assert [a["person"] for a in gate["signers"]] == ["Daniel Okafor", "Sofia Marchetti"]
+    assert "PP-07" in gate["evidence"]["path"]
     window = exposure["sample_window"]
     assert (window["as_of"], window["sample_by"], window["first_delivery"], window["days_between"]) == (
         "2026-11-21", "2026-12-01", "2026-12-14", 13)
@@ -188,6 +192,7 @@ def test_second_customer_regulation_without_launch_calendar(tmp_path, monkeypatc
     entry, = future(client)
     option = entry["option"]
     assert option["button_label"] == "Start qualification review" and option["approvers"] == ["Rin Abe"]
+    assert option["exposure"]["qualification_gate"] is None
     assert option["currency"] == "JPY" and option["edition"] == "Mill" and "O/4" in entry["next_step"]
     assert "88 days" in entry["next_step"] and "increased" not in entry["next_step"]
     assert {e["source_kind"] for e in entry["evidence"]} >= {"Official publication","Supplier evidence","Offline example"}

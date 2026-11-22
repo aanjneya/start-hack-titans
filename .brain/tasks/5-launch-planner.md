@@ -64,3 +64,5 @@ Branch verification: 79 backend tests passed, including the historical pickup an
 - [x] **T5.16 (jivi branch)** The buyer can compare sample timing against dated open orders, inspect the market question, and follow one decision through its finding, signer, review or supplier thread to the forecast. A market-only warning points to open POs to verify and assigns zero confirmed order impact.
 
 - [x] **T5.17 (jivi branch)** An approved qualification review can independently authorize one sample-terms inquiry through Chaser. A matched reply becomes review evidence for Engineering and Quality. Repeated or mismatched replies do not affect the projection. A paid offer is checked against the live clock again before dispatch.
+
+- [x] **T5.18 (jivi branch)** Match the PO buyer, category and decision date to the customer’s org chart. An unassigned signer requires clarification. PP-07 routes documented exceptions to the head of procurement. The qualification card distinguishes opening a review from serial release, which requires successful PPAP and written approval from Supplier Quality and the responsible Category Lead.

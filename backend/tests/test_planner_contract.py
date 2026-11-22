@@ -39,3 +39,50 @@ def test_quoted_history_or_negative_answer_cannot_confirm_delivery():
     assert _text_confirmation("Can you confirm " + line + "?") is None
     assert _text_confirmation("Thanks.\n> Confirmed " + line) is None
     assert _text_confirmation("Confirmed " + line + "\n> Quote requested").quantity == 20000
+
+
+def test_named_approval_routes_wait_for_an_effective_assignment():
+    from datetime import datetime, timezone
+    from backend.agents.planner_people import approval_assignments
+    from backend.core.models import Document
+    on = datetime(2026, 11, 21, tzinfo=timezone.utc).date()
+    chart = Document(kind="org_chart", path="roster", text="""Procurement 2026-10-01
+Elena D
+Buyer (Chemicals)
+Aki I
+Buyer (Motion)
+TBD
+Category Lead Motion
+Mika K
+Head of Procurement""")
+    rule = Document(kind="policy", path="company-policy", text="Effective 2025-10-01. Exceptions must be approved by the Head of Procurement.")
+    a, = approval_assignments(["Buyer"], "", on, [chart])
+    assert a["person"] is None
+    a, = approval_assignments(["Buyer"], "", on, [chart], buyer="Aki I")
+    assert a["person"] == "Aki I" and a["org_source"] == "roster"
+    a, = approval_assignments(["Buyer"], "Motion", on, [chart], buyer="No longer on roster")
+    assert a["person"] is None
+    a, = approval_assignments(["Category lead"], "Motion", on, [chart, rule])
+    assert (a["required_role"], a["signing_role"], a["person"], a["policy_source"]) == (
+        "Category lead", "Head of Procurement", "Mika K", "company-policy")
+    assert approval_assignments(["Category lead"], "Other", on, [chart, rule])[0]["person"] is None
+    replacement = Document(kind="policy", path="amendment",
+                           text="Effective 2027-01-01. Exceptions require board review.")
+    assert approval_assignments(["Category lead"], "Motion", on, [chart, rule, replacement])[0]["person"] == "Mika K"
+    assert approval_assignments(["Category lead"], "Motion", on.replace(year=2027),
+                                [chart, rule, replacement])[0]["person"] is None
+
+    client = TestClient(app)
+    option = dict(label="Accept", available=True, approvers=["Buyer"], assignments=[
+        dict(required_role="Buyer", signing_role="Buyer", person=None)])
+    card, = add_all([DecisionCard(options=[option], recommended=0)])
+    assert client.post(f"/api/decisions/{card.id}/approve", json={"by": "Buyer"}).status_code == 409
+
+
+def test_recording_coapprovals_requires_the_designated_signers():
+    client = TestClient(app)
+    card, = add_all([DecisionCard(options=[dict(label="Accept", available=True, approvers=["CPO", "CFO"])], recommended=0)])
+    url = f"/api/decisions/{card.id}/approve"
+    assert client.post(url, json={"by": "Buyer", "approvals": ["CPO", "CFO"]}).status_code == 403
+    assert client.post(url, json={"by": "CPO", "approvals": ["CFO", "Other"]}).status_code == 403
+    assert client.post(url, json={"by": "CPO", "approvals": ["CFO"]}).status_code == 200

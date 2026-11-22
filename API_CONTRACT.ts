@@ -97,6 +97,11 @@ export interface Issue {
   updated_at: string;
 }
 
+export interface ApprovalAssignment {
+  required_role: string; signing_role: string; person: string | null; basis: string;
+  org_source: string | null; policy_source?: string;
+}
+
 export interface SampleWindow {
   as_of: string; requested_on?: string; sample_days: number; sample_by: string; first_delivery: string;
   days_between: number; source: string;
@@ -113,6 +118,9 @@ export interface SupplyExposure {
   share: number | null;
   effective_after: string | null;
   uncertainties?: string[];
+  qualification_gate?: {
+    assessment: string; signers: ApprovalAssignment[]; effective: string; evidence: Evidence;
+  } | null;
   sample_offers?: {text: string; source: string; days?: number}[];
   /** Scenario using the supplier's quoted sample interval and earliest open PO date. */
   sample_window?: SampleWindow | null;
@@ -151,6 +159,7 @@ export interface DecisionOption {
   approval_value_eur?: number | null;
   approvers?: string[];
   approval_roles?: string[];
+  assignments?: ApprovalAssignment[];
   needs_approval?: boolean;
   available?: boolean;
   evidence?: Evidence[];

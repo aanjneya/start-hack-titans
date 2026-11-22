@@ -532,7 +532,8 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
   const buyer = snap.setup?.demo_buyer;
   const approvalCurrency = formatMoney(option.currency || "EUR");
   const assigned = option.approvers ?? [];
-  const ownsAction = !!buyer && assigned.length === 1 && assigned[0] === buyer;
+  const pendingRoles = option.assignments?.filter(a => !a.person).map(a => a.required_role) ?? [];
+  const ownsAction = !!buyer && !pendingRoles.length && assigned.length === 1 && assigned[0] === buyer;
   const cost = option.cost_eur;
   const value = option.approval_value_eur;
   const card = snap.decisions.find(d => d.id === entry.decision_id);
@@ -542,7 +543,8 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
   const action = option.actions[0];
   const button = option.button_label || (action?.type === "human_review" ? "Open review" :
     action?.quote_inbox_id ? "Authorize quote" : action?.type === "email" ? "Send supplier request" : "Approve");
-  const role = option.approval_roles?.join(" + ") || "Unassigned role";
+  const signingRoles = option.assignments?.map(a => a.signing_role) ?? option.approval_roles ?? [];
+  const role = [...new Set(signingRoles)].join(" + ") || "Unassigned role";
   const issueIds = [...new Set(entry.sources.flatMap(s => s.issue_ids))];
   const matrix = snap.setup?.approval_matrix ?? [];
   const band = value == null ? -1 : matrix.findIndex(r => r.below_eur == null || value < r.below_eur);
@@ -586,7 +588,7 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
           <div><dt className="text-muted">Cost</dt><dd>{cost == null ? "Unknown" : approvalCurrency.format(cost)}</dd></div>
         </>}
         <div><dt className="text-muted">{option.horizon === "future" ? "Spend authorized" : "Approval value"}</dt><dd>{value == null ? "Unknown" : approvalCurrency.format(value)}</dd></div>
-        <div><dt className="text-muted">Assigned to</dt><dd>{assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
+        <div><dt className="text-muted">Assigned to</dt><dd>{pendingRoles.length ? "Pending assignment" : assigned.join(" + ") || "Pending assignment"} · {role}</dd></div>
       </dl>
       {comparison && comparison.fee_per_additional_copy != null && <p className="mb-2 text-sm">
         {alternative && comparison.preferred && <strong>Best on-time gain at the lowest fee for that gain. </strong>}
@@ -603,7 +605,8 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
     <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3 text-sm">
       {ownsAction ? <button disabled={!current || busy} onClick={() => decide("approve")}
         className="rounded-md bg-act px-4 py-2 font-semibold text-white hover:bg-ink disabled:opacity-50">{button}</button>
-        : <strong>{assigned.length ? `Awaiting ${assigned.join(" + ")}` : "Awaiting assignment"}{assigned.length > 0 && assigned.join(" + ") !== role && ` · ${role}`}</strong>}
+        : <strong>{pendingRoles.length ? `Awaiting named ${pendingRoles.join(" + ").toLowerCase()}` :
+          assigned.length ? `Awaiting ${assigned.join(" + ")}` : "Awaiting assignment"}{!pendingRoles.length && assigned.length > 0 && assigned.join(" + ") !== role && ` · ${role}`}</strong>}
       {deadline && <span className="text-muted">Decide by {deadline} {snap.setup?.timezone || "UTC"}</span>}
     </div>
 
@@ -632,6 +635,10 @@ function DecisionView({ entry, snap, current, onDone, onNotice }: {
         {" "}from {approvalCurrency.format(lower)}{rule.below_eur == null ? " upwards" : ` to below ${approvalCurrency.format(rule.below_eur)}`}.
         {option.actions.some(a => a.quote_inbox_id != null) && " This includes the original PO and the extra quoted charge."}
       </p>}
+      {!!option.assignments?.length && <div className="mt-2">
+        {option.assignments.map(a => <p key={a.required_role}>{a.person || a.required_role} · {a.basis}
+          {a.org_source && <span className="text-muted"> {a.org_source.split("/").pop()}</span>}</p>)}
+      </div>}
       <History decision={entry.decision_id} option={entry.option_index} activity={snap.health?.activity_version} />
       <details className="my-3"><summary className="cursor-pointer">Linked decisions and findings</summary><ul className="mt-2 space-y-2">{entry.sources.map(source => {
         const card = snap.decisions.find(d => d.id === source.decision_id);

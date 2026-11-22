@@ -2,7 +2,6 @@
 from datetime import date, timedelta
 from decimal import Decimal
 import re
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from sqlmodel import select
@@ -11,7 +10,7 @@ from ..core import models as m, policy
 from ..core.store import all_rows, find_rows, latest_by, session
 from .planner_counts import fitted_components
 from .planner_inputs import evidence
-from .planner_options import resolve_approvers
+from .planner_people import approval_assignments, signer_names, supplier_release_gate
 
 
 def relevant(issue):
@@ -295,8 +294,17 @@ def regulatory_option(issue, plan=None):
     products = {p.product_id: p.name for p in all_rows(m.Product)}
     pids = sorted({b.parent_id for b in bom if b.parent_id in products})
     roles = policy.approvers_for(0)
-    owners = resolve_approvers(roles, material.category if material else "", SimpleNamespace(as_of=as_of),
-                               documents.values(), buyer=pos[0].buyer if pos else policy.setup().demo_buyer)
+    buyers = {po.buyer for po in (pos or verify) if po.buyer}
+    buyer = next(iter(buyers)) if len(buyers) == 1 else ""
+    assignments = approval_assignments(roles, material.category if material else "", dated,
+                                       documents.values(), buyer=buyer)
+    owners = signer_names(assignments)
+    gate = supplier_release_gate(documents.values(), as_of, material.category if material else "") if qualify else None
+    if gate:
+        proof.append(dict(gate["evidence"], source_kind="Customer policy"))
+        brief += f" Before serial deliveries, obtain {gate['assessment']} and the written releases in the customer policy."
+    for path in dict.fromkeys(a["org_source"] for a in assignments if a["org_source"]):
+        proof.append(dict(evidence(path, "effective approval assignment"), source_kind="Customer org chart"))
     reference = f"{'qualification' if qualify else 'applicability'}/{issue.supplier_id}/{target or issue.subject_id}"
     if component and assembly:
         reference += f"/{component}"
@@ -308,7 +316,7 @@ def regulatory_option(issue, plan=None):
                     component=component, component_name=component_name, assembly=assembly or None, assembly_name=name if assembly else "",
                     share=source.share if source and not disputed_share else None,
                     lead_days=mapping.lead_time_days if mapping else None, previous_lead_days=previous,
-                    uncertainties=uncertainty, sample_offers=sample_offers, sample_window=sample_window(sample_offers, dated, pos),
+                    uncertainties=uncertainty, qualification_gate=gate, sample_offers=sample_offers, sample_window=sample_window(sample_offers, dated, pos),
                     order_value=order_value(pos),
                     effective_after=cutoff.isoformat() if cutoff else None, **supplier_signals(issue.supplier_id, documents),
                     verification_orders=[dict(po=o.po_number, line=o.po_line, material=o.material_id,
@@ -319,7 +327,7 @@ def regulatory_option(issue, plan=None):
     return dict(exposure=exposure, review_brief=brief, horizon="future", button_label=action, label=label, description="future supply review",
                 edition=", ".join(products[p] or p for p in pids) or "Supplier review", product_id=pids[0] if pids else "",
                 product_ids=pids, part=target, currency=policy.setup().currency, cost_eur=None, approval_value_eur=0,
-                copies_gained=None, remaining_shortfall=None, approvers=owners, approval_roles=roles,
+                copies_gained=None, remaining_shortfall=None, approvers=owners, approval_roles=roles, assignments=assignments,
                 available=bool(owners), needs_approval=True, risk_note=" ".join(facts),
                 requirements=(["Technical fit of the offered sample", "Qualification scope and supplier terms"] if sample_offers
                               else ["Qualification scope and supplier terms"] if qualify else ["Supplier or order-line confirmation"]),

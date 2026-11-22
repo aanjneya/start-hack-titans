@@ -277,6 +277,8 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
         if (card.created_by == "planner" and (option.get("product_id") or option.get("horizon") == "future")
                 and current_option(s, card, selected) is None):
             raise ChangedDecision
+        if any(not a.get("person") for a in option.get("assignments", [])):
+            raise HTTPException(409, "A named signer must be assigned from the effective org chart.")
         if status == "rejected" and option.get("approvers"):
             if req.by.strip().casefold() not in {name.casefold() for name in option["approvers"]}:
                 raise HTTPException(403, "Only an assigned signer can decline this decision.")
@@ -286,8 +288,9 @@ def _decide(decision_id: int, status: str, req: DecideRequest) -> DecisionCard:
             if card.created_by == "planner" and already_requested(s, option, card):
                 raise HTTPException(409, "This action was already authorized on a related decision.")
             if option.get("approvers"):
+                required = {name.strip().casefold() for name in option["approvers"]}
                 signers = {name.strip().casefold() for name in [req.by, *req.approvals]}
-                if any(name.casefold() not in signers for name in option["approvers"]):
+                if req.by.strip().casefold() not in required or signers != required:
                     raise HTTPException(403, "The chosen option requires " + " + ".join(option["approvers"]))
                 card.approver = " + ".join(option["approvers"])
                 card.needs_approval = option.get("needs_approval", True)

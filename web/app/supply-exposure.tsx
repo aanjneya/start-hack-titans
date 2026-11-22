@@ -78,6 +78,13 @@ export function ExposureEvidence({ exposure: x }: { exposure: SupplyExposure }) 
       </div>}
       {x.order_value && <p className="mt-2 font-semibold">Recorded value of these PO lines · {x.order_value.currency} {fmt(x.order_value.amount)}</p>}
     </section>
+    {x.qualification_gate && <section>
+      <h4 className="font-bold">Before a new supplier can deliver</h4>
+      <p>Successful {x.qualification_gate.assessment} and written release from these signers are required for serial deliveries.</p>
+      <ul className="mt-1">{x.qualification_gate.signers.map(a => <li key={a.required_role}>
+        <strong>{a.person || "Assignment pending"}</strong> · {a.signing_role}{a.signing_role !== a.required_role && ` (acting for ${a.required_role})`}
+      </li>)}</ul><p className="mt-1 text-xs text-muted">{x.qualification_gate.evidence.path.split("/").pop()} · Effective {x.qualification_gate.effective}</p>
+    </section>}
     {!!x.sample_offers?.length && <section className="rounded border-l-4 border-act bg-act-soft px-3 py-2">
       <h4 className="font-bold">An alternative to investigate</h4>
       {x.sample_offers.map(offer => <blockquote className="mt-1" key={offer.source + offer.text}>{offer.text}

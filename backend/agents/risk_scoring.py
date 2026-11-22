@@ -13,12 +13,14 @@ Every grade carries:
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..core.models import Evidence, Issue, Shipment
 from .reconciler_rules import CheckContext, _usable_stock_for_part, compute_part_impact
 from .risk_signals import ExternalSignal
+from .planner_people import vacant_category_leads
 
 GRADE_TO_RATING = {
     1: "AAA",
@@ -83,6 +85,9 @@ class ComputedRisk:
     product_id: str = ""
     impact: dict[str, Any] = field(default_factory=dict)
     is_single_source: bool = False
+    signal_inputs: dict[str, list[dict]] = field(default_factory=dict)
+    score_basis: dict[str, float] = field(default_factory=dict)
+    shipment_observations: list[dict] = field(default_factory=list)
 
 
 def _dedup_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -96,6 +101,28 @@ def _dedup_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen.add(k)
             out.append({kk: vv for kk, vv in a.items() if vv is not None})
     return out
+
+
+def regulatory_matches(signal, mappings, materials):
+    """Bind a publication to actual supplier articles or a category named in the material master."""
+    if not set(signal.tags).intersection({"federal-register", "eur-lex", "wto"}):
+        return []
+    matches = []
+    for mapping in mappings:
+        material = materials.get(mapping.component_id)
+        if not material or mapping.share == 0:
+            continue
+        category = (material.category or "").strip()
+        identifiers = [s for s in (mapping.component_id, mapping.supplier_ref) if s and len(s) >= 4]
+        if len(category) >= 5 and category.casefold() not in {"other", "general", "materials", "supplies", "unknown"}:
+            identifiers.append(category)
+        term = next((t for t in identifiers if re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", signal.title, re.I)), None)
+        if term:
+            matches.append(dict(part=mapping.component_id, description=material.description, term=term, evidence=[
+                Evidence(path=material.source, locator=material.component_id, quote=f"{material.description} · {category}").model_dump(),
+                Evidence(path=mapping.source, locator=f"{mapping.supplier_id}/{mapping.component_id}",
+                         quote=f"Supplier article {mapping.supplier_ref or mapping.component_id}").model_dump()]))
+    return sorted(matches, key=lambda m: m["part"])
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +145,15 @@ def rate_suppliers(
             shipments_by_sup[sh.supplier_id].append(sh)
 
     docs_by_sup: dict[str, list] = defaultdict(list)
+    mappings_by_supplier = defaultdict(list)
+    for rows in ctx.spm_by_part.values():
+        for mapping in rows:
+            mappings_by_supplier[mapping.supplier_id].append(mapping)
     for d in ctx.documents:
         if d.supplier_id:
             docs_by_sup[d.supplier_id].append(d)
 
-    # Check if org notes mention open procurement roles (internal politics context)
-    org_gap_doc = next(
-        (d for d in ctx.documents if "category lead" in (d.text or "").lower() and "open" in (d.text or "").lower()),
-        None,
-    )
+    vacancies = vacant_category_leads(ctx.documents, ref_date, {m.category for m in ctx.materials.values()})
 
     results: dict[str, ComputedRisk] = {}
     for sup_id, sup in sorted(ctx.suppliers.items()):
@@ -205,11 +232,14 @@ def rate_suppliers(
             internal_notes.append(f"{len(high_issues)} high-severity open Reconciler issue(s)")
             internal_ev.append(Evidence(path=f"issue://{high_issues[0].id}", locator=high_issues[0].type,
                                         quote=high_issues[0].summary))
-        if org_gap_doc and any(i.product_id == "FG-GH6-CE" for i in sup_issues):
+        affected_categories = {ctx.materials[i.part_id].category for i in sup_issues if i.part_id in ctx.materials}
+        affected_categories.update(ctx.materials[po.material_id].category for po in stuck_pos if po.material_id in ctx.materials)
+        vacant = next((c for c in sorted(affected_categories) if c in vacancies), None)
+        if vacant:
             internal_pts += 3.0
-            internal_notes.append("Collector's Category Lead role is vacant (approval bottleneck)")
-            internal_ev.append(Evidence(path=org_gap_doc.path, locator="onboarding_notes",
-                                        quote="Category Lead for Collector's Items left in the summer. Position is open."))
+            internal_notes.append(f"the Category Lead seat for {vacant} is vacant at the assessment date")
+            path, passage = vacancies[vacant]
+            internal_ev.append(Evidence(path=path, locator=vacant, quote=passage))
         internal_pts = min(15.0, internal_pts)
         breakdown["internal_politics"] = round(internal_pts, 1)
         if internal_pts > 0:
@@ -295,8 +325,9 @@ def rate_suppliers(
         ]
         ext_pol_pts = 0.0
         if poly_sigs:
-            top_poly = max(poly_sigs, key=lambda x: x.score_0_100)
-            avg_top2 = sum(s.score_0_100 for s in sorted(poly_sigs, key=lambda x: -x.score_0_100)[:2]) / min(2, len(poly_sigs))
+            market_inputs = sorted(poly_sigs, key=lambda x: -x.score_0_100)[:2]
+            top_poly = market_inputs[0]
+            avg_top2 = sum(s.score_0_100 for s in market_inputs) / len(market_inputs)
             ext_pol_pts = round(min(13.0, avg_top2 * 0.16), 1)
             breakdown["external_politics"] = ext_pol_pts
             reasons.append(ReasonItem(
@@ -369,13 +400,16 @@ def rate_suppliers(
             breakdown["telemetry"] = 0.0
 
         # B5. Official Regulatory Changes (US Federal Register BIS/USTR + EUR-Lex, 0..8 pts)
-        reg_sigs = [
-            sg for sg in signals
-            if sg.provider == "regulations" and country in sg.countries
-        ]
+        reg_sigs = []
+        for sg in signals:
+            if sg.provider != "regulations" or (sg.countries and country not in sg.countries):
+                continue
+            matches = regulatory_matches(sg, mappings_by_supplier[sup_id], ctx.materials)
+            if country in sg.countries or matches:
+                reg_sigs.append((sg, matches))
         reg_pts = 0.0
         if reg_sigs:
-            top_reg = max(reg_sigs, key=lambda x: x.score_0_100)
+            top_reg, linked_materials = max(reg_sigs, key=lambda x: (x[0].score_0_100, bool(x[1])))
             reg_pts = round(min(8.0, top_reg.score_0_100 * 0.10), 1)
             breakdown["regulatory_change"] = reg_pts
             reasons.append(ReasonItem(
@@ -395,7 +429,8 @@ def rate_suppliers(
 
         # Cap external total at 45 pts (and at 24 pts if no portal_news export ban hit, so ambient odds stay realistic)
         external_cap = 45.0 if news_pts > 0 else 24.0
-        external_total = min(external_cap, news_pts + ext_pol_pts + wx_pts + tel_pts + reg_pts)
+        external_raw = news_pts + ext_pol_pts + wx_pts + tel_pts + reg_pts
+        external_total = min(external_cap, external_raw)
 
         total_score = round(min(100.0, internal_total + external_total), 1)
         grade, rating = score_to_grade(total_score)
@@ -411,6 +446,19 @@ def rate_suppliers(
             )]
 
         actions = _dedup_actions([r.recommended_action for r in top3 if r.recommended_action])
+        contributing = {
+            "trade_news": [top_news] if news_pts else [],
+            "external_politics": market_inputs if ext_pol_pts else [],
+            "weather": [top_wx] if wx_pts else [],
+            "telemetry": [top_tel] if tel_pts else [],
+            "regulatory_change": [top_reg] if reg_pts else [],
+        }
+        observations = {factor: [sg.rating_input(country, sup_ports, sup_ship_ids) for sg in used]
+                        for factor, used in contributing.items() if used}
+        if reg_pts and linked_materials:
+            retained = observations["regulatory_change"][0]
+            retained["material_matches"] = linked_materials
+            retained["scope"] = "Customer sourcing · " + ", ".join(m["part"] for m in linked_materials)
         results[sup_id] = ComputedRisk(
             entity_type="supplier",
             entity_id=sup_id,
@@ -422,6 +470,12 @@ def rate_suppliers(
             breakdown=breakdown,
             suggested_actions=actions,
             supplier_id=sup_id,
+            score_basis=dict(internal=round(internal_total, 1), external_raw=round(external_raw, 1),
+                             external_cap=external_cap, external=round(external_total, 1), total=total_score),
+            signal_inputs=observations,
+            shipment_observations=[dict(shipment_ids=sorted(sup_ship_ids.intersection(sg.shipment_ids)),
+                title=sg.title, summary=sg.summary, evidence=sg.as_evidence().model_dump(), observed_at=sg.observed_at,
+                selected_for_rating=(sg is top_tel and tel_pts > 0)) for sg in tel_sigs],
         )
 
     return results

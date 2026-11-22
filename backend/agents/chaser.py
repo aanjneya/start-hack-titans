@@ -21,11 +21,11 @@ from typing import Any, Optional
 
 from sqlmodel import select
 
-from ..core import events, llm, trace
+from ..core import events, llm, policy, trace
 from ..core import mail as mailbox
 from ..core.config import BACKEND_ROOT, get_settings
 from ..core.coordinator import Event
-from ..core.models import InboxMessage, Issue, IssueKind, OutboxMessage, Supplier, utcnow
+from ..core.models import DecisionCard, InboxMessage, Issue, IssueKind, OutboxMessage, Supplier, utcnow
 from ..core.parsing import file_text, safe_rel
 from ..core.store import session
 from .base import Agent, register
@@ -53,14 +53,34 @@ How to work:
 Suppliers stop answering if they are spammed: when send_email refuses, accept it and do not retry."""
 
 
-def _fixture_for(supplier_id: str) -> Optional[dict]:
-    if not supplier_id or not FIXTURE_DIR.exists():
+_REQUEST_FIELDS = ("purpose", "po_number", "po_line", "shipment_id", "part", "component", "reference")
+
+
+def _fixture_scope(issue, request, ask, decision_id):
+    if decision_id:
+        return {"request": {k: request[k] for k in _REQUEST_FIELDS if request.get(k)}, "ask": ask}
+    return {"finding": issue.fingerprint} if issue else None
+
+
+def _fixture_for(supplier_id, scope, subject, body):
+    if not supplier_id or not FIXTURE_DIR.exists() or not get_settings().mock_mode:
         return None
-    for path in sorted(FIXTURE_DIR.glob(f"{supplier_id}*.json")):
+    for path in sorted(FIXTURE_DIR.glob("*.json")):
+        if not path.name.startswith(supplier_id + "_"):
+            continue
         try:
-            return json.loads(path.read_text(encoding="utf-8")) | {"_path": path.name}
+            recorded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if not isinstance(recorded, dict) or recorded.get("supplier_id", supplier_id) != supplier_id:
+            continue
+        if recorded.get("request_scope") is not None:
+            match = recorded["request_scope"] == scope
+        else:
+            # Older exports carry the original outbound message. Same supplier alone is ambiguous.
+            match = recorded.get("sent_subject") == subject and recorded.get("sent_body") == body
+        if match:
+            return {**recorded, "_path": path.name}
     return None
 
 
@@ -96,7 +116,7 @@ class Chaser(Agent):
                 self.log("skip", f"decision #{decision_id} already has mail #{done.id}",
                          data={"decision_id": decision_id, "outbox_id": done.id})
                 return
-        request = {k: p.get(k) for k in ("po_number", "po_line", "shipment_id", "part") if p.get(k)}
+        request = {k: p[k] for k in _REQUEST_FIELDS if p.get(k)}
         self.chase(issue_id=p.get("issue_id"), supplier_id=p.get("supplier_id", ""),
                    ask=p.get("ask", ""), decision_id=decision_id, request=request)
 
@@ -326,10 +346,11 @@ class Chaser(Agent):
         client = llm._anthropic_client()
         from zoneinfo import ZoneInfo
 
-        now = utcnow().astimezone(ZoneInfo("Europe/Berlin")).strftime("%a %d.%m.%Y %H:%M")
+        customer = policy.setup()
+        now = utcnow().astimezone(ZoneInfo(customer.timezone)).strftime("%a %d.%m.%Y %H:%M")
         prompt = (f"Clarify finding #{ctx['issue_id']}." if ctx["issue_id"]
                   else f"The launch planner asks you to contact {ctx['supplier_id']}: {ctx['ask']}")
-        prompt += f"\nCurrent time (Europe/Berlin): {now}. Any reply-by time must be in the future."
+        prompt += f"\nYou are writing for {customer.customer}. Current time ({customer.timezone}): {now}. Any reply-by time must be in the future."
         self.log("agent_start", prompt, data={"issue_id": ctx["issue_id"], "supplier_id": ctx["supplier_id"]})
         final_text = ""
         try:
@@ -374,12 +395,16 @@ class Chaser(Agent):
         question = ctx["ask"] or (issue.summary if issue else "please confirm the open point")
         contact = self.contact(ctx["supplier_id"])
         name = contact.get("contact_name") or "Sir or Madam"
-        subject = f"Soony launch: please confirm {refs}".strip() if refs else "Soony launch: quick question"
-        body = (f"Dear {name},\n\nfor our launch we need one confirmation regarding {refs or 'our open order'}:\n"
-                f"{question}\n\nCould you please reply today? Thank you very much.\n\nBest regards\nSoony procurement")
+        customer = policy.setup().customer or "Procurement"
+        subject = f"{customer} · sample terms" if r.get("purpose") == "verify_sample_terms" else f"{customer} · confirmation request"
+        if refs:
+            subject += f" · {refs}"
+        reference_line = f"Reference: {refs}\n" if refs and any(str(x) not in question for x in parts if x) else ""
+        body = f"Dear {name},\n\n{reference_line}{question}\n\nThank you,\n{customer} procurement"
         result = self.write_mail(ctx, subject, body, body)
         out = {"status": "mailed" if result.get("outbox_id") else "skipped", **result, "mode": "fallback"}
-        fixture = _fixture_for(ctx["supplier_id"])
+        scope = _fixture_scope(issue, r, ctx["ask"], ctx["decision_id"])
+        fixture = _fixture_for(ctx["supplier_id"], scope, subject, body)
         if result.get("outbox_id") and fixture:
             self._deliver_reply(result["outbox_id"], ctx["supplier_id"], fixture.get("reply_body", ""),
                                 subject=fixture.get("reply_subject", ""), from_email=fixture.get("reply_from", ""),
@@ -483,6 +508,11 @@ class Chaser(Agent):
         """Save a REAL exchange (sent mail + reply) as the demo fallback in backend/fixtures/chaser/."""
         with session() as s:
             out = s.get(OutboxMessage, outbox_id)
+            request = {}
+            issue = s.get(Issue, out.issue_id) if out and out.issue_id else None
+            card = s.get(DecisionCard, out.decision_id) if out and out.decision_id else None
+            if card and card.chosen_option is not None:
+                request = next((a for a in card.options[card.chosen_option].get("actions", []) if a["type"] == "email"), {})
             reply = s.exec(select(InboxMessage).where(InboxMessage.outbox_id == outbox_id)
                            .order_by(InboxMessage.id.desc())).first()
         if out is None or reply is None:
@@ -490,6 +520,7 @@ class Chaser(Agent):
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
         path = FIXTURE_DIR / f"{out.supplier_id}_outbox{outbox_id}.json"
         path.write_text(json.dumps({
+            "request_scope": _fixture_scope(issue, request, request.get("ask", ""), out.decision_id),
             "supplier_id": out.supplier_id, "recorded_at": str(reply.received_at), "language": out.language,
             "sent_subject": out.subject, "sent_body": out.body, "sent_body_en": out.body_en,
             "reply_subject": reply.subject, "reply_body": reply.body, "reply_from": reply.from_email,

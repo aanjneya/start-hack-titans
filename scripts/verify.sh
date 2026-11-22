@@ -76,11 +76,11 @@ run_node_checks() {
   (
     cd "$dir"
     if has_script verify; then
-      "$pm" run verify
+      "$pm" run verify || exit 1
     else
-      if has_script typecheck; then "$pm" run typecheck; fi
-      if has_script lint; then "$pm" run lint; fi
-      if has_script build; then "$pm" run build; fi
+      if has_script typecheck; then "$pm" run typecheck || exit 1; fi
+      if has_script lint; then "$pm" run lint || exit 1; fi
+      if has_script build; then "$pm" run build || exit 1; fi
     fi
   ) || FAIL=1
 }

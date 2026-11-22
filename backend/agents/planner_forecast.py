@@ -23,13 +23,25 @@ class Plan:
     inbound: list[dict] = field(default_factory=list)
     evidence: list[dict] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
+    shipment_checks: dict[str, list[dict]] = field(default_factory=dict)
+    line_balances: dict[tuple, float] = field(default_factory=dict)
+    material_names: dict[str, str] = field(default_factory=dict)
+    launch_priorities: dict[str, dict] = field(default_factory=dict)
 
 
 def simulate(plan: Plan, overrides=None, *, priority=None) -> dict[str, Forecast]:
     """Replace a delivery by its physical key when evaluating a what-if; never add it twice."""
     arrivals = dict(plan.arrivals)
     arrivals.update(overrides or {})
-    timeline = sorted(arrivals.values())
+    remaining_by_line = plan.line_balances.copy()
+    timeline = []
+    for key, (at, part, qty) in sorted(arrivals.items(), key=lambda item: item[1][0]):
+        line = key[:3]
+        if line in remaining_by_line:
+            qty = min(qty, remaining_by_line[line])
+            remaining_by_line[line] -= qty
+        if qty > 0:
+            timeline.append((at, part, qty))
     editions = priority or plan.editions
     stock = plan.stock.copy()
     packed = Counter()
@@ -85,12 +97,14 @@ def simulate(plan: Plan, overrides=None, *, priority=None) -> dict[str, Forecast
                  and row.rate_per_hour is not None and bool(plan.bom.get(pid)))
         gap = max(0, row.still_to_pack - packed[pid]) if known else None
         limit = blockers[pid].most_common(1)
+        part = limit[0][0] if gap and limit else ""
         results[pid] = Forecast(product_id=pid, edition=row.edition, deadline=plan.deadline,
                                 still_to_pack=row.still_to_pack,
                                 projected_packed=row.packed + packed[pid] if known else None,
-                                shortfall=gap, limiting_part=limit[0][0] if gap and limit else "",
+                                shortfall=gap, limiting_part=part,
                                 details={"as_of": plan.as_of.isoformat(), "working_hours": hours,
                                          "rate_per_hour": row.rate_per_hour, "hourly": hourly[pid],
+                                         "limiting_part_name": plan.material_names.get(part),
                                          "eligible_stock_at_snapshot_time": {part: plan.stock[part]
                                              for part in plan.bom.get(pid, {})},
                                          "consumption_since_stock_count": [x for x in plan.consumption

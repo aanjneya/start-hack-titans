@@ -43,6 +43,27 @@ def test_partial_late_and_repeated_deliveries_use_remaining_line_capacity():
     assert simulate(p, {key: (end, "shared", 50)})["other"].shortfall == 20
 
 
+def test_split_shipments_share_the_po_balance_in_arrival_order_for_every_option():
+    at = datetime(2026, 1, 1, 8, tzinfo=timezone.utc)
+    end = at + timedelta(hours=2)
+    row = LaunchStatus(product_id="edition", still_to_pack=300, packed=0, rate_per_hour=300)
+    p = Plan(at, end, [(at, end)], [row], {"edition": {"carton": 1}}, Counter())
+    line = ("vendor", "order", 2)
+    early, late = (*line, "van"), (*line, "truck")
+    p.line_balances = {line: 100, ("vendor", "order", 3): 20}
+    p.arrivals = {late: (end, "carton", 100), early: (at, "carton", 80),
+                  ("vendor", "order", 3, "van"): (at, "carton", 20)}
+    def packed(overrides=None):
+        return simulate(p, overrides)["edition"].projected_packed
+    assert packed() == 100
+    assert packed({late: (at + timedelta(minutes=30), "carton", 100)}) == 120
+    assert packed({late: (at - timedelta(minutes=30), "carton", 100)}) == 120
+    assert packed({late: (at, "carton", 10)}) == 110
+    assert packed() == 100
+    p.arrivals = dict(reversed(p.arrivals.items()))
+    assert packed() == 100
+
+
 def test_real_replay_lots_rush_and_correlated_inbox(tmp_path):
     client = TestClient(app)
     result = run(client, tmp_path)
@@ -166,7 +187,7 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
                    for log in all_rows(AgentLog))
         mail = chaser.mailbox.IncomingMail("1", "<supplier-reply@example.test>", spend.message_id, "",
                 "supplier-dispatch@example.test", "Re: " + spend.subject, f"Confirmed PO 4500318775/2, SHP-2026-04313, "
-                f"20000 units, rev C, arrival {arrival.isoformat()}.")
+                f"20000 units, rev C, arrival at Hamburg {arrival.isoformat()}.")
         settings = replace(chaser.get_settings(), chaser_send=True)
         with monkeypatch.context() as transport:
             transport.setattr(chaser, "get_settings", lambda: settings)
@@ -182,6 +203,23 @@ def test_priced_recovery_waits_for_confirmation_and_uses_whole_po(tmp_path, monk
         assert _decision_mails(card["id"])[0].status == "replied"
         assert not [log.detail for log in all_rows(AgentLog) if log.action == "error"]
     assert simulate(load_plan())["FG-GH6-STD"].projected_packed == before + option["copies_gained"]
+    inbox = client.get("/api/inbox?with_forecast=true").json()["data"]
+    advice = next(msg for msg in inbox if msg["outbox_id"] == spend.id and msg["result"].get("confirmed_delivery"))
+    outcome = next(f for f in advice["forecast_at_confirmation"] if f["product_id"] == "FG-GH6-STD")
+    assert outcome["change_from_previous"] == 5200 and outcome["joint_confirmations"] == 1
+    assert outcome["dock_released"] and outcome["projected_packed"] == 605200
+    history = client.get(f"/api/decisions/{card['id']}/history").json()["data"]["events"]
+    titles = [e["title"] for e in history]
+    assert titles.count("Supplier quote matched") == titles.count("Delivery confirmation matched") == 1
+    assert titles.count("Supplier request sent in simulation") == titles.count("Action authorized") == 2
+    assert titles.index("Supplier quote matched") < max(i for i, title in enumerate(titles) if title == "Action authorized")
+    projection, = [e for e in history if e["title"] == "Standard forecast recalculated"]
+    assert "+5,200" in projection["detail"] and "605,200" in projection["detail"]
+    assert {e["record"]["id"] for e in history if e["record"]["type"] == "outbox"} == {
+        _decision_mails(ask_id)[0].id, spend.id}
+    client.post("/api/inbox", json={**reply, "outbox_id": spend.id, "delivery": fact}).raise_for_status()
+    events_after = client.get(f"/api/decisions/{card['id']}/history").json()["data"]["events"]
+    assert [e["title"] for e in events_after if e not in history] == ["Duplicate reply retained"]
 
 
 def test_rejection_and_auto_threshold(tmp_path, monkeypatch, sleeve_snapshot):
@@ -189,7 +227,10 @@ def test_rejection_and_auto_threshold(tmp_path, monkeypatch, sleeve_snapshot):
     from backend.core import config, policy
     client = TestClient(app)
     card = next(c for c in all_rows(DecisionCard) if "rev blocked" in c.title and c.title.endswith("CMP-GAM-004") and c.status == "proposed")
-    client.post(f"/api/decisions/{card.id}/reject", json={"by": "buyer"}).raise_for_status()
+    url = f"/api/decisions/{card.id}/reject"
+    assert client.post(url, json={"by": "another buyer"}).status_code == 403
+    assert client.post(url, json={"by": card.approver, "option": -1}).status_code == 422
+    client.post(url, json={"by": card.approver}).raise_for_status()
     assert not _decision_mails(card.id)
     policy_path = tmp_path / "auto.json"
     settings = {"customer": "Example", "autonomy": {"mode": "auto", "auto_execute_below_eur": 1},

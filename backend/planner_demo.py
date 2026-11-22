@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-# The 17:23 drop has the revision finding and an outstanding sleeve delivery.
+# The 17:23 drop introduces the magnet notice and still has the outstanding sleeve delivery.
 # The evening receipt legitimately changes the recommended action.
 SLEEVE_SCENARIO_COMMIT = "f832f462bf8fbca26f1cad93f124a62d3a43a853"
 
@@ -102,12 +102,12 @@ def sleeve_card(client):
                 and c["title"].endswith("CMP-GAM-004"))
 
 
-def prepare_quote_request(client, scratch):
-    """Simulate the site recount and release, then approve the buyer's supplier inquiry."""
+def prepare_recount(scratch):
+    """Controlled fixture inputs. The buyer still has to authorize a supplier inquiry."""
     from . import system
     from .agents.planner_inputs import load_plan
     from .core import store
-    from .core.models import OutboxMessage, StockLot
+    from .core.models import StockLot
 
     # Controlled variant: a recount makes sleeves the binding constraint.
     lot = store.find_rows(StockLot, batch="5000413060")[0]
@@ -119,7 +119,18 @@ def prepare_quote_request(client, scratch):
     release = directory / "slot.csv"
     release.write_text("receiving_site,delivery_reference,approved_revision,dock_released_at\n"
                        f"DC-HAM,SHP-2026-04313,C,{arrival.isoformat()}\n")
-    system.process_drop(added=["site/slot.csv"], data_root=scratch)
+    result = system.process_drop(added=["site/slot.csv"], data_root=scratch, mode="simulation",
+                                 label="Pickup simulation · Site recount and dock release")
+    if result["status"] != "completed":
+        raise RuntimeError(f"Simulation setup incomplete: {result['failures']}")
+    return arrival
+
+
+def prepare_quote_request(client, scratch):
+    from .core import store
+    from .core.models import OutboxMessage
+
+    arrival = prepare_recount(scratch)
     card = sleeve_card(client)
     client.post(f"/api/decisions/{card['id']}/approve", json={"by": "Paul Winter"}).raise_for_status()
     ask_id = card["id"]
@@ -134,23 +145,41 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--serve-pickup", action="store_true", help="serve the simulated €500 quote for the buyer UI")
+    serve = parser.add_mutually_exclusive_group()
+    serve.add_argument("--serve-soony", action="store_true", help="serve real Soony history one drop before the magnet warning")
+    serve.add_argument("--serve-inquiry", action="store_true", help="serve the simulated recount before any buyer action")
+    serve.add_argument("--serve-pickup", action="store_true", help="serve the simulated €500 quote for the buyer UI")
+    serve.add_argument("--serve-market", action="store_true", help="serve a second customer's isolated 20% to 85% market move")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     with TemporaryDirectory(prefix="launch-planner-") as temp:
         scratch = Path(temp)
-        os.environ.update(MOCK_MODE="true", DB_PATH=str(scratch / "demo.db"), REPLAY_DIR=str(scratch / "replay"))
+        if args.serve_market:
+            from .market_demo import serve as serve_market
+            serve_market(scratch, args.port)
+            raise SystemExit(0)
+        os.environ.update(MOCK_MODE="true", REPLAY_DB_PATH=str(scratch / "demo.db"), CHASER_SEND="false", REPLAY_DIR=str(scratch / "replay"))
         from fastapi.testclient import TestClient
         from .app.main import app
         with TestClient(app) as client:
-            if args.serve_pickup:
-                for _ in range(sleeve_scenario_steps()):
-                    client.post("/api/replay/step").raise_for_status()
+            if args.serve_soony or args.serve_pickup or args.serve_inquiry:
+                steps = sleeve_scenario_steps()
+                if args.serve_soony:
+                    steps -= 1  # Leave the supplier notice for the presenter's first click.
+                for step in range(1, steps + 1):
+                    response = client.post("/api/replay/step")
+                    response.raise_for_status()
+                    prepared = response.json()["data"]
+                    if prepared.get("status") != "completed" or prepared.get("step") != step:
+                        raise RuntimeError(f"Historical preparation stopped at step {step}: {prepared}")
+            if args.serve_inquiry:
+                prepare_recount(scratch)
+            elif args.serve_pickup:
                 _, reply, fact = prepare_quote_request(client, scratch)
                 quote = {**fact, "mode": "pickup", "incremental_cost_eur": 500, "valid_until": fact["arrival"]}
                 client.post("/api/inbox", json={**reply, "body": "[MOCK] Pickup quote", "quote": quote}).raise_for_status()
-            else:
+            elif not args.serve_soony:
                 print(json.dumps(run(client, scratch), indent=2))
-        if args.serve_pickup:
+        if args.serve_soony or args.serve_pickup or args.serve_inquiry:
             import uvicorn
             uvicorn.run(app, host="127.0.0.1", port=args.port)

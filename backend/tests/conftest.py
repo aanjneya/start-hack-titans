@@ -7,6 +7,7 @@ import pytest
 def fresh_backend(tmp_path, monkeypatch):
     """Every test gets its own empty SQLite DB, MOCK mode on, and fresh agents."""
     monkeypatch.setenv("DB_PATH", str(tmp_path / "truth.db"))
+    monkeypatch.setenv("REPLAY_DB_PATH", str(tmp_path / "demo.db"))
     monkeypatch.setenv("REPLAY_DIR", str(tmp_path / "replay"))
     monkeypatch.setenv("MOCK_MODE", "true")
     from backend.core import config, store

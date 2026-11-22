@@ -9,13 +9,33 @@ from datetime import timedelta
 
 from ..core import models as m
 from ..core.parsing import parse_datetime
-from ..core.store import all_rows
+from ..core.store import all_rows, latest_by
 from .planner_counts import fitted_components, receiving_corrections, site_counts
 from .planner_forecast import Plan
 
 
 def evidence(path, locator, quote=""):
     return {"path": path.partition("#")[0], "locator": locator, "quote": quote, "sha256": ""}
+
+
+def shipment_checks(shipments, conflicts):
+    """Attach only unresolved disagreements that still match both operational sources."""
+    by_source = {(s.shipment_id, s.source): s for s in latest_by(shipments, "shipment_id", "source")}
+    checks = defaultdict(list)
+    for c in conflicts:
+        if c.entity != "shipment" or c.status == "resolved" or c.field not in {"status", "eta"}:
+            continue
+        readings = []
+        for source, expected in ((c.source_a, c.value_a), (c.source_b, c.value_b)):
+            row = by_source.get((c.entity_id, source))
+            if not row or str(getattr(row, c.field) or "") != expected:
+                break
+            readings.append(dict(value=expected, source=source, note=row.note))
+        if len(readings) == 2 and readings[0]["value"] != readings[1]["value"]:
+            check = dict(field=c.field, readings=readings)
+            if check not in checks[c.entity_id]:
+                checks[c.entity_id].append(check)
+    return dict(checks)
 
 
 def clock(text, anchor):
@@ -26,6 +46,46 @@ def clock(text, anchor):
         return parse_datetime(f"{date}T{day[2]}")
     iso = re.search(r"\b(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})", text)
     return parse_datetime(iso[1]) if iso else None
+
+
+def launch_priorities(editions, documents, as_of):
+    """Identify an edition named first by the customer and retain its actual purchasing rationale."""
+    directives = []
+    for doc in documents:
+        if doc.kind not in {"memo", "note"} or (doc.published_at and doc.published_at.date() > as_of.date()):
+            continue
+        text = html.unescape(doc.text or "").replace("’", "'")
+        for row in editions:
+            edition = re.escape((row.edition or "").replace("’", "'"))
+            if not edition:
+                continue
+            match = re.search(r"(?<![\w'])" + edition + r"(?: edition| pre-orders)? first\b[^.\n]*[.]?", text, re.I)
+            if not match:
+                continue
+            instruction = match[0].strip()
+            following = text[match.end():].lstrip(" \t")
+            orders = re.match(r"All ([\d,]+) copies are pre-?ordered\b[^.\n]*[.]?", following, re.I)
+            committed = int(orders[1].replace(",", "")) if orders else None
+            cited = instruction + (" " + orders[0] if orders else "")
+            rationale = re.search(r"(?im)^rationale\s*:\s*(.+)$", text) if orders else None
+            directives.append((doc.published_at.date() if doc.published_at else None, row.product_id,
+                dict(evidence=evidence(doc.path, "launch priority", cited), preordered=committed,
+                     all_demand_preordered=committed is not None and committed == row.day_one_demand,
+                     rationale=rationale[1].strip() if rationale else None)))
+    if not directives:
+        return {}
+    # Undated conflicting instructions cannot be ordered in time.
+    latest = max((d for d, _, _ in directives if d is not None), default=None)
+    current = [(pid, source) for d, pid, source in directives if d is None or d == latest]
+    if len({pid for pid, _ in current}) != 1:
+        return {}
+    pid, source = max(current, key=lambda pair: len(pair[1]["evidence"]["quote"]))
+    if len({s["preordered"] for _, s in current if s["preordered"] is not None}) > 1:
+        proof = source["evidence"]
+        instruction = re.split(r"\s+All [\d,]+ copies are pre-?ordered\b", proof["quote"], maxsplit=1, flags=re.I)[0]
+        source = dict(source, evidence=dict(proof, quote=instruction), preordered=None,
+                      all_demand_preordered=False, rationale=None)
+    return {pid: source}
 
 
 def load_plan():
@@ -94,11 +154,8 @@ def load_plan():
                 deadline = min(deadline, parse_datetime(f"{launch_day}T{match[1]}"))
                 ev.append(evidence(doc.path, "launch deadline", match[0]))
     ev.append(evidence(status_doc.path, "edition rows", status_doc.text.splitlines()[0]))
-    priority_text = " ".join(d.text.lower() for d in documents if d.kind in {"memo", "note"})
-    def priority(row):
-        name = re.escape(row.edition.casefold().replace("’", "'"))
-        return 0 if re.search(name + r"(?: edition| pre-orders)? first", priority_text) else 1
-    editions.sort(key=lambda r: (priority(r), r.product_id))
+    priorities = launch_priorities(editions, documents, as_of)
+    editions.sort(key=lambda r: (r.product_id not in priorities, r.product_id))
     bom = defaultdict(dict)
     for row in all_rows(m.BomLine):
         if (not row.valid_from or row.valid_from <= as_of.date()) and (not row.valid_to or row.valid_to >= as_of.date()):
@@ -111,6 +168,9 @@ def load_plan():
                 parts.pop(part.component_id)
                 ev.append(evidence(part.source, part.component_id, note))
     plan = Plan(as_of, deadline, shifts, editions, dict(bom), Counter(), evidence=ev)
+    plan.launch_priorities = priorities
+    plan.material_names = {material.component_id: material.description
+                           for material in latest_by(all_rows(m.Material), "component_id") if material.description}
     changes = {}
     for row in sorted(all_rows(m.EngineeringChange), key=lambda c: (c.effective_from or as_of.date(), c.id)):
         if row.effective_from and row.effective_from <= as_of.date():
@@ -234,7 +294,9 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             advice[(msg.supplier_id, fact["po_number"], fact["po_line"], fact["shipment_id"])] = (fact, msg.id)
     shipping_advices = [d for d in documents if d.kind == "shipping_advice"]
     visited = set()
-    for ship in sorted(all_rows(m.Shipment), key=lambda s: (s.id or 0)):
+    shipments = list(all_rows(m.Shipment))
+    plan.shipment_checks = shipment_checks(shipments, all_rows(m.Conflict))
+    for ship in sorted(shipments, key=lambda s: (s.id or 0)):
         if ship.shipment_id in visited or ship.dest_site != site:
             continue
         visited.add(ship.shipment_id)
@@ -250,6 +312,7 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             if not outstanding:
                 continue
             key = (supplier, po, line, ship.shipment_id)
+            plan.line_balances[key[:3]] = outstanding
             fact, inbox_id = advice.get(key, ({}, None))
             rev = fact.get("revision", oc.revision)
             qty = min(outstanding, fact.get("quantity", outstanding))
@@ -274,9 +337,7 @@ def _inbound(plan, site, confirmations, receipts, changes, documents):
             change = changes.get(part)
             blocked = bool(change and not change.use_up_old_rev and rev != change.rev_new)
             if slot and eta and not blocked:
-                # A PO line shared by multiple shipments never contributes more than the unreceived balance.
-                prior = sum(v[2] for k, v in plan.arrivals.items() if k[:3] == key[:3])
-                plan.arrivals[key] = (max(slot, eta), part, max(0, min(qty, outstanding - prior)))
+                plan.arrivals[key] = (max(slot, eta), part, qty)
             plan.inbound.append({"part": part, "supplier_id": supplier, "po_number": po, "po_line": line,
                                  "shipment_id": ship.shipment_id, "revision": rev, "quantity": qty,
                                  "eta": fact.get("arrival") or reported_eta,

@@ -10,6 +10,7 @@ import {
 import {
   AGENT_NAV, TONE_CLASS, agentMeta, entryDetail, humanizeAction, isPlumbingEvent, type AgentId,
 } from "./agent-meta";
+import RiskPlaybook from "../risk-playbook";
 import { ForecastPanel } from "./forecast-chart";
 import { buildRosterAgents, plural } from "./roster";
 
@@ -661,6 +662,8 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
           ))}
         </div>
       )}
+
+      <RiskPlaybook />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-bold">Risk ratings ({visible.length})</h2>

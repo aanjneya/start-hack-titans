@@ -11,14 +11,18 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-22T08-45 (Europe/Berlin)
-Portal now: 332 files, 53.2 MB
+### Drop check 2026-11-22T09-38 (Europe/Berlin)
+Portal now: 335 files, 53.3 MB
 No changes since last check.
 
 ## All checks (newest first, Europe/Berlin)
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-22 09-38 | 335 · 53.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T09-38.md) |
+| 2026-11-22 09-23 | 335 · 53.3 MB | 3 | 0 | 0 | **3 added · 0 changed · 0 removed** — `soony/erp/po_export_2026-11-22.csv`, `suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf`, `suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv` Nothing new arrives before tonight 20:00, but three warnings: the new German SAP-style PO export (po_export_2026-11-22.csv: semicolons, decimal commas, DD.MM.YYYY, item 10/20 = our line 1/2) shows still no order confirmation ('AB fehlt') for the 350,000 cases in the container at CTA (PO 4500318738/20) and the 48,000 game cards (4500318735/20), and Boise's 36,000 cards (4500318769/20) as 'Lieferant mahnen'. Dongguan's revised_schedule_W47.csv moves every statue, case and steel-case confirmation +10 days (capacity re-planning Q4), so post-launch Collector's statues slip to 26 Dec - 23 Jan. Hwaseong's LTA Amendment 3 redline extends to 2029, keeps 9.80 USD only if signed by 15 Dec (else 10.58 from 2027) and slips in a new, undiscussed section 4 that waives all Soony late-delivery claims on signature, including the current 20,000-card short shipment, so it must not be signed as is. Offline, our Ingest keeps both CSVs only as plain tables (German headers and the new schedule columns are not mapped yet), so these slips do not reach the order confirmations until that is fixed. | [report](reports/2026-11-22T09-23.md) |
+| 2026-11-22 09-08 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T09-08.md) |
+| 2026-11-22 08-53 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T08-53.md) |
 | 2026-11-22 08-45 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T08-45.md) |
 | 2026-11-22 08-23 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T08-23.md) |
 | 2026-11-22 08-08 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T08-08.md) |

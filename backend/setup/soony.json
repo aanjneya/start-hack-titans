@@ -16,5 +16,23 @@
     {"below_eur": 2000000, "approvers": ["Head of procurement"]},
     {"below_eur": 5000000, "approvers": ["CPO"]},
     {"below_eur": null, "approvers": ["CPO", "CFO"]}
-  ]
+  ],
+  "risk_circuit_breakers": {
+    "grade_5": {
+      "force_human_approval": true,
+      "freeze_new_auto_pos": false,
+      "qc_inspection": "100%_AQL",
+      "share_cap_pct": 50,
+      "escalate_approver_tiers": 0,
+      "label": "Grade B (5/6) — Control Lock + 100% Dock QC"
+    },
+    "grade_6": {
+      "force_human_approval": true,
+      "freeze_new_auto_pos": true,
+      "qc_inspection": "100%_AQL_QUARANTINE",
+      "share_cap_pct": 0,
+      "escalate_approver_tiers": 1,
+      "label": "Grade CCC (6/6) — Auto-PO Frozen + Share Shift + Executive Escalation"
+    }
+  }
 }

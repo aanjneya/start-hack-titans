@@ -436,3 +436,80 @@ def test_follow_exact_market_after_it_leaves_volume_ranking(monkeypatch):
         provider._fetch_live({"CA"}, now, watched)
     detail[0] = dict(event, closed=True)
     assert provider._fetch_live({"CA"}, now, watched) == []
+
+
+def test_risk_playbook_all_four_engines_on_real_drops():
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+    from backend.core import trace
+
+    # Replay 3 real drops (baseline + 16:08 + 17:23)
+    for _ in range(3):
+        system.replay_step()
+    assert _risk_errors() == []
+
+    client = TestClient(app)
+    res = client.get("/api/risk/playbook")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    data = body["data"]
+
+    # 1. Path-to-Upgrade Optimizer (CCC -> improved rating)
+    plans = {p["product_id"]: p for p in data["upgrade_plans"]}
+    assert "FG-GH6-CE" in plans
+    ce = plans["FG-GH6-CE"]
+    assert ce["levers"], "expected concrete upgrade levers for FG-GH6-CE"
+    assert ce["projected_score"] < ce["current_score"]
+    assert ce["projected_grade"] <= ce["current_grade"]
+
+    # 2. Predictive Pre-Emptive Chasing (72h early external triggers)
+    alerts = data["preemptive_alerts"]
+    assert len(alerts) >= 1
+    assert all(a["lead_time_advantage_hours"] >= 24 and a["draft_body"] and a["draft_body_en"] for a in alerts)
+    assert all(a["status"] in ("ready", "dispatched", "blocked_anti_spam") for a in alerts)
+
+    # 3. Geo-Decorrelated 2nd-Source Scout + Spec-Grounded RFQ Pack
+    scouts = data["second_source_scouts"]
+    assert len(scouts) >= 1
+    for sc in scouts:
+        assert len(sc["candidates"]) == 3
+        assert all(c["country"] != sc["blocked_country"] for c in sc["candidates"])
+        assert sc["projected_dual_score"] < sc["current_score"]
+        assert sc["part_id"] in sc["rfq_body"]
+
+    # 4. Risk-Triggered Circuit Breakers + trace audit
+    breakers = data["circuit_breakers"]
+    assert len(breakers) >= 1
+    assert any(b["grade"] >= 5 and len(b["rules_triggered"]) >= 2 for b in breakers)
+    logs = [e for e in trace.recent(limit=200) if e.agent == "risk" and e.action == "circuit_breaker_tripped"]
+    assert logs, "expected circuit_breaker_tripped logged to agent_log"
+
+
+def test_preemptive_chase_endpoint_dispatches_via_chaser():
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+    from backend.core import trace
+    from backend.core.models import OutboxMessage
+
+    system.replay_step()
+    client = TestClient(app)
+    pb = client.get("/api/risk/playbook").json()["data"]
+    assert pb["preemptive_alerts"]
+    alert = pb["preemptive_alerts"][0]
+
+    before_count = len(all_rows(OutboxMessage))
+    resp = client.post("/api/risk/preemptive-chase", json={
+        "alert_id": alert["alert_id"],
+        "supplier_id": alert["supplier_id"],
+        "shipment_id": alert["shipment_id"],
+        "po_number": alert["po_number"],
+        "part_id": alert["part_id"],
+        "ask": alert["draft_body_en"],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert len(all_rows(OutboxMessage)) >= before_count
+    logs = [e for e in trace.recent(limit=50) if e.agent == "human" and e.action == "preemptive_chase"]
+    assert logs
+

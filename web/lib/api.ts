@@ -15,6 +15,7 @@ import type {
 
 export type {
   AgentLogEntry,
+  CircuitBreakerAction,
   DecisionCard,
   DecisionOption,
   Evidence,
@@ -24,8 +25,15 @@ export type {
   InboxMessage,
   Issue,
   OutboxMessage,
+  PreemptiveChaseAlert,
+  PreemptiveChaseRequest,
+  ProductUpgradePlan,
+  RiskPlaybookResponse,
   RiskScore,
+  RiskUpgradeLever,
   RunResult,
+  SecondSourceCandidate,
+  SecondSourceScout,
 } from "../../API_CONTRACT";
 
 export interface DropRecord {

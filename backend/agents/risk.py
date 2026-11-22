@@ -23,6 +23,7 @@ from ..core.models import Evidence, Issue, IssueKind, RiskScore, Severity
 from ..core.store import add_all, all_rows, latest_by, session
 from .base import Agent, register
 from .reconciler_rules import build_context
+from .risk_breakers import evaluate_circuit_breakers
 from .risk_scoring import ComputedRisk, rate_parts, rate_products, rate_suppliers
 from .risk_signals import DEFAULT_PROVIDERS, SignalProvider, collect_external_signals
 
@@ -246,6 +247,16 @@ class RiskRater(Agent):
 
         # Auto-resolve any previous Risk Rater findings whose grade dropped below 5
         resolved = self._resolve_cleared(active_fingerprints)
+
+        # Log tripped Risk-Triggered Circuit Breakers (Grade 5/6) for AI Observability
+        breakers = evaluate_circuit_breakers(ctx, supplier_risks, product_risks)
+        if breakers:
+            summary_b = ", ".join(f"{b['entity_id']} ({b['rating']})" for b in breakers[:4])
+            self.log(
+                "circuit_breaker_tripped",
+                f"{len(breakers)} circuit breaker(s) active: {summary_b}",
+                data={"count": len(breakers), "entities": [b["entity_id"] for b in breakers]},
+            )
 
         self.log(
             "risk_rated",

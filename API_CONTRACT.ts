@@ -434,6 +434,130 @@ export interface TruthTableInfo {
   rows: number;
 }
 
+/** Risk-to-Action Playbook types (Agent 6: Path-to-Upgrade, Pre-Emptive Chasing, 2nd-Source Scout, Circuit Breakers). */
+export interface RiskUpgradeLever {
+  id: string;
+  title: string;
+  category: 'decision' | 'second_source' | 'quality' | 'buffer';
+  part_id: string;
+  supplier_id: string;
+  cost_eur: number;
+  copies_gained: number | null;
+  delta_points: number;
+  cumulative_score: number;
+  cumulative_grade: number;
+  cumulative_rating: string;
+  decision_id: number | null;
+  option_index: number | null;
+  approver: string;
+  executable: boolean;
+  rationale: string;
+  evidence: Evidence[];
+}
+
+export interface ProductUpgradePlan {
+  product_id: string;
+  product_name: string;
+  current_score: number;
+  current_grade: number;
+  current_rating: string;
+  projected_score: number;
+  projected_grade: number;
+  projected_rating: string;
+  total_cost_eur: number;
+  levers: RiskUpgradeLever[];
+}
+
+export interface PreemptiveChaseAlert {
+  alert_id: string;
+  supplier_id: string;
+  supplier_name: string;
+  country: string;
+  language: string;
+  shipment_id: string;
+  po_number: string;
+  part_id: string;
+  provider: string;
+  category: string;
+  signal_title: string;
+  signal_score: number;
+  lead_time_advantage_hours: number;
+  draft_subject: string;
+  draft_body: string;
+  draft_body_en: string;
+  status: 'ready' | 'dispatched' | 'blocked_anti_spam';
+  evidence: Evidence[];
+}
+
+export interface SecondSourceCandidate {
+  name: string;
+  country: string;
+  city: string;
+  corridor_rating: string;
+  corridor_score: number;
+  lead_time_days: number;
+  est_unit_price_eur: number | null;
+  qualification_weeks: number;
+  certifications: string[];
+  why_decorrelated: string;
+}
+
+export interface SecondSourceScout {
+  part_id: string;
+  part_name: string;
+  current_supplier_id: string;
+  current_supplier_name: string;
+  blocked_country: string;
+  current_score: number;
+  current_grade: number;
+  current_rating: string;
+  projected_dual_score: number;
+  projected_dual_grade: number;
+  projected_dual_rating: string;
+  safe_corridors: { country: string; rating: string; score: number }[];
+  candidates: SecondSourceCandidate[];
+  rfq_subject: string;
+  rfq_body: string;
+  evidence: Evidence[];
+}
+
+export interface CircuitBreakerAction {
+  entity_type: 'supplier' | 'product';
+  entity_id: string;
+  entity_name: string;
+  grade: number;
+  rating: string;
+  score_0_100: number;
+  label: string;
+  force_human_approval: boolean;
+  freeze_new_auto_pos: boolean;
+  qc_inspection: string;
+  share_cap_pct: number | null;
+  escalate_approver_tiers: number;
+  share_shifts: { part_id: string; from_supplier: string; to_supplier: string; new_split: string }[];
+  rules_triggered: string[];
+  reason: string;
+  evidence: Evidence[];
+}
+
+export interface RiskPlaybookResponse {
+  computed_at: string;
+  autonomy_mode: 'control' | 'auto';
+  upgrade_plans: ProductUpgradePlan[];
+  preemptive_alerts: PreemptiveChaseAlert[];
+  second_source_scouts: SecondSourceScout[];
+  circuit_breakers: CircuitBreakerAction[];
+}
+
+export interface PreemptiveChaseRequest {
+  alert_id: string;
+  supplier_id: string;
+  shipment_id?: string;
+  po_number?: string;
+  part_id?: string;
+  ask: string;
+}
+
 /**
  * Route registry — keep endpoint paths and HTTP methods in sync here.
  * Backend base URL in dev: http://localhost:8000
@@ -461,6 +585,8 @@ export const API_ROUTES = {
   BUYER_ACTIVITY: '/api/buyer-activity', // GET -> BuyerActivity[]; latest 400 steps without document payloads
   RISK: '/api/risk', // GET -> RiskScore[]; ?current=true selects the latest grade per entity before ranking
   RISK_REFRESH: '/api/risk/refresh', // POST -> ActionRun; recheck external signals against current orders
+  RISK_PLAYBOOK: '/api/risk/playbook', // GET -> RiskPlaybookResponse (Path-to-Upgrade, Pre-Emptive Chasing, 2nd-Source Scout, Circuit Breakers)
+  RISK_PREEMPTIVE_CHASE: '/api/risk/preemptive-chase', // POST PreemptiveChaseRequest -> dispatches rate-limited pre-emptive supplier check
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)

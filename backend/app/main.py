@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_, text
 from sqlmodel import func, select
 
+from ..agents.risk_baseline import current_risk_scores
 from ..agents.planner_history import decision_history
 from ..agents.planner_queue import buyer_queue, current_option, selection_version
 from ..agents.planner_delivery import DeliveryAdvice, SupplierQuote, already_requested
@@ -408,11 +409,8 @@ def buyer_activity() -> dict:
 @app.get("/api/risk")
 def risk(current: bool = False) -> dict:
     if current:
-        latest_ids = select(func.max(RiskScore.id)).group_by(RiskScore.entity_type, RiskScore.entity_id)
         with session() as db:
-            rows = db.exec(select(RiskScore).where(RiskScore.id.in_(latest_ids)).order_by(
-                           RiskScore.grade.desc(), RiskScore.entity_type, RiskScore.entity_id)).all()
-            return ok([r.model_dump(mode="json") for r in rows])
+            return ok([r.model_dump(mode="json") for r in current_risk_scores(db)])
     return ok(_rows(RiskScore, order=RiskScore.grade.desc()))
 
 
@@ -426,7 +424,7 @@ def risk_playbook() -> dict:
     """Unified Risk-to-Action Playbook: Path-to-Upgrade (CCC->A), Pre-Emptive Chasing, 2nd-Source Scout, Circuit Breakers."""
     from ..agents.risk_playbook import build_risk_playbook
 
-    return ok(build_risk_playbook(data_root=get_settings().data_root))
+    return ok(build_risk_playbook())
 
 
 class PreemptiveChaseRequest(BaseModel):

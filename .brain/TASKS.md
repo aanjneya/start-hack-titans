@@ -6,6 +6,8 @@
 
 ## Now (Active Sprint)
 
+- [x] @jivi Buyer overview and Agent Team on `jivi`. The home screen leads with actionable risks, packing gaps and recovery decisions. Risk ratings have plain-language reasons, evidence and a grade legend. Product scenarios use published scores and open the exact buyer decision. All five drops completed, 118 backend tests passed, and desktop and mobile walkthroughs passed.
+
 - [x] @daksh 1 Watcher (`backend/agents/watcher.py`) ✅ Sat 19:35
 - [x] @daksh 2 Ingest & Normalizer (`backend/agents/ingest*.py`) ✅ Sat 19:35 · OCR 19:50 · **live-tested 21:15 with OpenAI** (60/60 scans, 0 errors) · handles the 21:38 drop (stock date from sheet title) · 63 tests green on `daksh` (22:10)
 - [x] @aanjneya 3 Reconciler & Gate (`backend/agents/reconciler.py`, `backend/agents/reconciler_rules.py`, `backend/tests/test_reconciler.py`, `.brain/tasks/3-reconciler-gate.md`) ✅ Sat 20:38 · Finding Format v1, 3-drop replay green (34 tests)

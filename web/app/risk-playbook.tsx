@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import {
   eur,
@@ -9,19 +10,8 @@ import {
   type PreemptiveChaseAlert,
   type ProductUpgradePlan,
   type RiskPlaybookResponse,
-  type RiskUpgradeLever,
   type SecondSourceScout,
 } from "@/lib/api";
-
-function scoreToGrade(score: number): { grade: number; rating: string } {
-  const s = Math.max(0, Math.min(100, score));
-  if (s >= 80) return { grade: 6, rating: "CCC" };
-  if (s >= 65) return { grade: 5, rating: "B" };
-  if (s >= 50) return { grade: 4, rating: "BBB" };
-  if (s >= 35) return { grade: 3, rating: "A" };
-  if (s >= 20) return { grade: 2, rating: "AA" };
-  return { grade: 1, rating: "AAA" };
-}
 
 function gradeBadgeClass(grade: number): string {
   if (grade >= 6) return "bg-stop text-white";
@@ -31,19 +21,95 @@ function gradeBadgeClass(grade: number): string {
   return "bg-ok-soft text-ok";
 }
 
+function RiskScenarios({ plans, onReviewAction }: {
+  plans: ProductUpgradePlan[];
+  onReviewAction?: (key: string) => void;
+}) {
+  const [selectedId, setSelectedId] = useState("");
+  const [stepCount, setStepCount] = useState(1);
+  const plan = plans.find(item => item.product_id === selectedId) ?? plans[0];
+  if (!plan) return <p className="text-sm text-muted">A scenario will appear when products and their component risks have been rated.</p>;
+
+  const count = Math.min(stepCount, plan.levers.length);
+  const steps = plan.levers.slice(0, count);
+  const result = steps.at(-1);
+  const projected = result?.cumulative_score ?? plan.current_score;
+  const difference = Number((plan.current_score - projected).toFixed(1));
+
+  return (
+    <>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-1">
+          <label htmlFor="scenario-product" className="text-xs font-semibold text-muted">Product</label>
+          <select id="scenario-product" className="min-w-0 rounded-md border border-rule bg-surface px-2 py-2 text-sm text-ink" value={plan.product_id}
+            onChange={e => { setSelectedId(e.target.value); setStepCount(1); }}>
+            {plans.map(p => <option key={p.product_id} value={p.product_id}>{p.product_name}</option>)}
+          </select>
+        </div>
+        {plan.levers.length > 0 && <div className="flex min-w-0 flex-col gap-1">
+          <label htmlFor="scenario-changes" className="text-xs font-semibold text-muted">Changes to model</label>
+          <select id="scenario-changes" className="min-w-0 rounded-md border border-rule bg-surface px-2 py-2 text-sm text-ink" value={count}
+            onChange={e => setStepCount(Number(e.target.value))}>
+            <option value={0}>Current conditions</option>
+            {plan.levers.map((step, index) => <option key={step.id} value={index + 1}>
+              {index + 1}. {index > 0 ? "Also " + step.title.charAt(0).toLowerCase() + step.title.slice(1) : step.title}
+            </option>)}
+          </select>
+        </div>}
+      </div>
+      <div aria-live="polite" className="mt-4 rounded-md border border-rule bg-dock/45 p-4">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-sm text-muted">Current risk</span>
+          <strong className="tabular text-base">{plan.current_score}/100 <span className="text-sm">{plan.current_rating}</span></strong>
+          {result && difference !== 0 && <>
+            <span className="text-sm text-muted">Estimated after {count === 1 ? "this change" : "these changes"}</span>
+            <strong className="tabular text-base text-act">{projected}/100 <span className="text-sm">{result.cumulative_rating}</span></strong>
+          </>}
+        </div>
+        <p className="mt-1 text-sm text-ink">
+          {!result ? (plan.levers.length ? "Select a change to see its estimated effect." : "No change to model from the current evidence.")
+            : difference === 0 ? "These conditions would leave the product’s risk score unchanged."
+            : `${difference} points lower.${plan.current_rating === result.cumulative_rating ? ` The rating stays ${plan.current_rating}.` : ""}`}
+        </p>
+        {result?.limiting_part_after && <p className="mt-1 text-xs text-muted">{result.limiting_part_after} still sets the highest part risk.</p>}
+      </div>
+      <ol className="mt-2 divide-y divide-rule">
+        {steps.map((step, index) => (
+          <li key={step.id} className="py-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <span className="text-sm font-semibold text-ink">{count > 1 && `${index + 1}. `}{step.title}</span>
+              <span className="text-xs font-medium text-muted">{step.delta_points > 0 ? `${step.delta_points} fewer risk points` : "No change to the product score"}</span>
+            </div>
+            <p className="mt-1 text-xs text-muted">{step.rationale}</p>
+            {step.queue_key && <div className="mt-2 space-y-1 border-l-2 border-act/40 pl-3 text-xs">
+              {onReviewAction
+                ? <button className="text-left font-semibold text-act underline" onClick={() => onReviewAction(step.queue_key!)}>Review buyer action · {step.decision_label}</button>
+                : <Link href={`/?action=${encodeURIComponent(step.queue_key)}`} className="font-semibold text-act underline">Review buyer action · {step.decision_label}</Link>}
+              <p className="text-muted">{step.cost_eur == null ? "Buyer action cost awaiting confirmation" : `Buyer action amount ${eur(step.cost_eur)}`}
+                {step.approver && ` · Assigned to ${step.approver}`}
+                {step.copies_gained != null && step.copies_gained > 0 && ` · Up to ${fmt(step.copies_gained)} additional copies if confirmed`}</p>
+            </div>}
+          </li>
+        ))}
+      </ol>
+    </>
+  );
+}
+
 export default function RiskPlaybook({
   onActionComplete,
-  signer = "Paul Winter",
+  onReviewAction,
+  activityVersion,
 }: {
   onActionComplete?: () => Promise<void> | void;
-  signer?: string;
+  onReviewAction?: (key: string) => void;
+  activityVersion?: string | null;
 }) {
   const [playbook, setPlaybook] = useState<RiskPlaybookResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
-  const [selectedLevers, setSelectedLevers] = useState<Record<string, Record<string, boolean>>>({});
   const [openScout, setOpenScout] = useState<string | null>(null);
   const [openDraft, setOpenDraft] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -51,17 +117,6 @@ export default function RiskPlaybook({
   const applyPlaybook = useCallback((data: RiskPlaybookResponse) => {
     setPlaybook(data);
     setError("");
-    setSelectedLevers((prev) => {
-      const next = { ...prev };
-      for (const plan of data.upgrade_plans) {
-        if (!next[plan.product_id]) {
-          const init: Record<string, boolean> = {};
-          for (const lv of plan.levers) init[lv.id] = true;
-          next[plan.product_id] = init;
-        }
-      }
-      return next;
-    });
   }, []);
 
   const load = useCallback(async () => {
@@ -90,49 +145,7 @@ export default function RiskPlaybook({
     return () => {
       active = false;
     };
-  }, [applyPlaybook]);
-
-  const toggleLever = (productId: string, leverId: string) => {
-    setSelectedLevers((prev) => ({
-      ...prev,
-      [productId]: {
-        ...(prev[productId] ?? {}),
-        [leverId]: !(prev[productId]?.[leverId] ?? false),
-      },
-    }));
-  };
-
-  const executeUpgradePlan = async (plan: ProductUpgradePlan) => {
-    const sel = selectedLevers[plan.product_id] ?? {};
-    const execLevers = plan.levers.filter((lv) => sel[lv.id] && lv.executable && lv.decision_id != null);
-    if (execLevers.length === 0) {
-      setToast("Selected structural levers staged for procurement — approve linked decision cards on the main inbox.");
-      return;
-    }
-    setBusyId(`exec-${plan.product_id}`);
-    setToast("");
-    let okCount = 0;
-    const errors: string[] = [];
-    for (const lv of execLevers) {
-      try {
-        await postData(`/api/decisions/${lv.decision_id}/approve`, {
-          by: signer,
-          option: lv.option_index ?? undefined,
-        });
-        okCount += 1;
-      } catch (e) {
-        errors.push(e instanceof Error ? e.message : `Decision #${lv.decision_id} failed`);
-      }
-    }
-    setBusyId(null);
-    if (okCount > 0) {
-      setToast(`Executed ${okCount} upgrade decision(s) for ${plan.product_name} — forecast & risk refreshed.`);
-      await load();
-      await onActionComplete?.();
-    } else if (errors.length > 0) {
-      setToast(errors[0]);
-    }
-  };
+  }, [applyPlaybook, activityVersion]);
 
   const dispatchPreemptive = async (alert: PreemptiveChaseAlert) => {
     setBusyId(alert.alert_id);
@@ -146,7 +159,7 @@ export default function RiskPlaybook({
         part_id: alert.part_id,
         ask: alert.draft_body_en,
       });
-      setToast(`Pre-emptive corridor check dispatched to ${alert.supplier_name} (${alert.language}).`);
+      setToast(`Supplier check requested for ${alert.supplier_name} (${alert.language}).`);
       await load();
       await onActionComplete?.();
     } catch (e) {
@@ -168,8 +181,8 @@ export default function RiskPlaybook({
 
   if (loading && !playbook) {
     return (
-      <div className="mb-6 rounded-xl border border-rule bg-surface p-5 text-sm text-muted">
-        Computing Risk-to-Action Playbook (Path-to-Upgrade · Pre-Emptive Chasing · 2nd-Source Scout · Circuit Breakers)…
+      <div id="risk-scenarios" className="mb-6 rounded-xl border border-rule bg-surface p-5 text-sm text-muted">
+        Loading risk scenarios…
       </div>
     );
   }
@@ -190,141 +203,23 @@ export default function RiskPlaybook({
         </div>
       )}
 
-      {/* 1. HERO: MOODY'S PATH-TO-UPGRADE OPTIMIZER (CCC -> A) */}
-      {playbook.upgrade_plans.length > 0 && (
-        <section className="rounded-xl border border-rule bg-surface p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
-            <div>
-              <h3 className="text-base font-bold text-ink">Path-to-Upgrade Optimizer (Moody&apos;s Recourse)</h3>
-              <p className="text-xs text-muted">
-                Toggle concrete levers to simulate live rating recovery — ranked by risk points eliminated per euro.
-              </p>
-            </div>
-            <span className="rounded-full bg-dock px-2.5 py-1 text-xs font-semibold text-muted">
-              Mode: {playbook.autonomy_mode === "auto" ? "Autonomous" : "Human Control Gate"}
-            </span>
-          </div>
+      <section id="risk-scenarios" className="scroll-mt-6 rounded-xl border border-rule bg-surface p-5">
+        <h3 className="text-base font-bold text-ink">What would lower product risk?</h3>
+        <p className="mt-1 text-sm text-muted">Compare today’s rating with the estimate if these changes are completed. Evidence of the change is what updates the actual rating.</p>
+        <RiskScenarios plans={playbook.upgrade_plans} onReviewAction={onReviewAction} />
+      </section>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            {playbook.upgrade_plans.map((plan) => {
-              const sel = selectedLevers[plan.product_id] ?? {};
-              const activeLevers = plan.levers.filter((lv) => sel[lv.id]);
-              const totalDelta = activeLevers.reduce((acc, lv) => acc + lv.delta_points, 0);
-              const simScore = Math.max(12, Math.round((plan.current_score - totalDelta) * 10) / 10);
-              const sim = scoreToGrade(simScore);
-              const simCost = activeLevers.reduce((acc, lv) => acc + lv.cost_eur, 0);
-              const execCount = activeLevers.filter((lv) => lv.executable && lv.decision_id != null).length;
-
-              return (
-                <div key={plan.product_id} className="flex flex-col rounded-lg border border-rule bg-dock/35 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <span className="text-xs font-mono text-muted">{plan.product_id}</span>
-                      <h4 className="text-base font-bold text-ink">{plan.product_name}</h4>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`rounded px-2 py-0.5 text-xs font-bold tabular ${gradeBadgeClass(plan.current_grade)}`}>
-                        {plan.current_rating} ({Math.round(plan.current_score)})
-                      </span>
-                      <span className="text-xs font-bold text-muted">→</span>
-                      <span className={`rounded px-2.5 py-0.5 text-sm font-bold tabular transition-all ${gradeBadgeClass(sim.grade)}`}>
-                        {sim.rating} ({Math.round(simScore)})
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Live Score Bar */}
-                  <div className="mt-3">
-                    <div className="flex justify-between text-[11px] text-muted tabular">
-                      <span>Risk index: {Math.round(plan.current_score)} → {Math.round(simScore)} / 100</span>
-                      <span className="font-semibold text-ok">
-                        −{Math.round(plan.current_score - simScore)} pts · {eur(simCost)}
-                      </span>
-                    </div>
-                    <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-dock">
-                      <div
-                        className="h-full rounded-full transition-all duration-300"
-                        style={{
-                          width: `${Math.min(100, Math.max(6, simScore))}%`,
-                          background: sim.grade >= 5 ? "#b3261e" : sim.grade === 4 ? "#a86a12" : "#2f7a4d",
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Interactive Levers */}
-                  <ul className="mt-3 flex-1 space-y-2">
-                    {plan.levers.map((lv: RiskUpgradeLever) => {
-                      const checked = !!sel[lv.id];
-                      return (
-                        <li key={lv.id}>
-                          <label className={`flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 text-xs transition ${checked ? "border-act/40 bg-surface" : "border-rule/70 bg-dock/40 opacity-70"}`}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleLever(plan.product_id, lv.id)}
-                              className="mt-0.5 h-3.5 w-3.5 accent-act"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center justify-between gap-1">
-                                <span className="font-semibold text-ink">{lv.title}</span>
-                                <span className="rounded bg-ok-soft px-1.5 py-0.5 text-[11px] font-bold text-ok tabular">
-                                  −{Math.round(lv.delta_points)} pts
-                                </span>
-                              </div>
-                              <p className="mt-0.5 text-[11px] text-muted">{lv.rationale}</p>
-                              <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted tabular">
-                                <span className="font-semibold text-ink">{eur(lv.cost_eur)}</span>
-                                {lv.copies_gained != null && <span>· +{fmt(lv.copies_gained)} copies</span>}
-                                <span>· Approver: {lv.approver}</span>
-                                {lv.executable && (
-                                  <span className="rounded bg-act-soft px-1.5 py-0.5 text-[10px] font-semibold text-act">
-                                    Live Decision #{lv.decision_id}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </label>
-                        </li>
-                      );
-                    })}
-                  </ul>
-
-                  <div className="mt-3 flex items-center justify-between border-t border-rule pt-3">
-                    <span className="text-xs text-muted tabular">
-                      {activeLevers.length}/{plan.levers.length} levers · Total {eur(simCost)}
-                    </span>
-                    <button
-                      onClick={() => void executeUpgradePlan(plan)}
-                      disabled={busyId === `exec-${plan.product_id}` || activeLevers.length === 0}
-                      className="rounded-md bg-act px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-ink disabled:opacity-50"
-                    >
-                      {busyId === `exec-${plan.product_id}`
-                        ? "Executing…"
-                        : execCount > 0
-                          ? `Execute Upgrade (${execCount} live)`
-                          : "Stage Upgrade Plan"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* 2. RISK-TRIGGERED CIRCUIT BREAKERS (AUTO-POLICY SHIFT) */}
       {playbook.circuit_breakers.length > 0 && (
         <section className="rounded-xl border border-rule bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
             <div>
-              <h3 className="text-base font-bold text-ink">Risk-Triggered Circuit Breakers</h3>
+              <h3 className="text-base font-bold text-ink">Suggested safeguards</h3>
               <p className="text-xs text-muted">
-                Automatic governance safeguards driven by customer setup JSON when suppliers or products hit Grade B / CCC.
+                Controls to review under company policy when a supplier or product reaches B or CCC.
               </p>
             </div>
             <span className="rounded-full bg-stop-soft px-2.5 py-1 text-xs font-bold text-stop tabular">
-              {playbook.circuit_breakers.length} Active
+              {playbook.circuit_breakers.length} flagged
             </span>
           </div>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -341,106 +236,34 @@ export default function RiskPlaybook({
                     {cb.rating} ({Math.round(cb.score_0_100)})
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-muted">{cb.reason}</p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {cb.rules_triggered.map((rule) => (
-                    <span key={rule} className="rounded-md border border-stop/25 bg-surface px-2 py-0.5 text-[11px] font-semibold text-stop">
-                      {rule}
-                    </span>
-                  ))}
-                </div>
+                <details className="mt-2 text-xs">
+                  <summary className="cursor-pointer font-semibold text-act">Review {cb.rules_triggered.length} suggested controls</summary>
+                  <p className="mt-2 text-muted">{cb.reason}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {cb.rules_triggered.map((rule) => (
+                      <span key={rule} className="rounded-md border border-stop/25 bg-surface px-2 py-0.5 text-[11px] font-semibold text-stop">
+                        {rule}
+                      </span>
+                    ))}
+                  </div>
+                </details>
               </div>
             ))}
           </div>
         </section>
       )}
 
-      {/* 3. PREDICTIVE PRE-EMPTIVE CHASING (72H BEFORE SAP KNOWS) */}
-      {playbook.preemptive_alerts.length > 0 && (
-        <section className="rounded-xl border border-rule bg-surface p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
-            <div>
-              <h3 className="text-base font-bold text-ink">Predictive Pre-Emptive Chasing (Live External Feeds → Chaser)</h3>
-              <p className="text-xs text-muted">
-                Live Polymarket, Open-Meteo, and global regulatory spikes matched to active corridors 24–72h before ERP shows a delay.
-              </p>
-            </div>
-            <span className="rounded-full bg-warn-soft px-2.5 py-1 text-xs font-bold text-warn tabular">
-              {playbook.preemptive_alerts.length} Corridor Alerts
-            </span>
-          </div>
-          <div className="mt-3 space-y-2.5">
-            {playbook.preemptive_alerts.map((al) => {
-              const expanded = openDraft === al.alert_id;
-              return (
-                <div key={al.alert_id} className="rounded-lg border border-rule bg-dock/30 p-3.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded bg-warn-soft px-2 py-0.5 text-[11px] font-bold text-warn">
-                          +{al.lead_time_advantage_hours}h ahead of ERP
-                        </span>
-                        <span className="text-xs font-bold text-ink">{al.supplier_name} ({al.country})</span>
-                        <span className="text-xs text-muted">· {al.provider}</span>
-                        {al.shipment_id && <span className="font-mono text-[11px] text-muted">{al.shipment_id}</span>}
-                      </div>
-                      <p className="mt-1 text-xs text-ink">{al.signal_title}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setOpenDraft(expanded ? null : al.alert_id)}
-                        className="rounded border border-rule bg-surface px-2.5 py-1 text-xs font-semibold text-ink hover:bg-dock"
-                      >
-                        {expanded ? "Hide Draft" : `Preview (${al.language})`}
-                      </button>
-                      {al.status === "dispatched" ? (
-                        <span className="rounded bg-ok-soft px-2.5 py-1 text-xs font-bold text-ok">Dispatched ✓</span>
-                      ) : al.status === "blocked_anti_spam" ? (
-                        <span className="rounded bg-dock px-2.5 py-1 text-xs font-semibold text-muted" title="Chaser already has an open thread with this supplier">
-                          Anti-Spam Hold
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => void dispatchPreemptive(al)}
-                          disabled={busyId === al.alert_id}
-                          className="rounded bg-act px-2.5 py-1 text-xs font-semibold text-white hover:bg-ink disabled:opacity-50"
-                        >
-                          {busyId === al.alert_id ? "Sending…" : "Dispatch Check"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {expanded && (
-                    <div className="mt-3 grid gap-2 border-t border-rule pt-2.5 md:grid-cols-2">
-                      <div className="rounded bg-surface p-2.5 text-xs">
-                        <p className="font-semibold text-muted">Localized ({al.language}) · {al.draft_subject}</p>
-                        <pre className="mt-1 whitespace-pre-wrap font-sans text-ink">{al.draft_body}</pre>
-                      </div>
-                      <div className="rounded bg-surface p-2.5 text-xs">
-                        <p className="font-semibold text-muted">English Translation</p>
-                        <pre className="mt-1 whitespace-pre-wrap font-sans text-ink">{al.draft_body_en}</pre>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* 4. AUTONOMOUS GEO-DECORRELATED 2ND-SOURCE SCOUT + SPEC-GROUNDED RFQ */}
       {playbook.second_source_scouts.length > 0 && (
         <section className="rounded-xl border border-rule bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
             <div>
-              <h3 className="text-base font-bold text-ink">Geo-Decorrelated 2nd-Source Scout &amp; Instant RFQ Pack</h3>
+              <h3 className="text-base font-bold text-ink">Backup suppliers</h3>
               <p className="text-xs text-muted">
-                Excludes embargoed/high-risk origins using live corridor feeds, simulates 70/30 dual-source grade recovery, and drafts spec-grounded RFQs.
+                The estimate assumes a second supplier starts delivering and supplier health stays the same. Verify the example suppliers, prices and lead times before requesting a quote.
               </p>
             </div>
             <span className="rounded-full bg-act-soft px-2.5 py-1 text-xs font-bold text-act tabular">
-              {playbook.second_source_scouts.length} Single-Source Parts
+              {playbook.second_source_scouts.length} single-source parts
             </span>
           </div>
           <div className="mt-3 space-y-2.5">
@@ -454,11 +277,11 @@ export default function RiskPlaybook({
                         <span className="font-mono text-xs font-bold text-ink">{sc.part_id}</span>
                         <span className="text-sm font-bold text-ink">{sc.part_name}</span>
                         <span className="rounded bg-stop-soft px-1.5 py-0.5 text-[11px] font-semibold text-stop">
-                          Origin {sc.blocked_country} Excluded
+                          Outside {sc.blocked_country}
                         </span>
                       </div>
                       <p className="mt-0.5 text-xs text-muted">
-                        Sole supplier: {sc.current_supplier_name} ({sc.current_supplier_id}) · Safe corridors:{" "}
+                        Sole supplier: {sc.current_supplier_name} ({sc.current_supplier_id}) · Alternative countries:{" "}
                         {sc.safe_corridors.map((c) => `${c.country} (${c.rating})`).join(", ")}
                       </p>
                     </div>
@@ -466,15 +289,15 @@ export default function RiskPlaybook({
                       <span className={`rounded px-2 py-0.5 text-xs font-bold ${gradeBadgeClass(sc.current_grade)}`}>
                         {sc.current_rating}
                       </span>
-                      <span className="text-xs text-muted">→</span>
+                      <span className="text-xs text-muted">could reach</span>
                       <span className={`rounded px-2 py-0.5 text-xs font-bold ${gradeBadgeClass(sc.projected_dual_grade)}`}>
-                        {sc.projected_dual_rating} (70/30)
+                        {sc.projected_dual_rating} with two sources
                       </span>
                       <button
                         onClick={() => setOpenScout(expanded ? null : sc.part_id)}
                         className="rounded border border-act/40 bg-act-soft px-2.5 py-1 text-xs font-semibold text-act hover:bg-act hover:text-white"
                       >
-                        {expanded ? "Close Scout" : "Scout 2nd Sources →"}
+                        {expanded ? "Hide candidates" : "See candidates"}
                       </button>
                     </div>
                   </div>
@@ -507,7 +330,7 @@ export default function RiskPlaybook({
                       </div>
                       <div className="rounded-md border border-rule bg-surface p-3 text-xs">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-bold text-ink">Spec-Grounded RFQ Draft · {sc.rfq_subject}</span>
+                          <span className="font-bold text-ink">Request for quote · {sc.rfq_subject}</span>
                           <button
                             onClick={() => void copyRfq(sc)}
                             className="rounded bg-ink px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-act"
@@ -525,6 +348,80 @@ export default function RiskPlaybook({
           </div>
         </section>
       )}
+
+      {playbook.preemptive_alerts.length > 0 && (
+        <section className="rounded-xl border border-rule bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule pb-3">
+            <div>
+              <h3 className="text-base font-bold text-ink">Early supplier checks</h3>
+              <p className="text-xs text-muted">
+                The Chaser can ask suppliers about a warning before a delay appears in the order record.
+              </p>
+            </div>
+            <span className="rounded-full bg-warn-soft px-2.5 py-1 text-xs font-bold text-warn tabular">
+              {playbook.preemptive_alerts.length} alerts
+            </span>
+          </div>
+          <div className="mt-3 space-y-2.5">
+            {playbook.preemptive_alerts.map((al) => {
+              const expanded = openDraft === al.alert_id;
+              return (
+                <div key={al.alert_id} className="rounded-lg border border-rule bg-dock/30 p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded bg-warn-soft px-2 py-0.5 text-[11px] font-bold text-warn">
+                          {al.lead_time_advantage_hours}h planning window
+                        </span>
+                        <span className="text-xs font-bold text-ink">{al.supplier_name} ({al.country})</span>
+                        <span className="text-xs text-muted">· {al.provider}</span>
+                        {al.shipment_id && <span className="font-mono text-[11px] text-muted">{al.shipment_id}</span>}
+                      </div>
+                      <p className="mt-1 text-xs text-ink">{al.signal_title}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setOpenDraft(expanded ? null : al.alert_id)}
+                        className="rounded border border-rule bg-surface px-2.5 py-1 text-xs font-semibold text-ink hover:bg-dock"
+                      >
+                        {expanded ? "Hide Draft" : `Preview (${al.language})`}
+                      </button>
+                      {al.status === "dispatched" ? (
+                        <span className="rounded bg-ok-soft px-2.5 py-1 text-xs font-bold text-ok">Requested</span>
+                      ) : al.status === "blocked_anti_spam" ? (
+                        <span className="rounded bg-dock px-2.5 py-1 text-xs font-semibold text-muted" title="Chaser already has an open thread with this supplier">
+                          Existing thread open
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => void dispatchPreemptive(al)}
+                          disabled={busyId === al.alert_id}
+                          className="rounded bg-act px-2.5 py-1 text-xs font-semibold text-white hover:bg-ink disabled:opacity-50"
+                        >
+                          {busyId === al.alert_id ? "Sending…" : "Request update"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {expanded && (
+                    <div className="mt-3 grid gap-2 border-t border-rule pt-2.5 md:grid-cols-2">
+                      <div className="rounded bg-surface p-2.5 text-xs">
+                        <p className="font-semibold text-muted">Localized ({al.language}) · {al.draft_subject}</p>
+                        <pre className="mt-1 whitespace-pre-wrap font-sans text-ink">{al.draft_body}</pre>
+                      </div>
+                      <div className="rounded bg-surface p-2.5 text-xs">
+                        <p className="font-semibold text-muted">English version</p>
+                        <pre className="mt-1 whitespace-pre-wrap font-sans text-ink">{al.draft_body_en}</pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
     </div>
   );
 }

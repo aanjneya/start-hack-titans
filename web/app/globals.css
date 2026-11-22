@@ -7,7 +7,7 @@
 }
 
 /* Tokens: Sage Garden (light), colours picked from the reference theme card and forecast chart. Warm off-white
-   floor under the sage beams, white cards, near-black ink; sage #7b9082 for fills, deep sage #5f7556 for text accents
+   background, white cards, near-black ink; sage #7b9082 for fills, deep sage #5f7556 for text accents
    (readable on white). Red, amber and green stay status colours only ("the line stops", "watch", "ok").
    Not `inline`, so utilities read var(--color-*) and a subtree can re-tint them. */
 @theme {
@@ -62,9 +62,6 @@
   --ai: #5f7556;
   --ai-bg: #f1f3ee;
 
-  /* Background beams (components/ui/background-beams.tsx): faint base lines and the moving light. */
-  --neutral-300: #c0c9bb;
-  --beam-opacity: 0.55;
 }
 
 @theme inline {
@@ -115,14 +112,6 @@ body {
   line-height: 1.5;
 }
 
-/* Headings in the beams look: ink fading to slate. */
-.text-gradient {
-  background-image: linear-gradient(to bottom, var(--foreground), var(--muted-foreground));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
 /* Big figures: condensed width, tabular digits. */
 .figure {
   font-stretch: 66%;
@@ -149,7 +138,7 @@ body {
   animation: beat 1.2s ease-in-out infinite;
 }
 
-/* ---- Agent-at-work motion (AI Observability workspace) ---- */
+/* ---- Agent-at-work motion ---- */
 
 /* Text that shimmers while an agent step runs. */
 @keyframes agent-shimmer {

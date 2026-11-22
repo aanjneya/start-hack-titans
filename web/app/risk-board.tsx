@@ -50,10 +50,10 @@ export interface RiskGroup {
   /** Who: the supplier's name. */
   company: string;
   severity: number;
-  /** Packing hours until the line would stop (from the findings), if known. */
+  /** Stock cover in packing hours from the findings. */
   hoursLeft: number | null;
-  /** True when the line would stop before packing closes. */
-  beforeClose: boolean;
+  /** Editions whose current forecast identifies this part as the binding constraint. */
+  constrained: Forecast[];
   copiesAtRisk: number | null;
   editions: { edition: string; shortfall: number | null }[];
   rating: string | null;
@@ -389,8 +389,6 @@ export function buildRiskGroups(input: {
   const cardById = new Map(decisions.map((d) => [d.id, d]));
   const shortfall = new Map<string, number | null>();
   for (const f of forecast) if (!shortfall.has(f.edition)) shortfall.set(f.edition, f.shortfall);
-  // Packing hours left until close (newest forecast): a part that runs out sooner stops the line before close.
-  const packingHours = forecast.map((f) => Number(f.details?.working_hours)).find((h) => Number.isFinite(h) && h > 0) ?? null;
 
   const bySubject = new Map<string, DecisionCard[]>();
   for (const d of decisions) {
@@ -451,7 +449,7 @@ export function buildRiskGroups(input: {
       company,
       severity: top?.severity ?? 4,
       hoursLeft,
-      beforeClose: hoursLeft != null && (packingHours == null ? hoursLeft < 24 : hoursLeft < packingHours),
+      constrained: forecast.filter(f => f.limiting_part === key && (f.shortfall ?? 0) > 0),
       copiesAtRisk: copies.length ? Math.max(...copies) : null,
       editions,
       rating: latestRisk.get(key)?.rating ?? null,
@@ -463,17 +461,16 @@ export function buildRiskGroups(input: {
   });
 
   const urgency = (g: RiskGroup) => (g.hoursLeft == null ? Infinity : g.hoursLeft);
-  return groups.sort((a, b) => b.severity - a.severity || urgency(a) - urgency(b) || b.cards.length - a.cards.length);
+  return groups.sort((a, b) => Number(!!b.constrained.length) - Number(!!a.constrained.length)
+    || b.severity - a.severity || urgency(a) - urgency(b) || a.key.localeCompare(b.key));
 }
 
-/** The one number a tile leads with: time until the line stops, else copies at risk, else the edition shortfall. */
+/** Stock cover is evidence about one part. Only the forecast identifies the constraint on finished copies. */
 function headline(g: RiskGroup): { value: string; caption: string; stop: boolean } | null {
-  if (g.hoursLeft != null) {
-    return { value: `${Math.max(0, Math.round(g.hoursLeft))} h`, caption: "until the line stops", stop: g.beforeClose };
-  }
+  const binding = g.constrained[0];
+  if (binding?.shortfall != null) return { value: fmt(binding.shortfall), caption: `${binding.edition} copies short`, stop: true };
   if (g.copiesAtRisk != null) return { value: fmt(g.copiesAtRisk), caption: "copies at risk", stop: true };
-  const short = g.editions.find((e) => (e.shortfall ?? 0) > 0);
-  if (short) return { value: fmt(short.shortfall), caption: `${short.edition} copies short`, stop: true };
+  if (g.hoursLeft != null) return { value: `${fmt(Math.max(0, g.hoursLeft))} h`, caption: "of stock at the packing rate", stop: false };
   return null;
 }
 
@@ -501,7 +498,7 @@ export function RiskBoard({
   /** The backend's ranked buyer queue (GET /api/buyer-queue, loaded with the cards); null when the backend has none,
    *  and the tiles then rank the actions themselves. */
   queue: BuyerQueueEntry[] | null;
-  /** Open the tile that holds this buyer-queue action (key of the queue entry); n changes on every request. */
+  /** Open this exact decision from the buyer queue, even when its risk tile is folded away. */
   focus?: { key: string; n: number } | null;
   emptyText: string;
   onChanged: () => void;
@@ -511,7 +508,7 @@ export function RiskBoard({
   renderAction?: (key: string) => ReactNode;
 }) {
   const [names, setNames] = useState<Record<string, string>>({});
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [snapshot, setSnapshot] = useState<RiskGroup | null>(null);
   const needNames = Object.keys(names).length === 0;
 
@@ -542,52 +539,63 @@ export function RiskBoard({
     () => buildRiskGroups({ decisions, issues, risk, forecast, matrix, names, queue }),
     [decisions, issues, risk, forecast, matrix, names, queue],
   );
+  const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const close = useCallback(() => {
-    setOpenKey(null);
     setSnapshot(null);
+    setSelectedAction(null);
   }, []);
-  const [focusSeen, setFocusSeen] = useState(focus?.n ?? 0);
+  const [focusSeen, setFocusSeen] = useState(0);
   if (focus && focus.n !== focusSeen) {
     setFocusSeen(focus.n);
-    const target = groups.find((g) => g.actions.some((a) => a.key === `queue:${focus.key}`));
-    if (target) {
-      setSnapshot(target);
-      setOpenKey(target.key);
-    }
+    setSnapshot(null);
+    setSelectedAction(focus.key);
   }
 
   return (
     <section aria-labelledby="decide">
       <div className="mb-3 flex items-baseline justify-between gap-4">
-        <h2 id="decide" className="text-gradient text-xl font-bold">
+        <h2 id="decide" className="text-xl font-bold tracking-tight">
           Risks to act on
         </h2>
-        {groups.length > 0 && <span className="text-sm text-muted tabular">{groups.length}</span>}
+        {groups.length > 3 && (
+          <button type="button" aria-expanded={showAll} aria-controls="risk-list"
+            className="shrink-0 rounded px-1 py-1 text-sm font-semibold text-act hover:underline"
+            onClick={() => setShowAll(!showAll)}>
+            {showAll ? "Show fewer risks" : `Show all ${groups.length} risks`}
+          </button>
+        )}
       </div>
 
       {groups.length === 0 ? (
         <p className="rounded-lg border border-dashed border-rule bg-surface px-5 py-8 text-muted">{emptyText}</p>
       ) : (
-        <ul className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {groups.map((g, i) => (
+        <ul id="risk-list" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {(showAll ? groups : groups.slice(0, 3)).map((g) => (
             <li key={g.key} className="flex">
               <RiskTile
                 group={g}
-                index={i}
-                onOpen={() => {
-                  setSnapshot(g);
-                  setOpenKey(g.key);
-                }}
+                onOpen={() => setSnapshot(g)}
               />
             </li>
           ))}
         </ul>
       )}
 
-      {openKey && snapshot && (
+      {selectedAction && renderAction && (
+        <ModalPanel label="Buyer decision" onClose={close}>
+          <div className="p-4 sm:p-6">
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <h2 className="font-semibold">Buyer decision</h2>
+              <CloseButton onClose={close} />
+            </div>
+            {renderAction(selectedAction) ?? <p role="status">This action is no longer in the buyer queue.</p>}
+          </div>
+        </ModalPanel>
+      )}
+      {snapshot && (
         <RiskDialog
           group={snapshot}
-          live={groups.find((g) => g.key === openKey)}
+          live={groups.find((g) => g.key === snapshot.key)}
           decisions={decisions}
           issues={issues}
           setup={setup}
@@ -621,41 +629,31 @@ export function SeverityLabel({ severity, className }: { severity: number; class
   );
 }
 
-function RiskTile({ group, index, onOpen }: { group: RiskGroup; index: number; onOpen: () => void }) {
+function RiskTile({ group, onOpen }: { group: RiskGroup; onOpen: () => void }) {
   const s = sev(group.severity);
   const num = headline(group);
   return (
     <article
-      style={{ animationDelay: `${index * 40}ms` }}
-      className="group relative flex w-full flex-col overflow-hidden rounded-2xl border border-rule bg-surface p-4 shadow-[0_1px_2px_rgba(16,24,20,0.04)] transition-[transform,box-shadow,border-color] duration-200 animate-in fade-in slide-in-from-bottom-2 fill-mode-both focus-within:ring-[3px] focus-within:ring-ring/50 hover:-translate-y-0.5 hover:border-act/40 hover:shadow-[0_14px_30px_-16px_rgba(16,70,45,0.45)] motion-reduce:animate-none motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+      className="group relative flex w-full flex-col overflow-hidden rounded-xl border border-rule bg-surface p-4 focus-within:ring-2 focus-within:ring-act hover:border-act"
     >
       <span aria-hidden className={cn("absolute inset-x-0 top-0 h-1", s.bar)} />
       <SeverityLabel severity={group.severity} />
-      {/* Number first, so every tile in a row lines up on it. */}
-      <p className="mt-3">
-        <span className={cn("block text-[30px] font-bold leading-none tabular", num?.stop ? "text-stop" : "text-ink")}>
-          {num?.value ?? "–"}
-        </span>
-        <span className="mt-1 block text-[12.5px] text-muted">{num?.caption ?? "no time estimate yet"}</span>
+      <h3 className="mt-2 text-base font-semibold leading-snug text-ink">{group.title}</h3>
+      <p className="mt-1 break-words text-sm leading-snug text-muted">
+        {[group.thing, group.company].filter(Boolean).join(" · ") || group.key}
       </p>
-      <h3 className="mt-4 text-[15px] font-semibold leading-snug text-ink">{group.title}</h3>
-      <p className="mt-0.5 text-[13px] leading-snug text-muted">
-        {group.thing && (
-          <span className="block truncate" title={group.thing}>
-            {group.thing}
-          </span>
-        )}
-        <span className="block truncate" title={group.company || group.key}>
-          {group.company || group.key}
-        </span>
-      </p>
+      {num && (
+        <p className="mt-3 text-sm">
+          <strong className={cn("tabular", num.stop && "text-stop")}>{num.value}</strong>{" "}{num.caption}
+        </p>
+      )}
       <button
         type="button"
         onClick={onOpen}
         aria-haspopup="dialog"
         aria-label={`See details: ${group.title}, ${[group.thing, group.company].filter(Boolean).join(", ")}`}
         // The whole tile is the click target (stretched over the card); the visible label stays "See details".
-        className="mt-auto inline-flex items-center gap-1.5 self-start pt-4 text-[13.5px] font-semibold text-act outline-none after:absolute after:inset-0 after:rounded-2xl after:content-[''] group-hover:underline"
+        className="mt-auto inline-flex items-center gap-1.5 self-start pt-4 text-[13.5px] font-semibold text-act outline-none after:absolute after:inset-0 after:rounded-xl after:content-[''] group-hover:underline"
       >
         See details
         <ArrowRight aria-hidden className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none" />
@@ -714,6 +712,58 @@ function useAlreadyAuthorized(actions: RiskAction[], decisions: DecisionCard[], 
   return blocked;
 }
 
+function CloseButton({ onClose }: { onClose: () => void }) {
+  return (
+    <button type="button" onClick={onClose} aria-label="Close"
+      className="flex size-9 shrink-0 items-center justify-center rounded-md border border-rule bg-surface text-muted hover:text-ink">
+      <X aria-hidden className="size-4" />
+    </button>
+  );
+}
+
+function ModalPanel({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const downOnBackdrop = useRef(false);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    const root = document.documentElement;
+    const before = root.style.overflow;
+    root.style.overflow = "hidden";
+    return () => {
+      root.style.overflow = before;
+      // Leaving the page (Next keeps it alive, hidden) must not leave a modal open. Safe under Strict Mode too:
+      // the re-run reopens it before the queued close event arrives, and onClose ignores a dialog that is open.
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog
+      ref={ref}
+      aria-label={label}
+      onClose={() => {
+        if (!ref.current?.open) onClose();
+      }}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      // Close on a backdrop click only when the press also started there (not when a text selection is dragged out).
+      onMouseDown={(e) => {
+        downOnBackdrop.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && downOnBackdrop.current) onClose();
+      }}
+      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(1060px,calc(100vw-2rem))] max-w-none overflow-y-auto rounded-2xl border border-rule bg-dock p-0 text-ink shadow-2xl animate-in fade-in zoom-in-95 duration-200 backdrop:bg-[rgba(8,24,16,0.45)] backdrop:backdrop-blur-[3px] motion-reduce:animate-none"
+    >
+      {children}
+    </dialog>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Dialog: the numbers, the three best actions, everything else behind "More details"
 // ---------------------------------------------------------------------------
@@ -741,8 +791,6 @@ function RiskDialog({
   renderDecision?: (card: DecisionCard) => ReactNode;
   renderAction?: (key: string) => ReactNode;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const downOnBackdrop = useRef(false);
   const [more, setMore] = useState(false);
   const [approvedHere, setApprovedHere] = useState<Set<number>>(() => new Set());
   // The three cards stay put while the dialog is open, but a queue action follows its physical action to the new card
@@ -764,50 +812,8 @@ function RiskDialog({
   const num = headline(group);
   const short = group.editions.filter((e) => (e.shortfall ?? 0) > 0);
 
-  const dismiss = () => {
-    ref.current?.close();
-    onClose();
-  };
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (!dialog.open) dialog.showModal();
-    const root = document.documentElement;
-    const before = root.style.overflow;
-    root.style.overflow = "hidden";
-    return () => {
-      root.style.overflow = before;
-      // Leaving the page (Next keeps it alive, hidden) must not leave a modal open. Safe under Strict Mode too:
-      // the re-run reopens it before the queued close event arrives, and onClose ignores a dialog that is open.
-      if (dialog.open) dialog.close();
-    };
-  }, []);
-
   return (
-    <dialog
-      ref={ref}
-      aria-labelledby="risk-dialog-title"
-      // ✕, Escape and a backdrop click close it natively (the browser puts focus back on the tile) and then through
-      // state right away: the native close event can arrive late (a frame later, or not at all while the tab renders no
-      // frames), and a tile clicked in that gap would otherwise reuse a closed dialog. The close event still covers any
-      // other way it closes.
-      onClose={() => {
-        if (!ref.current?.open) onClose();
-      }}
-      onCancel={(e) => {
-        e.preventDefault();
-        dismiss();
-      }}
-      // Close on a backdrop click only when the press also started there (not when a text selection is dragged out).
-      onMouseDown={(e) => {
-        downOnBackdrop.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && downOnBackdrop.current) dismiss();
-      }}
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(1060px,calc(100vw-2rem))] max-w-none overflow-y-auto rounded-3xl border border-rule bg-dock p-0 text-ink shadow-2xl animate-in fade-in zoom-in-95 duration-200 backdrop:bg-[rgba(8,24,16,0.45)] backdrop:backdrop-blur-[3px] motion-reduce:animate-none"
-    >
+    <ModalPanel label={group.title} onClose={onClose}>
       <div className="p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -822,14 +828,7 @@ function RiskDialog({
             {/* Executive summary: the reason in one line, the full reasoning stays under More details. */}
             {lead?.summary && <p className="mt-3 max-w-3xl text-[15px] leading-relaxed text-ink">{lead.summary}</p>}
           </div>
-          <button
-            type="button"
-            onClick={dismiss}
-            aria-label="Close"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full border border-rule bg-surface text-muted transition-colors hover:text-ink"
-          >
-            <X aria-hidden className="size-5" />
-          </button>
+          <CloseButton onClose={onClose} />
         </div>
 
         {(num || short.length > 0) && (
@@ -938,7 +937,7 @@ function RiskDialog({
           </div>
         )}
       </div>
-    </dialog>
+    </ModalPanel>
   );
 }
 

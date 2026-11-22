@@ -13,7 +13,7 @@ import {
   PlannerReport, ReconcilerReport, RiskRaterReport, WatcherReport,
 } from "./agent-reports";
 import { AgentWorkspace } from "./workspace/agent-workspace";
-import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
+import type { RunResult } from "../../../API_CONTRACT";
 
 const VALID_IDS = new Set<string>(AGENT_NAV.map((a) => a.id));
 
@@ -64,11 +64,13 @@ export default function ObservabilityDashboard() {
     setDropBusy(true);
     setNotice("");
     try {
-      const r = await postData<Record<string, number | string | boolean>>("/api/replay/step");
+      const r = await postData<RunResult & { done?: boolean; drops?: number; step: number; of: number }>("/api/replay/step");
       setNotice(
         r.done
-          ? `All ${r.drops} recorded drops are in. Restart the backend to replay again.`
-          : `Drop ${r.step} of ${r.of} processed: +${r.added} added, ~${r.changed} changed, -${r.removed} removed (${r.open_issues} findings open).`,
+          ? `All ${r.drops} recorded drops are in.`
+          : r.status === "partial"
+          ? `Drop ${r.step} needs review. ${r.failures.map(f => `${f.agent} failed on ${f.event} (trace #${f.trace_id})`).join(", ")}. Retry this drop after review.`
+          : `Drop ${r.step} of ${r.of} processed. ${r.open_issues} findings are open.`,
       );
     } catch (e) {
       setNotice(`Could not process drop: ${(e as Error).message}`);
@@ -112,8 +114,8 @@ export default function ObservabilityDashboard() {
         <div className="hidden items-center justify-between gap-2 border-b border-rule px-3 py-4 md:flex">
           {!collapsed && (
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold leading-tight">AI Observability</p>
-              <p className="truncate text-[11px] text-muted">6 agents + human gate</p>
+              <p className="truncate text-sm font-bold leading-tight">Agent Team</p>
+              <p className="truncate text-[11px] text-muted">Activity and decisions</p>
             </div>
           )}
           <button
@@ -213,15 +215,8 @@ export default function ObservabilityDashboard() {
               {activeMeta.icon}
             </span>
             <div className="min-w-0">
-              {/* Redrawn for every agent you open. */}
-              <HandWrittenTitle
-                key={selectedId}
-                className="mx-0 -ml-4 w-auto max-w-none px-12 py-5"
-                titleClassName="text-2xl font-bold leading-tight tracking-tight md:text-2xl"
-                title={activeMeta.name}
-                subtitle={null}
-              />
-              <p className="-mt-2 text-sm text-muted">{activeMeta.role}</p>
+              <h1 className="text-2xl font-bold leading-tight tracking-tight">{activeMeta.name}</h1>
+              <p className="mt-1 text-sm text-muted">{activeMeta.role}</p>
             </div>
           </div>
 
@@ -241,14 +236,14 @@ export default function ObservabilityDashboard() {
               />
               {online ? "Backend online" : online === false ? "Backend offline" : "Connecting"}
             </span>
-            <button
+            {snap.health?.replayEnabled && <button
               type="button"
               onClick={nextDrop}
               disabled={dropBusy || !online}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {dropBusy ? "Agents working…" : "Play next data drop"}
-            </button>
+              {dropBusy ? "Agents working…" : snap.health.lastDrop?.status === "partial" ? "Retry drop" : "Play next data drop"}
+            </button>}
           </div>
         </header>
 

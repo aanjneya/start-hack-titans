@@ -441,7 +441,11 @@ export interface RiskUpgradeLever {
   category: 'decision' | 'second_source' | 'quality' | 'buffer';
   part_id: string;
   supplier_id: string;
-  cost_eur: number;
+  /** Listed buyer-option amount. May exclude freight or implementation work. */
+  cost_eur: number | null;
+  queue_key?: string | null;
+  decision_label?: string | null;
+  limiting_part_after?: string;
   copies_gained: number | null;
   delta_points: number;
   cumulative_score: number;
@@ -464,7 +468,7 @@ export interface ProductUpgradePlan {
   projected_score: number;
   projected_grade: number;
   projected_rating: string;
-  total_cost_eur: number;
+  total_cost_eur: number | null;
   levers: RiskUpgradeLever[];
 }
 

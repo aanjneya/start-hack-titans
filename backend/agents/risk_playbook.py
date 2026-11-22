@@ -9,20 +9,21 @@ Combines all 4 actionable engines into one deterministic, zero-hardcoding payloa
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from sqlmodel import select
 
 from ..core import policy
-from ..core.models import DecisionCard, Issue, OutboxMessage
-from ..core.store import all_rows, session
+from ..core.models import OutboxMessage
+from ..core.store import session
+from .planner_queue import buyer_queue
 from .reconciler_rules import CheckContext, build_context
+from .risk_baseline import current_risk_scores, recorded_risks, saved_signals
 from .risk_breakers import evaluate_circuit_breakers
 from .risk_recourse import build_upgrade_plans
-from .risk_scoring import ComputedRisk, rate_parts, rate_products, rate_suppliers
+from .risk_scoring import ComputedRisk, rate_products
 from .risk_scout import build_second_source_scouts
-from .risk_signals import DEFAULT_PROVIDERS, ExternalSignal, SignalProvider, collect_external_signals
+from .risk_signals import ExternalSignal
 
 OPEN_OUTBOX_STATUSES = {"draft", "approved", "sent"}
 
@@ -163,35 +164,26 @@ def build_preemptive_alerts(
     return alerts[:6]
 
 
-def build_risk_playbook(
-    *,
-    data_root: Optional[Path] = None,
-    providers: tuple[SignalProvider, ...] = DEFAULT_PROVIDERS,
-) -> dict[str, Any]:
-    """Build the complete Risk-to-Action Playbook (all 4 actionable engines) on live truth state."""
+def build_risk_playbook() -> dict[str, Any]:
+    """Preview actions against the published ratings, without refreshing or changing feed history."""
     ctx = build_context()
-    with session() as s:
-        open_issues = list(s.exec(select(Issue).where(Issue.status != "resolved", Issue.raised_by != "risk")).all())
-        open_decisions = list(s.exec(select(DecisionCard).where(DecisionCard.status == "proposed")).all())
-        outbox_rows = list(all_rows(OutboxMessage))
+    with session() as db:
+        risks = recorded_risks(ctx, current_risk_scores(db))
+        signals = saved_signals(db)
+        queue = buyer_queue(db)
+        outbox_rows = list(db.exec(select(OutboxMessage)))
 
-    countries = {(sup.country or "").upper() for sup in ctx.suppliers.values() if sup.country}
-    signals: list[ExternalSignal] = []
-    if countries or ctx.shipments or ctx.documents:
-        signals, *_ = collect_external_signals(
-            countries=countries,
-            shipments=ctx.shipments,
-            documents=ctx.documents,
-            reference_now=ctx.reference_now,
-            data_root=data_root,
-            providers=providers,
-        )
-
-    supplier_risks = rate_suppliers(ctx, open_issues, signals)
-    part_risks = rate_parts(ctx, supplier_risks, open_issues, signals)
-    product_risks = rate_products(ctx, part_risks)
-
-    upgrade_plans = build_upgrade_plans(ctx, part_risks, product_risks, open_decisions)
+    supplier_risks, part_risks, product_risks = risks["supplier"], risks["part"], risks["product"]
+    # A changed BOM/shift or a legacy part without factors cannot reproduce the recorded grade.
+    # Wait for the rater to publish a consistent baseline before showing a what-if for that product.
+    rerated = rate_products(ctx, part_risks)
+    comparable = {
+        pid: product for pid, product in product_risks.items()
+        if pid in rerated and rerated[pid].breakdown == product.breakdown
+        and rerated[pid].score_0_100 == product.score_0_100
+        and all(line.child_id in part_risks for line in ctx.bom_by_parent.get(pid, []))
+    }
+    upgrade_plans = build_upgrade_plans(ctx, part_risks, comparable, queue)
     preemptive_alerts = build_preemptive_alerts(ctx, supplier_risks, signals, outbox_rows)
     second_source_scouts = build_second_source_scouts(ctx, part_risks, signals)
     circuit_breakers = evaluate_circuit_breakers(ctx, supplier_risks, product_risks)

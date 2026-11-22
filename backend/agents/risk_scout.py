@@ -3,9 +3,9 @@
 When any single-source part hits high risk (grade >= 4), this module:
   1. Excludes the high-risk origin country (e.g. CN / IN)
   2. Evaluates alternative manufacturing corridors (DE, PL, CZ, JP, MX, VN) using our
-     live `risk_signals.py` providers (with deterministic `MOCK_MODE=true` fallback)
+     recorded country signals and illustrative corridor assumptions
   3. Shortlists 3 geo-decorrelated industrial candidates matched to the part's category
-  4. Computes the exact simulated dual-source rating improvement (70/30 split -> CCC to A)
+  4. Estimates the effect of removing the documented single-source dependency
   5. Auto-compiles a spec-grounded RFQ email pulling real part specs, BOM demand,
      drawing revision, and target pricing directly from SQLite.
 """
@@ -15,7 +15,7 @@ from typing import Any
 
 from .reconciler_rules import CheckContext
 from .risk_scoring import ComputedRisk, score_to_grade
-from .risk_signals import ExternalSignal, collect_external_signals
+from .risk_signals import ExternalSignal
 
 SAFE_CANDIDATE_COUNTRIES = ("DE", "PL", "CZ", "JP", "MX", "VN")
 
@@ -82,22 +82,8 @@ def build_second_source_scouts(
     if not targets:
         return []
 
-    # Collect live/cached signals for candidate safe corridors so ratings are grounded in real feeds
-    missing_countries = {
-        c for c in SAFE_CANDIDATE_COUNTRIES
-        if not any(c in (s.countries or ()) for s in existing_signals)
-    }
-    all_signals = list(existing_signals)
-    if missing_countries:
-        extra, *_ = collect_external_signals(
-            countries=missing_countries,
-            shipments=[],
-            documents=[],
-            reference_now=ctx.reference_now,
-        )
-        all_signals.extend(extra)
-
-    corridor_scores = {cc: _corridor_score(cc, all_signals) for cc in SAFE_CANDIDATE_COUNTRIES}
+    # Scouting may read a supplier feed baseline. Only the Risk Rater refreshes that baseline.
+    corridor_scores = {cc: _corridor_score(cc, existing_signals) for cc in SAFE_CANDIDATE_COUNTRIES}
     scouts: list[dict[str, Any]] = []
 
     for pr in targets:
@@ -139,12 +125,10 @@ def build_second_source_scouts(
                 "why_decorrelated": cand["why"],
             })
 
-        # Simulate 70/30 dual-source split with top candidate (removes single-source penalty + blends supplier risk)
-        best_c_score = candidates_out[0]["corridor_score"] if candidates_out else 20.0
-        single_pts = float(pr.breakdown.get("single_source", 14.0))
-        sup_rollup = float(pr.breakdown.get("supplier_rollup", 25.0))
-        blended_sup_drop = sup_rollup * 0.35 + max(0.0, (pr.score_0_100 - best_c_score) * 0.12)
-        proj_score = round(max(18.0, pr.score_0_100 - single_pts - blended_sup_drop), 1)
+        # No verified supplier grade exists for an illustrative candidate. Only the measured
+        # single-source penalty clears. Apply the same 100-point ceiling as the part rater.
+        projected = sum(pr.breakdown.values()) - pr.breakdown["single_source"]
+        proj_score = round(min(100.0, max(0.0, projected)), 1)
         proj_grade, proj_rating = score_to_grade(proj_score)
 
         safe_corridors = sorted(

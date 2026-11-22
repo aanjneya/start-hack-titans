@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AgentRoster } from "@/components/ui/agent-roster";
 import {
-  ago, clock, eur, fmt,
+  ago, clock, eur, fmt, getData,
   type AgentLogEntry, type Conflict, type Evidence, type ExtendedRiskReason,
   type Forecast, type ObservabilitySnapshot, type RiskScore,
 } from "@/lib/api";
@@ -11,6 +11,7 @@ import {
   AGENT_NAV, TONE_CLASS, agentMeta, entryDetail, humanizeAction, isPlumbingEvent, type AgentId,
 } from "./agent-meta";
 import RiskPlaybook from "../risk-playbook";
+import { recordedScore, reasonHeadline, riskBands, type RiskNames } from "./risk-explanations";
 import { ForecastPanel } from "./forecast-chart";
 import { buildRosterAgents, plural } from "./roster";
 
@@ -617,134 +618,127 @@ export function PlannerReport({ snap }: { snap: ObservabilitySnapshot }) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Risk Rater Report (3-Tier Moody's + 5 Live External Feeds)
+// 7. Risk Rater Report
 // ---------------------------------------------------------------------------
+function RatingDetails({ row, names }: { row: RiskScore; names: RiskNames }) {
+  const reasons: ExtendedRiskReason[] = row.reasons ?? [];
+  const score = recordedScore(row);
+  const breakdown = Object.entries(reasons[0]?.breakdown ?? {}).filter(([, value]) => value > 0);
+  const severity = riskBands.find(band => band.rating === row.rating)?.label;
+  const tone = row.grade >= 6 ? "text-stop bg-stop-soft" : row.grade >= 4 ? "text-warn bg-warn-soft" : "text-ok bg-ok-soft";
+  return (
+    <details className="group/rating overflow-hidden rounded-xl border border-rule bg-surface">
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 marker:hidden focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-act">
+        <span className={`rounded-md px-2 py-1 text-sm font-bold tabular ${tone}`}>{row.rating}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold text-ink">{names[row.entity_type][row.entity_id] || row.entity_id}</span>
+          <span className="block text-xs capitalize text-muted">{row.entity_type}{severity && ` · ${severity} risk`}</span>
+        </span>
+        <span className="shrink-0 text-right text-sm font-semibold tabular text-ink">
+          {score == null ? "Score unavailable" : <>{score}<span className="font-normal text-muted">/100</span></>}
+        </span>
+        <span aria-hidden className="shrink-0 text-act group-open/rating:rotate-90">›</span>
+      </summary>
+      <div className="border-t border-rule px-4 py-3 text-sm">
+        <p className="font-semibold">What drives this rating?</p>
+        {reasons.length === 0 && <p className="mt-2 text-muted">No reasons were recorded for this rating.</p>}
+        {reasons.map((reason, idx) => (
+          <details key={idx} className="mt-1">
+            <summary className="cursor-pointer py-1.5 text-ink marker:text-muted">{reasonHeadline(reason, names)}</summary>
+            <div className="mb-2 ml-3 border-l-2 border-rule pl-3 text-xs text-muted">
+              <p>{reason.text}</p>
+              {reason.points != null && reason.points > 0 && <p className="mt-1">
+                {reason.factor === "bottleneck_part" ? `Component risk score · ${reason.points}/100` : `Recorded factor points · ${reason.points}`}
+              </p>}
+              {reason.evidence?.length ? <EvidenceList evidence={reason.evidence} /> : <p className="mt-1">No source attached to this reason.</p>}
+            </div>
+          </details>
+        ))}
+        {breakdown.length > 0 && <details className="mt-2 border-t border-rule pt-2 text-xs text-muted">
+          <summary className="cursor-pointer font-medium">Score calculation</summary>
+          <p className="my-2">{row.entity_type === "product" ? "The highest-risk component sets the starting score. Additional risky components and tight packing time can raise it." :
+            row.entity_type === "part" ? "The score combines supplier exposure, dependence on one source, stock coverage and known disruptions." :
+            "Internal purchasing and shipping records contribute up to 55 points. External signals together contribute up to 45 points."}</p>
+          <dl className="grid max-w-sm grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular">
+            {breakdown.map(([label, points]) => <div key={label} className="contents">
+              <dt className="capitalize">{label.replaceAll("_", " ")}</dt><dd className="text-right">{points}</dd>
+            </div>)}
+          </dl>
+          <p className="mt-2">Record · {row.entity_id}</p>
+        </details>}
+      </div>
+    </details>
+  );
+}
+
 export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
-  const [filter, setFilter] = useState<"all" | "product" | "supplier" | "part">("all");
+  const [filter, setFilter] = useState<RiskScore["entity_type"] | "all" | null>(null);
+  const [names, setNames] = useState<RiskNames>({ product: {}, part: {}, supplier: {} });
+  const loadedDrop = snap.health?.lastDrop?.run_id;
+  const hasRatings = snap.risk.length > 0;
+  useEffect(() => {
+    if (!hasRatings) return;
+    let active = true;
+    // Use customer master data for labels. The rating and its evidence remain readable if a name is missing.
+    Promise.all([
+      getData<{ product_id: string; name: string }[]>("/api/truth/products").catch(() => []),
+      getData<{ component_id: string; description: string }[]>("/api/truth/materials").catch(() => []),
+      getData<{ supplier_id: string; name: string }[]>("/api/truth/suppliers").catch(() => []),
+    ]).then(([products, materials, suppliers]) => {
+      if (active) setNames({
+        product: Object.fromEntries(products.map(row => [row.product_id, row.name])),
+        part: Object.fromEntries(materials.map(row => [row.component_id, row.description])),
+        supplier: Object.fromEntries(suppliers.map(row => [row.supplier_id, row.name])),
+      });
+    });
+    return () => { active = false; };
+  }, [hasRatings, loadedDrop]);
 
-  const latest = useMemo(() => {
-    const map = new Map<string, RiskScore>();
-    for (const r of snap.risk) {
-      const k = `${String(r.entity_type)}/${r.entity_id}`;
-      if ((map.get(k)?.id ?? -1) < r.id) map.set(k, r);
-    }
-    return [...map.values()].sort((a, b) => b.grade - a.grade || a.entity_id.localeCompare(b.entity_id));
-  }, [snap.risk]);
-
-  const latestRiskLog = snap.trace.find((e) => e.agent === "risk" && e.action === "risk_rated");
-  const extCounts = (latestRiskLog?.data?.external_signals as Record<string, number> | undefined) ?? {};
-
-  const critical = latest.filter((r) => r.grade >= 6).length;
-  const high = latest.filter((r) => r.grade === 5).length;
-  const products = latest.filter((r) => String(r.entity_type) === "product").length;
-  const extTotal = Object.values(extCounts).reduce((a, b) => a + Number(b || 0), 0);
-
-  const visible = latest.filter((r) => filter === "all" || String(r.entity_type) === filter);
+  const activeFilter = filter ?? (snap.risk.some(row => row.entity_type === "product") ? "product" : "all");
+  const visible = snap.risk.filter(row => activeFilter === "all" || row.entity_type === activeFilter)
+    .sort((a, b) => b.grade - a.grade || (recordedScore(b) ?? -1) - (recordedScore(a) ?? -1) || a.entity_id.localeCompare(b.entity_id));
+  const latestRiskLog = snap.trace.find(e => e.agent === "risk" && e.action === "risk_rated");
+  const extCounts = snap.health?.lastRiskCheck?.sources
+    ?? (latestRiskLog?.data?.external_signals as Record<string, number> | undefined) ?? {};
 
   return (
     <div className="space-y-6">
-      <KpiGrid
-        items={[
-          { label: "Critical", value: fmt(critical), hint: "Grade CCC · line stop or ban", tone: critical > 0 ? "stop" : "ok" },
-          { label: "High", value: fmt(high), hint: "Grade B · sent to the Planner", tone: high > 0 ? "warn" : "ok" },
-          { label: "Rated", value: `${products} / ${latest.filter((r) => r.entity_type === "part").length} / ${latest.filter((r) => r.entity_type === "supplier").length}`, hint: "Products / parts / suppliers", tone: "act" },
-          { label: "Outside signals", value: fmt(extTotal), hint: Object.keys(extCounts).length ? Object.keys(extCounts).join(" · ") : "None yet", tone: "act" },
-        ]}
-      />
+      <section aria-labelledby="risk-ratings" className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="risk-ratings" className="text-2xl font-bold tracking-tight">Risk ratings</h2>
+          <div role="group" aria-label="Filter ratings" className="flex flex-wrap gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
+            {(["product", "part", "supplier", "all"] as const).map(type => (
+              <button key={type} type="button" aria-pressed={activeFilter === type} onClick={() => setFilter(type)}
+                className={`rounded-md px-3 py-1.5 capitalize ${activeFilter === type ? "bg-ink text-white" : "text-muted hover:text-ink"}`}>
+                {type === "all" ? "All" : `${type}s`}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-sm text-muted">The score measures supply risk from 0 to 100. Higher scores mean greater exposure to disruption.</p>
+        {visible.length === 0 ? <EmptyState text="No ratings available for this view." /> : <div className="space-y-2">
+          {visible.map(row => <RatingDetails key={`${row.entity_type}/${row.entity_id}`} row={row} names={names} />)}
+        </div>}
+        <aside aria-label="Risk score legend" className="rounded-lg bg-dock/60 px-4 py-3 text-xs text-muted">
+          <p className="font-semibold text-ink">Minimum score for each grade</p>
+          <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-2 sm:grid-cols-6">
+            {riskBands.map(({ rating, minimum, label }) => <div key={rating}>
+              <dt className="font-semibold text-ink">{rating} <span className="font-normal text-muted">· {label}</span></dt>
+              <dd>{minimum} points</dd>
+            </div>)}
+          </dl>
+        </aside>
+      </section>
 
       {Object.keys(extCounts).length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-rule bg-surface px-4 py-3 text-xs">
-          <span className="font-bold text-ink">Outside signals:</span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-rule py-3 text-xs text-muted">
+          <span className="font-semibold text-ink">Signals in the latest check</span>
           {Object.entries(extCounts).map(([name, count]) => (
-            <span key={name} className="rounded bg-act-soft px-2.5 py-1 font-semibold text-act tabular">
-              {name}: {count}
-            </span>
+            <span key={name} className="capitalize">{name} <b className="text-ink tabular">{count}</b></span>
           ))}
         </div>
       )}
-
-      <RiskPlaybook />
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold">Risk ratings ({visible.length})</h2>
-        <div className="flex gap-1 rounded-lg border border-rule bg-surface p-1 text-xs font-semibold">
-          {(["all", "product", "supplier", "part"] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setFilter(k)}
-              className={`rounded-md px-3 py-1 capitalize ${filter === k ? "bg-ink text-white" : "text-muted hover:text-ink"}`}
-            >
-              {k === "all" ? "All tiers" : `${k}s`}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {visible.length === 0 ? (
-        <EmptyState text="No risk scores computed yet." />
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {visible.map((r) => {
-            const reasons = (r.reasons ?? []) as ExtendedRiskReason[];
-            const score = reasons[0]?.score_0_100 ?? Math.round((r.grade / 6) * 100);
-            const breakdown = reasons[0]?.breakdown ?? {};
-            const barColor = r.grade >= 6 ? "#b3261e" : r.grade >= 5 ? "#a86a12" : r.grade >= 4 ? "#1d5fb4" : "#2f7a4d";
-            return (
-              <details key={`${String(r.entity_type)}-${r.entity_id}`} className="rounded-xl border border-rule bg-surface p-4" open={r.grade >= 5}>
-                <summary className="flex cursor-pointer items-center gap-3 list-none">
-                  <span
-                    className={`flex h-11 w-14 shrink-0 flex-col items-center justify-center rounded-lg font-bold tabular ${
-                      r.grade >= 6 ? "bg-stop text-white" : r.grade >= 5 ? "bg-stop-soft text-stop" : r.grade >= 4 ? "bg-warn-soft text-warn" : "bg-ok-soft text-ok"
-                    }`}
-                  >
-                    <span className="text-sm leading-none">{r.rating}</span>
-                    <span className="mt-0.5 text-[10px] opacity-80">{r.grade}/6</span>
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate font-bold text-ink">{r.entity_id}</span>
-                      <span className="text-xs font-semibold text-muted tabular">{Math.round(score)}/100</span>
-                    </div>
-                    <span className="block text-xs uppercase tracking-wide text-muted">{String(r.entity_type)}</span>
-                    <div className="mt-1.5 h-1.5 w-full rounded-full bg-dock" aria-hidden>
-                      <div className="h-1.5 rounded-full" style={{ width: `${Math.min(100, score)}%`, background: barColor }} />
-                    </div>
-                  </div>
-                </summary>
-
-                <div className="mt-3 space-y-2 border-t border-rule pt-3 text-xs">
-                  <p className="font-semibold uppercase tracking-wide text-muted">Top reasons & evidence</p>
-                  {reasons.map((rs, idx) => (
-                    <div key={idx} className="rounded-md bg-dock/60 p-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="font-medium text-ink">{rs.text}</span>
-                        {rs.points != null && rs.points > 0 && (
-                          <span className="shrink-0 rounded bg-surface px-1.5 py-0.5 font-bold text-ink tabular">
-                            +{Math.round(rs.points)} pts
-                          </span>
-                        )}
-                      </div>
-                      {rs.evidence && rs.evidence.length > 0 && <EvidenceList evidence={rs.evidence} />}
-                    </div>
-                  ))}
-                  {Object.keys(breakdown).length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {Object.entries(breakdown)
-                        .filter(([, v]) => v > 0)
-                        .map(([k, v]) => (
-                          <span key={k} className="rounded border border-rule px-2 py-0.5 text-[11px] text-muted tabular">
-                            {k.replaceAll("_", " ")}: <strong className="text-ink">{v}</strong>
-                          </span>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              </details>
-            );
-          })}
-        </div>
-      )}
+      <RiskPlaybook activityVersion={snap.health?.activity_version} />
     </div>
   );
 }

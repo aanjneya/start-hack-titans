@@ -164,7 +164,7 @@ export async function loadObservabilitySnapshot(): Promise<{ snap: Observability
       getData<FieldChange[]>("/api/changes?limit=300"),
       getData<Issue[]>("/api/issues"),
       getData<Conflict[]>("/api/conflicts"),
-      getData<RiskScore[]>("/api/risk"),
+      getData<RiskScore[]>("/api/risk?current=true"),
       getData<DecisionCard[]>("/api/decisions"),
       getData<Forecast[]>("/api/forecast"),
       getData<OutboxMessage[]>("/api/outbox"),

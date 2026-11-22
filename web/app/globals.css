@@ -6,59 +6,65 @@
   --font-sans: var(--font-archivo), system-ui, sans-serif;
 }
 
-/* Tokens: dock-grey floor, white surfaces, ink text; red only for "the line stops".
-   Not `inline`, so utilities read var(--color-*) and a subtree (see .theme-green) can re-tint them. */
+/* Tokens: Sage Garden (light), colours picked from the reference theme card and forecast chart. Warm off-white
+   floor under the sage beams, white cards, near-black ink; sage #7b9082 for fills, deep sage #5f7556 for text accents
+   (readable on white). Red, amber and green stay status colours only ("the line stops", "watch", "ok").
+   Not `inline`, so utilities read var(--color-*) and a subtree can re-tint them. */
 @theme {
-  --color-dock: #edf0f3;
+  --color-dock: #f8f7f3;
   --color-surface: #ffffff;
-  --color-ink: #16213a;
-  --color-muted: #5a6478;
-  --color-rule: #d3d9e1;
-  --color-stop: #b3261e;
-  --color-stop-soft: #fbe9e7;
-  --color-act: #1d5fb4;
-  --color-act-soft: #e7eff9;
-  --color-ok: #2f7a4d;
-  --color-ok-soft: #e6f2ea;
-  --color-warn: #a86a12;
-  --color-warn-soft: #fbf1e0;
+  --color-ink: #141723;
+  --color-muted: #6b6c70;
+  --color-rule: #e8e7e0;
+  --color-stop: #c83e3a;
+  --color-stop-soft: #fbeceb;
+  --color-act: #5f7556;
+  --color-act-soft: #f1f3ee;
+  --color-ok: #1f8a4c;
+  --color-ok-soft: #e5f4ea;
+  --color-warn: #a3660b;
+  --color-warn-soft: #fcf3d9;
 }
 
-/* shadcn/ui semantic tokens (components/ui/*), green-and-white.
+/* shadcn/ui semantic tokens (components/ui/*), Sage Garden light.
    `muted` is left out on purpose: in this app `text-muted` is a text colour; shadcn's
    `text-muted-foreground` works, and our ui components use `bg-secondary` for quiet surfaces. */
 :root {
   color-scheme: light;
-  --background: #ffffff;
-  --foreground: #14221b;
+  --background: #f8f7f3;
+  --foreground: #141723;
   --card: #ffffff;
-  --card-foreground: #14221b;
+  --card-foreground: #141723;
   --popover: #ffffff;
-  --popover-foreground: #14221b;
-  --primary: #17734a;
+  --popover-foreground: #141723;
+  --primary: #7b9082;
   --primary-foreground: #ffffff;
-  --secondary: #f1f5f2;
-  --secondary-foreground: #14221b;
-  --muted-foreground: #66756c;
-  --accent: #edf4ef;
-  --accent-foreground: #14221b;
-  --destructive: #c03a2b;
-  --border: #e2e8e4;
-  --input: #e2e8e4;
-  --ring: #2f9e62;
+  --secondary: #cfd4c0;
+  --secondary-foreground: #1a1822;
+  --muted-foreground: #6b6c70;
+  --accent: #c0c9bb;
+  --accent-foreground: #141723;
+  --destructive: #c83e3a;
+  --border: #e8e7e0;
+  --input: #e8e7e0;
+  --ring: #7b9082;
 
   /* Workspace extras: soft brand tint, chat pane, traffic-light cells, AI column. */
-  --brand-soft: #e8f3ec;
-  --brand-ink: #11583a;
-  --pane: #f6f8f6;
+  --brand-soft: #f1f3ee;
+  --brand-ink: #4a5c45;
+  --pane: #f6f6f2;
   --signal-red: #c0392b;
   --signal-red-bg: #fbeceb;
   --signal-amber: #a3660b;
   --signal-amber-bg: #fdf4dc;
   --signal-green: #237a43;
   --signal-green-bg: #e7f4ea;
-  --ai: #0f6b5e;
-  --ai-bg: #edf5f3;
+  --ai: #5f7556;
+  --ai-bg: #f1f3ee;
+
+  /* Background beams (components/ui/background-beams.tsx): faint base lines and the moving light. */
+  --neutral-300: #c0c9bb;
+  --beam-opacity: 0.55;
 }
 
 @theme inline {
@@ -101,29 +107,20 @@
   }
 }
 
-/* Green-and-white re-tint of the app tokens (control room + AI Observability) for everything under it. */
-.theme-green {
-  --color-dock: #f4f7f5;
-  --color-surface: #ffffff;
-  --color-ink: #14221b;
-  --color-muted: #66756c;
-  --color-rule: #e2e8e4;
-  --color-act: #17734a;
-  --color-act-soft: #e8f3ec;
-  --color-ok: #1f8a4c;
-  --color-ok-soft: #e5f4ea;
-  --color-warn: #a3660b;
-  --color-warn-soft: #fcf3d9;
-  --color-stop: #c03a2b;
-  --color-stop-soft: #fcebe9;
-}
-
 body {
   background: var(--color-dock);
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: 15px;
   line-height: 1.5;
+}
+
+/* Headings in the beams look: ink fading to slate. */
+.text-gradient {
+  background-image: linear-gradient(to bottom, var(--foreground), var(--muted-foreground));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* Big figures: condensed width, tabular digits. */

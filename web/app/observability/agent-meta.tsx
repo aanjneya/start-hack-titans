@@ -93,7 +93,7 @@ export const AGENT_NAV: AgentMeta[] = [
     role: "Checks the sources against each other: wrong revisions, mismatches, fraud",
     job: "Checks the sources against each other",
     rosterName: "Reconciler",
-    color: "#6b4fbb",
+    color: "#3b6f8f",
     icon: (
       <svg {...svgProps}>
         <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6l7-3z" />

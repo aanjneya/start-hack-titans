@@ -13,6 +13,7 @@ import {
   PlannerReport, ReconcilerReport, RiskRaterReport, WatcherReport,
 } from "./agent-reports";
 import { AgentWorkspace } from "./workspace/agent-workspace";
+import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
 
 const VALID_IDS = new Set<string>(AGENT_NAV.map((a) => a.id));
 
@@ -100,7 +101,7 @@ export default function ObservabilityDashboard() {
   const mock = snap.health?.mockMode ?? true;
 
   return (
-    <div className="theme-green flex min-h-screen bg-dock text-ink">
+    <div className="flex min-h-screen text-ink">
       {/* Left Agent Icon Sidebar. Phones always get the icon rail, so the report keeps its width. */}
       <aside
         aria-label="Agent navigation"
@@ -211,9 +212,16 @@ export default function ObservabilityDashboard() {
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               {activeMeta.icon}
             </span>
-            <div>
-              <h1 className="text-2xl font-bold leading-tight">{activeMeta.name}</h1>
-              <p className="text-sm text-muted">{activeMeta.role}</p>
+            <div className="min-w-0">
+              {/* Redrawn for every agent you open. */}
+              <HandWrittenTitle
+                key={selectedId}
+                className="mx-0 -ml-4 w-auto max-w-none px-12 py-5"
+                titleClassName="text-2xl font-bold leading-tight tracking-tight md:text-2xl"
+                title={activeMeta.name}
+                subtitle={null}
+              />
+              <p className="-mt-2 text-sm text-muted">{activeMeta.role}</p>
             </div>
           </div>
 

@@ -559,7 +559,7 @@ export function RiskBoard({
   return (
     <section aria-labelledby="decide">
       <div className="mb-3 flex items-baseline justify-between gap-4">
-        <h2 id="decide" className="text-xl font-bold">
+        <h2 id="decide" className="text-gradient text-xl font-bold">
           Risks to act on
         </h2>
         {groups.length > 0 && <span className="text-sm text-muted tabular">{groups.length}</span>}
@@ -1059,10 +1059,10 @@ function ActionCard({
     <TiltCard
       maxTilt={8}
       className={cn(
-        "h-[19rem] w-full rounded-2xl shadow-[0_24px_50px_-24px_rgba(6,40,26,0.65)] ring-1 ring-black/5",
+        "h-[19rem] w-full rounded-2xl shadow-[0_24px_50px_-24px_rgba(38,50,40,0.55)] ring-1 ring-black/5",
         executable
-          ? "bg-[linear-gradient(155deg,#0c3323_0%,#12523a_52%,#1b7a50_100%)]"
-          : "bg-[linear-gradient(155deg,#1b2a24_0%,#24382f_55%,#2f4a3d_100%)]",
+          ? "bg-[linear-gradient(155deg,#2c3a30_0%,#4a5e4f_52%,#7b9082_100%)]"
+          : "bg-[linear-gradient(155deg,#2a2d2b_0%,#3a3f3b_55%,#4d534e_100%)]",
       )}
     >
       <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
@@ -1079,7 +1079,7 @@ function ActionCard({
             <span
               className={cn(
                 "rounded-full px-2.5 py-0.5 text-[11.5px] font-bold",
-                rank === 0 ? "bg-white text-[#0f4a31]" : "bg-white/15 text-white ring-1 ring-inset ring-white/25",
+                rank === 0 ? "bg-white text-[#3e5143]" : "bg-white/15 text-white ring-1 ring-inset ring-white/25",
               )}
             >
               {RANK[rank] ?? `#${rank + 1}`}
@@ -1125,7 +1125,7 @@ function ActionCard({
               onClick={approve}
               disabled={state === "busy" || state === "done"}
               aria-label={`${verb}: ${action.title}`}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-2.5 text-[14px] font-semibold text-[#0f4a31] outline-none transition-[background-color,transform] hover:bg-white/90 focus-visible:ring-[3px] focus-visible:ring-white/60 active:scale-[0.98] disabled:opacity-70"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-2.5 text-[14px] font-semibold text-[#3e5143] outline-none transition-[background-color,transform] hover:bg-white/90 focus-visible:ring-[3px] focus-visible:ring-white/60 active:scale-[0.98] disabled:opacity-70"
             >
               {state === "busy" && <Loader2 aria-hidden className="size-4 motion-safe:animate-spin" />}
               {state === "busy" ? "Sending…" : verb}
@@ -1157,9 +1157,9 @@ function ActionCard({
         <div
           role="status"
           style={{ transform: "translateZ(90px)" }}
-          className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-2xl bg-[#0b2f20]/95 text-center text-white animate-in fade-in duration-300"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-2xl bg-[#2c3a30]/95 text-center text-white animate-in fade-in duration-300"
         >
-          <span className="flex size-14 items-center justify-center rounded-full bg-white text-[#0f4a31] animate-in zoom-in-50 duration-300">
+          <span className="flex size-14 items-center justify-center rounded-full bg-white text-[#3e5143] animate-in zoom-in-50 duration-300">
             <Check aria-hidden className="size-7" strokeWidth={3} />
           </span>
           <p className="text-[16px] font-semibold">Approved</p>

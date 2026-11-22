@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import type { ActionRun, BuyerActivity, BuyerQueueEntry, CustomerSetup, RunResult } from "../../API_CONTRACT";
 import { ExposureEvidence, ExposureSummary } from "./supply-exposure";
+import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
 import DataDrawer from "./data-drawer";
 import { actionLine, entryDetail, humanizeAction } from "./observability/agent-meta";
 import { RiskBoard, SeverityLabel } from "./risk-board";
@@ -38,7 +39,7 @@ const EMPTY: Snapshot = { queue: null, setup: null, health: null, forecast: [], 
 const AGENTS: { id: string; name: string; job: string; color: string }[] = [
   { id: "watcher", name: "Watcher", job: "Watches the supplier portal for new files", color: "#5a6478" },
   { id: "ingest", name: "Ingest", job: "Reads every file, scan and reply into one truth", color: "#1d5fb4" },
-  { id: "reconciler", name: "Reconciler", job: "Checks the sources against each other", color: "#6b4fbb" },
+  { id: "reconciler", name: "Reconciler", job: "Checks the sources against each other", color: "#3b6f8f" },
   { id: "risk", name: "Risk rater", job: "Rates suppliers, parts and editions", color: "#a86a12" },
   { id: "planner", name: "Planner", job: "Forecasts packing and proposes decisions", color: "#127a7a" },
   { id: "chaser", name: "Chaser", job: "Asks suppliers for what is missing", color: "#2f7a4d" },
@@ -250,7 +251,7 @@ export default function ControlRoom() {
   const mock = snap.health?.mockMode ?? true;
 
   return (
-    <div className="theme-green min-h-screen bg-dock">
+    <div className="min-h-screen">
     <div className="mx-auto max-w-[1360px] px-4 pb-16 sm:px-6">
       <TopBar
         setup={snap.setup}
@@ -407,7 +408,7 @@ function CaseUpdates({ snap, openMail, refresh, current, onAction }: {
   if (!decided.length) return null;
   return (
     <section id="decision-follow-up" aria-labelledby="decided">
-      <h2 id="decided" className="mb-3 text-xl font-bold">
+      <h2 id="decided" className="text-gradient mb-3 text-xl font-bold">
         Decided
       </h2>
       <ul className="divide-y divide-rule rounded-lg border border-rule bg-surface">
@@ -616,21 +617,15 @@ function TopBar(props: {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 py-5">
       {/* The one number that matters up here: time left until packing closes. */}
-      <h1 className="flex items-baseline gap-2"
-        title={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}>
-        {left == null ? (
-          <span className="text-lg font-semibold text-muted">Packing deadline</span>
-        ) : left <= 0 ? (
-          <span className="text-2xl font-bold">Packing has closed</span>
-        ) : (
-          <>
-            <span className="text-[30px] font-bold leading-none tabular">
-              {Math.floor(left / 3_600_000)} h {String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")} min
-            </span>
-            <span className="text-sm text-muted">until packing closes</span>
-          </>
-        )}
-      </h1>
+      <HandWrittenTitle
+        className="mx-0 w-auto max-w-none px-[4.5rem] py-8"
+        titleClassName="text-[30px] font-bold leading-none tabular tracking-tight md:text-[30px]"
+        subtitleClassName="mt-1 text-sm text-muted"
+        titleTooltip={closes ? `Packing closes ${closes}${props.replayEnabled && snapshot ? ` · counted from the snapshot of ${snapshot}` : ""}` : undefined}
+        title={left == null ? "Packing deadline" : left <= 0 ? "Packing has closed"
+          : `${Math.floor(left / 3_600_000)} h ${String(Math.floor((left % 3_600_000) / 60_000)).padStart(2, "0")} min`}
+        subtitle={left != null && left > 0 ? "until packing closes" : null}
+      />
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         {props.updates}
         {props.setup && (
@@ -1099,7 +1094,7 @@ function AgentLanes({
     <section aria-labelledby="agents">
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <h2 id="agents" className="flex items-baseline gap-2 text-xl font-bold">
-          Agents
+          <span className="text-gradient">Agents</span>
           {busy && <span className="text-sm font-semibold text-act">working on the drop</span>}
         </h2>
         <button

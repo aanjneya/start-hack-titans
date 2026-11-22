@@ -10,6 +10,7 @@ import {
 import {
   AGENT_NAV, TONE_CLASS, agentMeta, entryDetail, humanizeAction, isPlumbingEvent, type AgentId,
 } from "./agent-meta";
+import { ForecastPanel } from "./forecast-chart";
 import { buildRosterAgents, plural } from "./roster";
 
 // ---------------------------------------------------------------------------
@@ -140,14 +141,6 @@ export function OverviewReport({
   online?: boolean | null;
   onSelectAgent: (id: AgentId) => void;
 }) {
-  const realEvents = useMemo(() => snap.trace.filter((e) => !isPlumbingEvent(e)), [snap.trace]);
-  const totalErrors = useMemo(() => snap.trace.filter((e) => e.action === "error").length, [snap.trace]);
-  const openIssues = useMemo(() => snap.issues.filter((i) => i.status !== "resolved").length, [snap.issues]);
-  const humanOverrides = useMemo(
-    () => snap.decisions.filter((d) => d.status === "rejected").length,
-    [snap.decisions],
-  );
-
   const agentStats = useMemo(() => {
     const map = new Map<string, { total: number; real: number; errors: number; last?: AgentLogEntry }>();
     for (const e of snap.trace) {
@@ -168,19 +161,8 @@ export function OverviewReport({
 
   return (
     <div className="space-y-6">
-      <KpiGrid
-        items={[
-          { label: "Agent actions", value: fmt(realEvents.length), hint: `across ${plural(snap.drops.length, "data drop")}`, tone: "act" },
-          { label: "Open findings", value: fmt(openIssues), hint: `${plural(snap.conflicts.filter((c) => c.status === "open").length, "source conflict")} open`, tone: openIssues > 0 ? "warn" : "ok" },
-          { label: "Approved", value: fmt(snap.decisions.filter((d) => d.status === "approved" || d.status === "executed").length), hint: `${fmt(snap.decisions.filter((d) => d.status === "proposed").length)} waiting for approval`, tone: "ok" },
-          {
-            label: "Errors and overrides",
-            value: fmt(totalErrors + humanOverrides),
-            hint: `${plural(totalErrors, "error")} · ${fmt(humanOverrides)} rejected by a person`,
-            tone: totalErrors > 0 ? "stop" : humanOverrides > 0 ? "warn" : "ok",
-          },
-        ]}
-      />
+      {/* What happens next, not how busy the agents were: the Planner's hour-by-hour packing forecast. */}
+      <ForecastPanel forecasts={snap.forecast} now={now} />
 
       <section aria-label="Agent fleet" className="rounded-xl border border-rule bg-surface p-4 sm:p-5">
         <AgentRoster

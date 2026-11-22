@@ -11,49 +11,15 @@ Team summary: [`.brain/DATA_CHANGES.md`](../../.brain/DATA_CHANGES.md).
 
 ## Latest check
 
-### Drop check 2026-11-22T09-23 (Europe/Berlin)
+### Drop check 2026-11-22T09-38 (Europe/Berlin)
 Portal now: 335 files, 53.3 MB
-**3 added · 0 changed · 0 removed**
-Where: `soony/erp` (1), `suppliers/SUP-0010_Hwaseong_Memory` (1), `suppliers/SUP-0019_Dongguan_Precision_Housings` (1)
-
-## Watch-list hits (Lio brief signals)
-- 🔥 `soony/erp/po_export_2026-11-22.csv`: partial
-- 🔥 `suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf`: contract
-- 🔥 `suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv`: order_confirmation
-
-### ➕ `soony/erp/po_export_2026-11-22.csv` (9,627 B)
-```
-Bestellnummer;Pos;Lieferant;Material;Werk;Menge;Preis;Waehrung;Bestelldatum;Wunschtermin;confirmed_delivery_dt;Status;Einkäufer;Bemerkung
-4500318719;10;SUP-0019;CMP-GAM-010;DC-HAM;10000;88,3800;CNY;26.08.2026;20.11.2026;29.11.2026;open;Mei Lin;
-4500318728;10;SUP-0019;CMP-GAM-010;DC-HAM;9500;88,3800;CNY;03.09.2026;23.11.2026;02.12.2026;open;Mei Lin;
-4500318733;50;SUP-0010;CMP-GAM-001;DC-HAM;240000;9,8000;USD;09.09.2026;15.11.2026;26.11.2026;open;Felix Brunner;
-4500318734;10;SUP-0019;CMP-GAM-010;DC-HAM;8500;88,3800;CNY;10.09.2026;02.12.2026;26.12.2026;open;Mei Lin;rev. 2026-11-22 supplier schedule +10d
-4500318733;20;SUP-0010;CMP-GAM-002;DC-HAM;13000;5,4000;USD;11.09.2026;18.11.2026;23.11.2026;open;Felix Brunner;
-4500318735;20;SUP-0010;CMP-GAM-001;DC-HAM;48000;9,8000;USD;15.09.2026;21.11.2026;21.11.2026;partially_delivered;Felix Brunner;AB fehlt
-4500318737;10;SUP-0019;CMP-GAM-003;DC-HAM;312000;1,6100;CNY;15.09.2026;26.11.2026;17.12.2026;open;Mei Lin;rev. 2026-11-22 supplier schedule +10d
-```
-
-### ➕ `suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf` (63,944 B)
-
-### ➕ `suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv` (2,530 B)
-```
-customer_po,item,part_no,description,qty,confirmed_old,confirmed_new,remark
-4500318734,10,CMP-GAM-010,"Statue ""The Getaway"" (die-cast, 18 cm)",8500,2026-12-16,2026-12-26,产能调整 / capacity re-planning Q4
-4500318737,10,CMP-GAM-003,Game Card Case (clear),312000,2026-12-07,2026-12-17,产能调整 / capacity re-planning Q4
-4500318737,20,CMP-GAM-006,Steel Case Grand Heist 6,24000,2026-12-11,2026-12-21,产能调整 / capacity re-planning Q4
-4500318744,10,CMP-GAM-010,"Statue ""The Getaway"" (die-cast, 18 cm)",8500,2026-12-21,2026-12-31,产能调整 / capacity re-planning Q4
-4500318744,20,CMP-GAM-010,"Statue ""The Getaway"" (die-cast, 18 cm)",9000,2026-12-28,2027-01-07,产能调整 / capacity re-planning Q4
-4500318753,10,CMP-GAM-006,Steel Case Grand Heist 6,25000,2026-12-22,2027-01-01,产能调整 / capacity re-planning Q4
-4500318759,20,CMP-GAM-010,"Statue ""The Getaway"" (die-cast, 18 cm)",11000,2027-01-11,2027-01-21,产能调整 / capacity re-planning Q4
-```
-
-## Agent feedback
-Nothing new arrives before tonight 20:00, but three warnings: the new German SAP-style PO export (po_export_2026-11-22.csv: semicolons, decimal commas, DD.MM.YYYY, item 10/20 = our line 1/2) shows still no order confirmation ('AB fehlt') for the 350,000 cases in the container at CTA (PO 4500318738/20) and the 48,000 game cards (4500318735/20), and Boise's 36,000 cards (4500318769/20) as 'Lieferant mahnen'. Dongguan's revised_schedule_W47.csv moves every statue, case and steel-case confirmation +10 days (capacity re-planning Q4), so post-launch Collector's statues slip to 26 Dec - 23 Jan. Hwaseong's LTA Amendment 3 redline extends to 2029, keeps 9.80 USD only if signed by 15 Dec (else 10.58 from 2027) and slips in a new, undiscussed section 4 that waives all Soony late-delivery claims on signature, including the current 20,000-card short shipment, so it must not be signed as is. Offline, our Ingest keeps both CSVs only as plain tables (German headers and the new schedule columns are not mapped yet), so these slips do not reach the order confirmations until that is fixed.
+No changes since last check.
 
 ## All checks (newest first, Europe/Berlin)
 
 | Check | Portal | Added | Changed | Removed | What changed | Details |
 |---|---|---|---|---|---|---|
+| 2026-11-22 09-38 | 335 · 53.3 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T09-38.md) |
 | 2026-11-22 09-23 | 335 · 53.3 MB | 3 | 0 | 0 | **3 added · 0 changed · 0 removed** — `soony/erp/po_export_2026-11-22.csv`, `suppliers/SUP-0010_Hwaseong_Memory/contracts/SUP-0010_LTA_Amendment_3_redline.pdf`, `suppliers/SUP-0019_Dongguan_Precision_Housings/order_confirmations/revised_schedule_W47.csv` Nothing new arrives before tonight 20:00, but three warnings: the new German SAP-style PO export (po_export_2026-11-22.csv: semicolons, decimal commas, DD.MM.YYYY, item 10/20 = our line 1/2) shows still no order confirmation ('AB fehlt') for the 350,000 cases in the container at CTA (PO 4500318738/20) and the 48,000 game cards (4500318735/20), and Boise's 36,000 cards (4500318769/20) as 'Lieferant mahnen'. Dongguan's revised_schedule_W47.csv moves every statue, case and steel-case confirmation +10 days (capacity re-planning Q4), so post-launch Collector's statues slip to 26 Dec - 23 Jan. Hwaseong's LTA Amendment 3 redline extends to 2029, keeps 9.80 USD only if signed by 15 Dec (else 10.58 from 2027) and slips in a new, undiscussed section 4 that waives all Soony late-delivery claims on signature, including the current 20,000-card short shipment, so it must not be signed as is. Offline, our Ingest keeps both CSVs only as plain tables (German headers and the new schedule columns are not mapped yet), so these slips do not reach the order confirmations until that is fixed. | [report](reports/2026-11-22T09-23.md) |
 | 2026-11-22 09-08 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T09-08.md) |
 | 2026-11-22 08-53 | 332 · 53.2 MB | 0 | 0 | 0 | **no changes** | [report](reports/2026-11-22T08-53.md) |

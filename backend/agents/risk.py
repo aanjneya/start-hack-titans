@@ -90,6 +90,12 @@ class RiskRater(Agent):
             if reasons_payload:
                 reasons_payload[0]["score_0_100"] = comp.score_0_100
                 reasons_payload[0]["breakdown"] = comp.breakdown
+                if comp.score_basis:
+                    reasons_payload[0]["score_basis"] = comp.score_basis
+                if comp.signal_inputs:
+                    reasons_payload[0]["signal_inputs"] = comp.signal_inputs
+                if comp.shipment_observations:
+                    reasons_payload[0]["shipment_observations"] = comp.shipment_observations
 
             prev = prev_scores.get((comp.entity_type, comp.entity_id))
             if prev is None or prev.grade != comp.grade or prev.reasons != reasons_payload:

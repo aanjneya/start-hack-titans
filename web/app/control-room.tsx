@@ -56,7 +56,7 @@ async function loadSnapshot(health: HealthCheckResponse): Promise<{ snap: Snapsh
     getData<Issue[]>("/api/issues"),
     getData<OutboxMessage[]>("/api/outbox"),
     getData<InboxMessage[]>("/api/inbox"),
-    getData<RiskScore[]>("/api/risk"),
+    getData<RiskScore[]>("/api/risk?current=true"),
     getData<AgentLogEntry[]>("/api/trace?limit=400"),
     getData<CustomerSetup>("/api/setup"),
     getData<BuyerQueueEntry[]>("/api/buyer-queue"),
@@ -659,6 +659,15 @@ const DecisionView = memo(function DecisionView({ entry, snap, current, onDone, 
               <strong className="capitalize">{r.value.replaceAll("_", " ")}</strong>{r.note && ` · ${r.note}`}
               <span className="block break-words text-xs text-muted">{r.source.split("/").pop()?.split("#")[0]}</span>
             </li>)}</ul>)}
+        </section>}
+        {entry.tracking_signal && <section className="mt-3">
+          <h4 className="font-bold">Why the Risk Rater flagged this shipment</h4>
+          <p>{entry.tracking_signal.text}</p>
+          {entry.tracking_signal.selected_for_rating && <p className="text-muted">
+            This was the tracking input used in the supplier’s {entry.tracking_signal.supplier_rating} rating.</p>}
+          <p className="mt-1 break-words text-muted">{entry.tracking_signal.same_shipment_source &&
+            "The signal uses one of the two records above. "}Source · {entry.tracking_signal.evidence.path.split("/").pop()}
+            {entry.tracking_signal.observed_at && ` · Updated ${entry.tracking_signal.observed_at}`}</p>
         </section>}
         {option.description === "supplier stock offer" && <p className="mt-2">Opening this review commits no spend. A new PO needs separate approval.</p>}
         {baseline?.remaining_shortfall != null && <section className="mt-3">

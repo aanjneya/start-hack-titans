@@ -7,10 +7,10 @@ import hashlib
 import json
 import re
 
-from sqlmodel import select
+from sqlmodel import func, select
 
 from ..core import policy
-from ..core.models import DecisionCard, Issue
+from ..core.models import DecisionCard, Issue, RiskScore
 from ..core.parsing import parse_datetime
 from .planner_options import paid_window_open
 
@@ -144,6 +144,34 @@ def compare_freight(entries):
             entry["freight_comparison"] = comparison
 
 
+def link_shipment_signals(db, entries):
+    """Expose a supplier-level tracking reason only on the physical shipment it describes."""
+    actions = [(e, e["option"]["actions"][0]) for e in entries]
+    suppliers = {a["supplier_id"] for _, a in actions if a.get("shipment_id") and a.get("supplier_id")}
+    if not suppliers:
+        return
+    latest = select(func.max(RiskScore.id)).where(RiskScore.entity_type == "supplier",
+                     RiskScore.entity_id.in_(suppliers)).group_by(RiskScore.entity_id)
+    observations = {}
+    for risk in db.exec(select(RiskScore).where(RiskScore.id.in_(latest))):
+        for r in risk.reasons:
+            for signal in r.get("shipment_observations", []):
+                for shipment in signal.get("shipment_ids", []):
+                    key = risk.entity_id, shipment
+                    if key not in observations or signal["selected_for_rating"]:
+                        observations[key] = (risk.rating, signal)
+    for entry, action in actions:
+        stored = observations.get((action.get("supplier_id"), action.get("shipment_id")))
+        if stored:
+            rating, signal = stored
+            proof = signal["evidence"]
+            readings = [r["source"] for c in entry["option"].get("shipment_checks", []) for r in c["readings"]]
+            entry["tracking_signal"] = dict(supplier_rating=rating, title=signal["title"], text=signal["summary"],
+                                            observed_at=signal.get("observed_at"), evidence=proof,
+                                            same_shipment_source=proof["path"] in readings,
+                                            selected_for_rating=signal["selected_for_rating"])
+
+
 def buyer_queue(db):
     cards = db.exec(select(DecisionCard).where(DecisionCard.created_by == "planner")
                     .order_by(DecisionCard.id.desc())).all()
@@ -208,6 +236,7 @@ def buyer_queue(db):
         entry["on_time_recovery"] = not _rank(entry)[0]
         entry["evidence"] = list({digest(e): e for e in entry["evidence"]}.values())
     compare_freight(groups.values())
+    link_shipment_signals(db, groups.values())
     return sorted(groups.values(), key=_rank)
 
 

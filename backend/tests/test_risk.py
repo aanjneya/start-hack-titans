@@ -253,6 +253,7 @@ def test_live_polymarket_open_meteo_and_gnews_parse_real_shapes(monkeypatch):
     assert any("federalregister.gov" in s.source_url for s in reg_sigs)
     assert any("eur-lex.europa.eu" in s.source_url for s in reg_sigs)
     assert all(s.live and s.category == "regulatory_change" for s in reg_sigs)
+    assert next(s for s in reg_sigs if "federalregister.gov" in s.source_url).published == "2026-11-19"
 
     # Offline MOCK_MODE covers EVERY supplier country + any unseen future country (e.g. JP)
     monkeypatch.setenv("MOCK_MODE", "true")
@@ -338,3 +339,30 @@ def test_external_signal_drives_rollup_and_auto_resolves_when_risk_drops():
     with session() as s:
         refreshed = s.get(Issue, sup_issue.id)
     assert refreshed is not None and refreshed.status == "resolved"
+
+
+def test_general_wto_headline_does_not_create_a_country_exposure(monkeypatch):
+    from backend.agents import risk_signals
+    xml = """<rss><channel>
+      <item><title>WTO reviews global tariff monitoring</title><link>https://www.wto.org/general</link></item>
+      <item><title>Japan changes export rules</title><link>https://www.wto.org/japan</link></item>
+    </channel></rss>"""
+    monkeypatch.setattr(risk_signals, "_cached_get_json", lambda *a, **k: None)
+    monkeypatch.setattr(risk_signals, "_cached_get_text", lambda url, *a, **k: xml if url == risk_signals.WTO_RSS_URL else None)
+    ok, signals = risk_signals.RegulationChangeProvider()._fetch_live({"DE", "JP", "CN", "VN"})
+    assert ok
+    assert {s.source_url: s.countries for s in signals} == {
+        "https://www.wto.org/general": [], "https://www.wto.org/japan": ["JP"]}
+
+
+def test_current_ratings_survive_more_than_one_page_of_older_alerts():
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+    with session() as db:
+        db.add_all([RiskScore(entity_type="supplier", entity_id="S", grade=6, rating="CCC") for _ in range(501)])
+        db.add_all([RiskScore(entity_type="supplier", entity_id="S", grade=2, rating="AA"),
+                    RiskScore(entity_type="part", entity_id="S", grade=4, rating="BBB")])
+        db.commit()
+    current = TestClient(app).get("/api/risk?current=true").json()["data"]
+    assert [(r["entity_type"], r["entity_id"], r["rating"]) for r in current] == [
+        ("part", "S", "BBB"), ("supplier", "S", "AA")]

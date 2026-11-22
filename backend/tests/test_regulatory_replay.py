@@ -116,7 +116,16 @@ def test_real_magnets_open_one_future_review():
     assert {"factor": "external_politics", "before": 11.2, "after": 11.2} in grade["drivers"]
     signals = {s["factor"]: s for s in exposure["signals"]}
     assert signals["external_politics"]["sources"][0]["origin"] == "Offline example"
-    assert {"weather", "telemetry", "regulatory_change"} == {d["factor"] for d in exposure["other_drivers"]}
+    assert set(signals) == {"trade_news", "external_politics", "weather", "telemetry", "regulatory_change"}
+    assert len(signals["external_politics"]["sources"]) == 2
+    basis = exposure["score_basis"]
+    assert basis["external_raw"] > basis["external"] == basis["external_cap"] == 45
+    assert basis["total"] == round(basis["internal"] + basis["external"], 1)
+    assert signals["telemetry"]["sources"][0]["origin"] == "Customer shipment feed"
+    assert signals["telemetry"]["sources"][0]["scope"].startswith("Shipment SHP-")
+    assert signals["telemetry"]["sources"][0]["observed_at"]
+    assert signals["weather"]["sources"][0]["origin"] == signals["regulatory_change"]["sources"][0]["origin"] == "Offline example"
+    assert not exposure["other_drivers"]
     assert signals["trade_news"]["sources"][0]["published"] == "2026-11-21"
     assert signals["trade_news"]["sources"][0]["evidence"]["source_kind"] == "News coverage"
     assert any(e["source_kind"] == "Product BOM" for e in entry["evidence"])

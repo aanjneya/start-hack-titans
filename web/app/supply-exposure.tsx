@@ -29,9 +29,13 @@ export function ExposureSummary({ exposure }: { exposure: SupplyExposure }) {
       : "The buyer needs to establish which order lines the warning covers."}
       {change != null && change > 0 ? ` Lead time grew from ${before} to ${after} days (+${change}).` :
         after != null ? ` Recorded lead time is ${after} days.` : ""}</p>
-    {market && <details className="text-sm text-muted"><summary className="cursor-pointer">
-      Polymarket · {odds && `${odds} yes · `}{market.origin.toLowerCase()}</summary>
-      <p className="pl-3">{marketSignal?.text}</p></details>}
+    {exposure.signals.length > 0 && <details className="text-sm text-muted"><summary className="cursor-pointer">
+      {exposure.signals.length} signal {exposure.signals.length === 1 ? "type" : "types"}
+      {market && <> · Polymarket · {odds && `${odds} yes · `}{market.origin.toLowerCase()}</>}</summary>
+      {market && <p className="mt-1 pl-3">{market.title || marketSignal?.text}</p>}
+      <ul className="mt-1 space-y-1 pl-3">{exposure.signals.map(s => <li key={s.factor}>
+        <strong>{factorNames[s.factor] || s.factor}</strong>{s.sources[0]?.scope && ` · ${s.sources[0].scope}`}
+      </li>)}</ul></details>}
     {assembly && <p className="text-sm text-muted">The supplier fits this part into the ordered assemblies before delivery.</p>}
   </div>;
 }
@@ -59,15 +63,22 @@ export function ExposureEvidence({ exposure: x }: { exposure: SupplyExposure }) 
         At the {x.last_grade_change?.previous} → {x.last_grade_change?.current} grade change, the largest movements were
         {" "}{changed.slice(0, 2).map(d => `${factorNames[d.factor] || d.factor} (${d.before} → ${d.after} points)`).join(" and ")}.
       </p>}
+      {x.score_basis && <p className="mt-2 text-sm text-muted">Supplier score · {x.score_basis.total}/100.
+        {" "}{x.score_basis.internal} points come from internal records and {x.score_basis.external} from external inputs.
+        {x.score_basis.external_raw > x.score_basis.external_cap &&
+          ` The external inputs add up to ${x.score_basis.external_raw} points and the model caps them at ${x.score_basis.external_cap}.`}</p>}
       <ul className="mt-2 space-y-2">{x.signals.map(signal => <li key={signal.factor} className="rounded border border-rule p-3">
+        <p className="font-semibold">{factorNames[signal.factor] || signal.factor} · {signal.points} points</p>
         <p>{signal.text}</p>
         {x.last_grade_change?.drivers.some(d => d.factor === signal.factor && d.before === d.after && d.after === signal.points)
           && <p className="text-xs text-muted">Contribution at the grade change · {signal.points} points, unchanged</p>}
-        {signal.sources.map(({ evidence, origin, published, title }, i) => <p key={i} className="mt-1 text-xs text-muted">
-          {origin} · {published ?? "Publication date unknown"} · {/^https?:\/\//i.test(evidence.path)
-            ? <a className="underline" href={evidence.path} target="_blank" rel="noreferrer">Source ↗</a>
-            : title || evidence.path.split("/").pop()}
-        </p>)}
+        {signal.sources.map(({ evidence, origin, published, title, scope, observed_at }, i) => <div key={i} className="mt-1 text-xs text-muted">
+          <p>{origin}{scope && ` · ${scope}`} · {published ? `Published ${published}` : observed_at ? `Source updated ${observed_at}` : "Source date unknown"}</p>
+          {origin !== "Offline example" && /^https?:\/\//i.test(evidence.path)
+            ? <a className="text-act underline" href={evidence.path} target="_blank" rel="noreferrer">{title || evidence.source_kind || "Source"} ↗</a>
+            : <p>{title || evidence.path.split("/").pop()}</p>}
+          {evidence.quote && <p className="mt-1">{evidence.quote}</p>}
+        </div>)}
       </li>)}</ul>
       {!!x.other_drivers?.length && <p className="mt-2 text-sm text-muted">
         Other factors in this rating · {x.other_drivers.map(d => factorNames[d.factor] || d.factor).join(" · ")}

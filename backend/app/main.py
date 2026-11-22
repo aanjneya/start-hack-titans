@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlmodel import select
+from sqlmodel import func, select
 
 from ..agents.planner_history import decision_history
 from ..agents.planner_queue import buyer_queue, current_option, selection_version
@@ -356,7 +356,13 @@ def get_trace(limit: int = 200, agent: Optional[str] = None, run_id: Optional[st
 
 
 @app.get("/api/risk")
-def risk() -> dict:
+def risk(current: bool = False) -> dict:
+    if current:
+        latest_ids = select(func.max(RiskScore.id)).group_by(RiskScore.entity_type, RiskScore.entity_id)
+        with session() as db:
+            rows = db.exec(select(RiskScore).where(RiskScore.id.in_(latest_ids)).order_by(
+                           RiskScore.grade.desc(), RiskScore.entity_type, RiskScore.entity_id)).all()
+            return ok([r.model_dump(mode="json") for r in rows])
     return ok(_rows(RiskScore, order=RiskScore.grade.desc()))
 
 

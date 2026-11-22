@@ -83,6 +83,9 @@ class ComputedRisk:
     product_id: str = ""
     impact: dict[str, Any] = field(default_factory=dict)
     is_single_source: bool = False
+    signal_inputs: dict[str, list[dict]] = field(default_factory=dict)
+    score_basis: dict[str, float] = field(default_factory=dict)
+    shipment_observations: list[dict] = field(default_factory=list)
 
 
 def _dedup_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -295,8 +298,9 @@ def rate_suppliers(
         ]
         ext_pol_pts = 0.0
         if poly_sigs:
-            top_poly = max(poly_sigs, key=lambda x: x.score_0_100)
-            avg_top2 = sum(s.score_0_100 for s in sorted(poly_sigs, key=lambda x: -x.score_0_100)[:2]) / min(2, len(poly_sigs))
+            market_inputs = sorted(poly_sigs, key=lambda x: -x.score_0_100)[:2]
+            top_poly = market_inputs[0]
+            avg_top2 = sum(s.score_0_100 for s in market_inputs) / len(market_inputs)
             ext_pol_pts = round(min(13.0, avg_top2 * 0.16), 1)
             breakdown["external_politics"] = ext_pol_pts
             reasons.append(ReasonItem(
@@ -395,7 +399,8 @@ def rate_suppliers(
 
         # Cap external total at 45 pts (and at 24 pts if no portal_news export ban hit, so ambient odds stay realistic)
         external_cap = 45.0 if news_pts > 0 else 24.0
-        external_total = min(external_cap, news_pts + ext_pol_pts + wx_pts + tel_pts + reg_pts)
+        external_raw = news_pts + ext_pol_pts + wx_pts + tel_pts + reg_pts
+        external_total = min(external_cap, external_raw)
 
         total_score = round(min(100.0, internal_total + external_total), 1)
         grade, rating = score_to_grade(total_score)
@@ -411,6 +416,13 @@ def rate_suppliers(
             )]
 
         actions = _dedup_actions([r.recommended_action for r in top3 if r.recommended_action])
+        contributing = {
+            "trade_news": [top_news] if news_pts else [],
+            "external_politics": market_inputs if ext_pol_pts else [],
+            "weather": [top_wx] if wx_pts else [],
+            "telemetry": [top_tel] if tel_pts else [],
+            "regulatory_change": [top_reg] if reg_pts else [],
+        }
         results[sup_id] = ComputedRisk(
             entity_type="supplier",
             entity_id=sup_id,
@@ -422,6 +434,13 @@ def rate_suppliers(
             breakdown=breakdown,
             suggested_actions=actions,
             supplier_id=sup_id,
+            score_basis=dict(internal=round(internal_total, 1), external_raw=round(external_raw, 1),
+                             external_cap=external_cap, external=round(external_total, 1), total=total_score),
+            signal_inputs={factor: [sg.rating_input(country, sup_ports, sup_ship_ids) for sg in used]
+                           for factor, used in contributing.items() if used},
+            shipment_observations=[dict(shipment_ids=sorted(sup_ship_ids.intersection(sg.shipment_ids)),
+                title=sg.title, summary=sg.summary, evidence=sg.as_evidence().model_dump(), observed_at=sg.observed_at,
+                selected_for_rating=(sg is top_tel and tel_pts > 0)) for sg in tel_sigs],
         )
 
     return results

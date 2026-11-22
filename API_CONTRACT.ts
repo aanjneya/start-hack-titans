@@ -140,6 +140,7 @@ export interface SupplyExposure {
   order_value?: {amount: number; currency: string} | null;
   orders: {po: string; line: number | null; quantity: number | null; promised: string}[];
   supplier_rating: string | null;
+  score_basis?: {internal: number; external_raw: number; external_cap: number; external: number; total: number} | null;
   last_grade_change?: {
     previous: string; current: string;
     drivers: {factor: string; before: number; after: number}[];
@@ -147,6 +148,7 @@ export interface SupplyExposure {
   other_drivers?: {factor: string; points: number}[];
   signals: {factor: string; text: string; points: number; sources: {
     evidence: Evidence; origin: string; title?: string; published: string | null;
+    provider?: string; scope?: string; observed_at?: string | null;
   }[]}[];
 }
 
@@ -205,6 +207,8 @@ export interface DecisionCard {
 
 /** A ranked, actionable option and every source card supporting it. */
 export interface BuyerQueueEntry {
+  tracking_signal?: {supplier_rating: string; title: string; text: string; observed_at: string | null;
+    evidence: Evidence; same_shipment_source: boolean; selected_for_rating: boolean};
   freight_comparison?: {
     fee_per_additional_copy: number | null;
     preferred: boolean;
@@ -247,7 +251,12 @@ export interface RiskScore {
   entity_id: string;
   grade: number; // 1 safe .. 6 critical
   rating: string; // AAA..CCC
-  reasons: { text: string; evidence?: Evidence[] }[];
+  reasons: { text: string; evidence?: Evidence[]; shipment_observations?: {
+    shipment_ids: string[]; title: string; summary: string; evidence: Evidence; observed_at: string | null; selected_for_rating: boolean;
+  }[]; signal_inputs?: Record<string, {
+    provider: string; title: string; summary: string; evidence: Evidence; live: boolean; scope: string;
+    published: string | null; observed_at: string | null; shipment_ids?: string[];
+  }[]> }[];
   computed_at: string;
 }
 
@@ -422,7 +431,7 @@ export const API_ROUTES = {
   DECISION_APPROVE: '/api/decisions/:id/approve', // POST DecideRequest
   DECISION_REJECT: '/api/decisions/:id/reject', // POST DecideRequest, an assigned signer can decline the recommendation
   TRACE: '/api/trace', // GET ?limit=&agent=&run_id=&trace_id= -> AgentLogEntry[]
-  RISK: '/api/risk', // GET -> RiskScore[]
+  RISK: '/api/risk', // GET -> RiskScore[]; ?current=true selects the latest grade per entity before ranking
   OUTBOX: '/api/outbox', // GET -> OutboxMessage[]
   PART_JOURNEY: '/api/part-journey', // GET ?material_id= -> rows of the part_journey view
   SETUP: '/api/setup', // GET -> CustomerSetup (approval matrix + autonomy switch)

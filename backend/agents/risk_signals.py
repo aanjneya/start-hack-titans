@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -56,6 +57,8 @@ class ExternalSignal:
     source_url: str = ""
     quote: str = ""
     live: bool = False  # True if fetched live over HTTP (or real portal drop), False if offline snapshot
+    published: str | None = None
+    observed_at: str | None = None
 
     def as_evidence(self) -> Evidence:
         return Evidence(
@@ -63,6 +66,21 @@ class ExternalSignal:
             locator=f"{self.provider}:{self.category}",
             quote=self.quote or self.summary[:180],
         )
+
+    def rating_input(self, country, ports, shipments):
+        matched_ships = sorted(shipments.intersection(self.shipment_ids))
+        matched_ports = sorted(ports.intersection(self.ports))
+        if matched_ships:
+            scope = "Shipment " + ", ".join(matched_ships)
+        elif matched_ports:
+            scope = "Supplier route via " + ", ".join(matched_ports)
+        elif country and country in self.countries:
+            scope = "Country watch · " + country
+        else:
+            scope = "General trade watch"
+        return dict(provider=self.provider, title=self.title, summary=self.summary, evidence=self.as_evidence().model_dump(),
+                    live=self.live, scope=scope, published=self.published, observed_at=self.observed_at,
+                    shipment_ids=matched_ships)
 
 
 class SignalProvider(Protocol):
@@ -322,6 +340,7 @@ class PolymarketProvider:
                             tags=list(tags),
                             source_url=f"https://polymarket.com/event/{slug}",
                             quote=f"Yes={yes_prob * 100:.1f}%, risk_implied={risk_prob * 100:.1f}% (live Polymarket Gamma API)",
+                            observed_at=mkt.get("updatedAt") or None,
                             live=True,
                         ))
                         break
@@ -448,6 +467,7 @@ class OpenMeteoWeatherProvider:
                 tags=["weather", info.get("mode", "port")],
                 source_url=f"{OPEN_METEO_URL}?latitude={info['lat']}&longitude={info['lon']}",
                 quote=f"wind={wind}km/h, gusts={gust}km/h, precip={precip}mm, WMO={wmo} (live Open-Meteo)",
+                observed_at=(str(cur["time"]) + "Z") if cur.get("time") and data.get("utc_offset_seconds") == 0 else None,
                 live=True,
             ))
         return any_http_ok, signals
@@ -530,6 +550,7 @@ class PoliticalNewsProvider:
                 tags=tags,
                 source_url=doc.source or doc.path,
                 quote=summary[:180],
+                published=doc.published_at.date().isoformat() if doc.published_at else None,
                 live=True,
             ))
 
@@ -577,6 +598,7 @@ class PoliticalNewsProvider:
                 tags=["gnews", "politics"],
                 source_url=link,
                 quote=f"{title[:140]} ({pub})" if pub else title[:160],
+                published=pub or None,
                 live=True,
             ))
         return signals
@@ -620,28 +642,30 @@ class TelemetryProvider:
                     category="maritime_telemetry",
                     title=f"Delayed vessel/shipment {sh.shipment_id}",
                     score_0_100=72.0,
-                    summary=f"AIS/GPS fix {coord} shows {sh.shipment_id} ({sh.mode}) delayed (ETA {sh.eta})",
+                    summary=f"The shipment feed reports {sh.shipment_id} ({sh.mode}) delayed, ETA {sh.eta or 'unknown'}.",
                     countries=[origin_country] if origin_country else [],
                     ports=[p for p in (sh.origin, sh.destination) if p],
                     shipment_ids=[sh.shipment_id],
                     tags=["telemetry", "delayed", sh.mode],
                     source_url=sh.source,
                     quote=f"{sh.shipment_id} lat/lon={coord}, status={sh.status}, eta={sh.eta}",
+                    observed_at=upd.isoformat() if upd else None,
                     live=True,
                 ))
             elif age_h >= 18.0:
                 signals.append(ExternalSignal(
                     provider=self.name,
                     category="maritime_telemetry",
-                    title=f"Silent AIS/GPS transponder on {sh.shipment_id}",
+                    title=f"Stale shipment update for {sh.shipment_id}",
                     score_0_100=min(85.0, 40.0 + age_h),
-                    summary=f"Transponder silent {age_h:.0f}h at {coord} on {sh.shipment_id} ({sh.mode}, {sh.status})",
+                    summary=f"The last update for {sh.shipment_id} trails the newest shipment record by {age_h:.0f} hours.",
                     countries=[origin_country] if origin_country else [],
                     ports=[p for p in (sh.origin, sh.destination) if p],
                     shipment_ids=[sh.shipment_id],
                     tags=["telemetry", "silent_transponder", sh.mode],
                     source_url=sh.source,
                     quote=f"{sh.shipment_id} last fix {coord} at {sh.updated_at} ({age_h:.0f}h old)",
+                    observed_at=upd.isoformat() if upd else None,
                     live=True,
                 ))
             elif st == "arrived_port":
@@ -650,13 +674,14 @@ class TelemetryProvider:
                     category="maritime_telemetry",
                     title=f"Port dwell at {sh.destination} for {sh.shipment_id}",
                     score_0_100=58.0,
-                    summary=f"GPS fix {coord} confirms {sh.shipment_id} sitting at {sh.destination} awaiting pickup",
+                    summary=f"The shipment feed records {sh.shipment_id} at {sh.destination or 'the destination port'}. Verify terminal release.",
                     countries=[origin_country] if origin_country else [],
                     ports=[sh.destination] if sh.destination else [],
                     shipment_ids=[sh.shipment_id],
                     tags=["telemetry", "port_dwell"],
                     source_url=sh.source,
                     quote=f"{sh.shipment_id} at {coord}, note={sh.note}",
+                    observed_at=upd.isoformat() if upd else None,
                     live=True,
                 ))
 
@@ -808,6 +833,7 @@ class RegulationChangeProvider:
                             tags=list(tags) + ["federal-register"],
                             source_url=url,
                             quote=f"{doc_type} published {pub_date}: {title[:140]} (live Federal Register API)",
+                            published=pub_date or None,
                             live=True,
                         ))
                         break
@@ -837,6 +863,7 @@ class RegulationChangeProvider:
                                 tags=list(tags) + ["eur-lex"],
                                 source_url=link,
                                 quote=f"{title[:160]} (live EUR-Lex RSS)",
+                                published=(item.findtext("pubDate") or "").strip() or None,
                                 live=True,
                             ))
                             break
@@ -858,10 +885,12 @@ class RegulationChangeProvider:
                     if not title:
                         continue
                     # Match any supplier country mentioned in the WTO notice
-                    matched_codes = [
-                        c for c in (countries or set(_COUNTRY_REGULATORS))
-                        if _COUNTRY_REGULATORS.get(c, (c, ""))[0].lower() in t_low
-                    ]
+                    matched_codes = []
+                    for c in sorted(countries or _COUNTRY_REGULATORS):
+                        name = _COUNTRY_REGULATORS.get(c, (_COUNTRY_NAMES.get(c), ""))[0]
+                        if ((name and re.search(r"\b" + re.escape(name) + r"\b", title, re.I))
+                                or re.search(r"\(" + re.escape(c) + r"\)", title)):
+                            matched_codes.append(c)
                     if matched_codes or any(k in t_low for k in ("tariff", "anti-dumping", "export", "trade barrier", "dispute")):
                         signals.append(ExternalSignal(
                             provider=self.name,
@@ -869,10 +898,11 @@ class RegulationChangeProvider:
                             title=title[:140],
                             score_0_100=62.0 if matched_codes else 48.0,
                             summary=f"WTO Trade Notice: {title[:140]}",
-                            countries=matched_codes or sorted(countries)[:6],
+                            countries=matched_codes,
                             tags=["wto", "global-trade"],
                             source_url=link,
                             quote=f"{title[:160]} (live WTO RSS)",
+                            published=(item.findtext("pubDate") or "").strip() or None,
                             live=True,
                         ))
                         if len(signals) >= 15:
@@ -918,6 +948,7 @@ class RegulationChangeProvider:
                         tags=["country-regulation", code.lower()],
                         source_url=link,
                         quote=f"{title[:140]} ({pub})" if pub else title[:160],
+                        published=pub or None,
                         live=True,
                     ))
                     break

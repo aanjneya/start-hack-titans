@@ -12,6 +12,10 @@ def source_kind(item, documents, matched_doc=None):
     quote = item.get("quote", "").lower()
     if "offline" in quote or item.get("offline") is True:
         return "Offline example"
+    if item.get("locator", "").startswith("telemetry:"):
+        return "Shipment telemetry"
+    if item.get("locator", "").startswith("weather:"):
+        return "Weather observation"
     host = (urlsplit(path).hostname or "").lower()
     if host:
         for domain in ("federalregister.gov", "eur-lex.europa.eu", "wto.org"):
@@ -31,6 +35,51 @@ def source_kind(item, documents, matched_doc=None):
 
 
 EXTERNAL_FACTORS = {"trade_news", "external_politics", "weather", "telemetry", "regulatory_change"}
+
+
+def signal_source(item, documents, observation):
+    path = item.get("path", "")
+    quote = item.get("quote", "")
+    doc = documents.get(path)
+    if not doc and quote:
+        doc = next((d for d in documents.values() if d.path.startswith(path + "#") and quote.strip() in d.text), None)
+    kind = source_kind(item, documents, doc)
+    provider = observation.get("provider") or item.get("locator", "").partition(":")[0]
+    if observation.get("live") is False or kind == "Offline example":
+        origin = kind = "Offline example"
+    elif provider == "telemetry":
+        origin = "Customer shipment feed"
+    elif doc or provider == "portal_news" or not urlsplit(path).scheme:
+        origin = "Portal record"
+    elif observation.get("live") is True or "live " in quote.lower():
+        origin = "Live at collection"
+    else:
+        origin = "Collection mode unknown"
+    return dict(evidence=dict(item, source_kind=kind), origin=origin, provider=provider,
+                title=observation.get("title") or (doc.title if doc else ""), scope=observation.get("scope", ""),
+                observed_at=observation.get("observed_at"),
+                published=observation.get("published") or (doc.published_at.date().isoformat() if doc and doc.published_at else None))
+
+
+def retained_signals(score, documents):
+    breakdown = next((r["breakdown"] for r in score.reasons if "breakdown" in r), {})
+    observations = next((r["signal_inputs"] for r in score.reasons if "signal_inputs" in r), {})
+    reasons = {r["factor"]: r for r in score.reasons if r.get("factor") in EXTERNAL_FACTORS}
+    signals = []
+    for factor in sorted(reasons.keys() | observations.keys()):
+        reason = reasons.get(factor, {})
+        inputs = observations.get(factor, [])
+        if inputs:
+            sources = [signal_source(o["evidence"], documents, o) for o in inputs]
+            text = inputs[0]["summary"]
+        else:
+            sources = [signal_source(e, documents, {}) for e in reason.get("evidence", []) if e.get("path")]
+            text = reason.get("text", "")
+        if sources:
+            signals.append(dict(factor=factor, text=text, points=breakdown.get(factor, reason.get("points", 0)), sources=sources))
+    retained = {s["factor"] for s in signals}
+    other = [dict(factor=k, points=v) for k, v in sorted(breakdown.items()) if k in EXTERNAL_FACTORS - retained and v > 0]
+    return sorted(signals, key=lambda s: -s["points"]), other
 
 
 def buyer_risk(nodes, documents):
@@ -54,34 +103,7 @@ def buyer_risk(nodes, documents):
                     first = db.exec(query.where(m.RiskScore.id > previous.id).order_by(m.RiskScore.id).limit(1)).one()
     if not score:
         return dict(supplier_rating=None, signals=[], other_drivers=[], last_grade_change=None, rating_path=grades)
-    signals = []
-    for reason in score.reasons:
-        factor = reason.get("factor")
-        if factor not in EXTERNAL_FACTORS:
-            continue
-        sources = []
-        for item in reason.get("evidence", []):
-            path = item.get("path", "")
-            if not path:
-                continue
-            quote = item.get("quote", "")
-            doc = documents.get(path)
-            if not doc and quote:
-                # A news feed can contain multiple dated stories in the same file.
-                doc = next((d for d in documents.values() if d.path.startswith(path + "#")
-                            and quote.strip() in d.text), None)
-            proof = dict(item, source_kind=source_kind(item, documents, doc))
-            origin = ("Offline example" if proof["source_kind"] == "Offline example" else
-                      "Portal record" if doc or not urlsplit(path).scheme else
-                      "Live at collection" if "live " in quote.lower() else "Collection mode unknown")
-            sources.append(dict(evidence=proof, origin=origin, title=doc.title if doc else "",
-                                published=doc.published_at.date().isoformat() if doc and doc.published_at else None))
-        if sources:
-            signals.append(dict(factor=factor, text=reason["text"], points=reason["points"], sources=sources))
-    retained = {s["factor"] for s in signals}
-    breakdown = next((reason["breakdown"] for reason in score.reasons if "breakdown" in reason), {})
-    other = [dict(factor=k, points=v) for k, v in sorted(breakdown.items())
-             if k in EXTERNAL_FACTORS - retained and v > 0]
+    signals, other = retained_signals(score, documents)
     transition = None
     if previous and first:
         old = next((r["breakdown"] for r in previous.reasons if "breakdown" in r), {})
@@ -89,4 +111,5 @@ def buyer_risk(nodes, documents):
         transition = dict(previous=previous.rating, current=first.rating,
                           drivers=[dict(factor=k, before=old[k], after=new[k]) for k in sorted(old.keys() & new.keys())])
     return dict(supplier_rating=score.rating, signals=signals, other_drivers=other, last_grade_change=transition,
+                score_basis=next((r["score_basis"] for r in score.reasons if r.get("score_basis")), None),
                 rating_path=grades)

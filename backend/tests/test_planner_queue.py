@@ -38,6 +38,9 @@ def test_evening_queue_preserves_findings_and_ranks_conditional_actions():
     check, = pickup["option"]["shipment_checks"]
     assert check["field"] == "status" and {r["value"] for r in check["readings"]} == {"arrived_port", "in_transit"}
     assert {r["note"] for r in check["readings"]} == {"discharged at CTA Hamburg, available for pick-up", "RP: call terminal"}
+    signal = pickup["tracking_signal"]
+    assert "SHP-2026-04276" in signal["title"] and signal["same_shipment_source"] and not signal["selected_for_rating"]
+    assert signal["observed_at"] and "tracking_signal" not in books
     assert "shipment_checks" not in books["option"]
     assert any(s["related_review"] for s in books["sources"])
     assert len([i for i in items if i["option"]["description"] == "port pickup"]) == 1

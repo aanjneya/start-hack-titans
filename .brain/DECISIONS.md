@@ -100,3 +100,8 @@ The control room reads `GET /api/buyer-queue`. Entries retain their source optio
 ### Future supply and isolated rehearsal (jivi branch)
 
 The buyer queue includes internal reviews with `horizon=future`. A supplier article and affected delivery window can identify exposed open PO lines. A sourcing review requires human approval, authorizes zero spend and records the owner. Replay requires a separate SQLite database. Drop results expose handler failures with trace IDs and only completed Git commits advance replay. These changes are on `jivi` pending explicit release approval.
+
+### [08:58] Risk-to-Action Playbook routes & circuit-breaker config (by aanjneya)
+- **Context**: Convert passive Moody's `CCC` ratings into executable actions ("I need the risk, but I want the solution") without breaking existing agents.
+- **Decision**: Added (additive only) `GET /api/risk/playbook` and `POST /api/risk/preemptive-chase` in `backend/app/main.py` (mirrored in `API_CONTRACT.ts`), `risk_circuit_breakers` thresholds in `backend/setup/soony.json`, and 4 helper modules (`risk_recourse.py`, `risk_playbook.py`, `risk_scout.py`, `risk_breakers.py`) plus unified UI component `web/app/risk-playbook.tsx` mounted in Control Room (Risk tab) and `/observability`.
+- **Trade-offs**: Pre-emptive chasing stays human-gated in `control` mode (respecting anti-spam locks); 2nd-source scout uses live corridor scoring + deterministic industrial directory fallback in `MOCK_MODE`.

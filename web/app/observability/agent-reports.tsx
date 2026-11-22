@@ -9,6 +9,7 @@ import {
 import {
   AGENT_NAV, TONE_CLASS, agentMeta, humanizeAction, isPlumbingEvent, type AgentId,
 } from "./agent-meta";
+import RiskPlaybook from "../risk-playbook";
 
 // ---------------------------------------------------------------------------
 // Shared visual primitives
@@ -734,6 +735,8 @@ export function RiskRaterReport({ snap }: { snap: ObservabilitySnapshot }) {
           ))}
         </div>
       )}
+
+      <RiskPlaybook />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-bold">Moody&apos;s Risk Scorecard ({visible.length})</h2>

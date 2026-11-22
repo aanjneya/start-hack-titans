@@ -421,6 +421,47 @@ def risk_refresh() -> dict:
     return ok(system.refresh_risk())
 
 
+@app.get("/api/risk/playbook")
+def risk_playbook() -> dict:
+    """Unified Risk-to-Action Playbook: Path-to-Upgrade (CCC->A), Pre-Emptive Chasing, 2nd-Source Scout, Circuit Breakers."""
+    from ..agents.risk_playbook import build_risk_playbook
+
+    return ok(build_risk_playbook(data_root=get_settings().data_root))
+
+
+class PreemptiveChaseRequest(BaseModel):
+    alert_id: str
+    supplier_id: str
+    shipment_id: str = ""
+    po_number: str = ""
+    part_id: str = ""
+    ask: str
+
+
+@app.post("/api/risk/preemptive-chase")
+def risk_preemptive_chase(req: PreemptiveChaseRequest) -> dict:
+    """Dispatch a policy-gated, rate-limited pre-emptive supplier check triggered by live external risk feeds."""
+    if not req.supplier_id:
+        raise HTTPException(422, "supplier_id is required")
+    trace.log(
+        "human",
+        "preemptive_chase",
+        f"dispatched pre-emptive corridor check to {req.supplier_id} ({req.alert_id})",
+        data={"alert_id": req.alert_id, "supplier_id": req.supplier_id, "shipment_id": req.shipment_id},
+    )
+    result = system.emit(
+        events.EMAIL_REQUESTED,
+        {
+            "supplier_id": req.supplier_id,
+            "shipment_id": req.shipment_id,
+            "po_number": req.po_number,
+            "part": req.part_id,
+            "ask": f"[Pre-Emptive Corridor Check] {req.ask}",
+        },
+    )
+    return ok({"alert_id": req.alert_id, "supplier_id": req.supplier_id, **result})
+
+
 @app.get("/api/outbox")
 def outbox() -> dict:
     return ok(_rows(OutboxMessage, order=OutboxMessage.id.desc()))

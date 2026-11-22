@@ -15,6 +15,7 @@ import SampleTiming from "./sample-timing";
 import BuyerUpdates from "./buyer-updates";
 import { SourceList, SourcePassage } from "./decision-source";
 import { CompanyRules, formatMoney, OrderCalculation } from "./approval-details";
+import RiskPlaybook from "./risk-playbook";
 
 type Snapshot = {
   queue: BuyerQueueEntry[];
@@ -366,7 +367,22 @@ export default function ControlRoom() {
         </div>
         {tab === "findings" && <Findings issues={snap.issues} />}
         {tab === "emails" && <Emails activeMail={activeMail} mailVisit={mailVisit} snap={snap} mock={mock} onSent={refresh} />}
-        {tab === "risk" && <>{!supplierView && <SignalRefresh reading={riskCheck} scores={snap.risk} timezone={snap.setup?.timezone} online={online === true} mock={mock} refresh={refresh} />}<Risk rows={snap.risk} /></>}
+        {tab === "risk" && (
+          <>
+            {!supplierView && (
+              <SignalRefresh
+                reading={riskCheck}
+                scores={snap.risk}
+                timezone={snap.setup?.timezone}
+                online={online === true}
+                mock={mock}
+                refresh={refresh}
+              />
+            )}
+            <RiskPlaybook onActionComplete={refresh} signer={snap.setup?.demo_buyer || "Paul Winter"} />
+            <Risk rows={snap.risk} />
+          </>
+        )}
       </section>
       {showData && <DataDrawer onClose={closeData} />}
     </div>
